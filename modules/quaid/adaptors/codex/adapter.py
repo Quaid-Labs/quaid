@@ -682,7 +682,7 @@ class CodexAdapter(QuaidAdapter):
 
             cursor = read_cursor(session_id)
         except Exception as exc:
-            logger.debug("Failed reading Codex session cursor for %s: %s", session_id, exc)
+            logger.warning("Failed reading Codex session cursor for %s: %s", session_id, exc)
             if is_fail_hard_enabled():
                 raise
             return None

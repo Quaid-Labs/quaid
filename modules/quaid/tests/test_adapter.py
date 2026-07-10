@@ -585,6 +585,70 @@ class TestBaseAdapterConfig:
             with pytest.raises(RuntimeError, match="init failed"):
                 _auto_provision_from_env_if_needed()
 
+    def test_auto_provision_project_dir_compare_failure_warns_when_fail_open(
+        self,
+        tmp_path,
+        monkeypatch,
+        caplog,
+    ):
+        from lib import adapter as adapter_mod
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+        monkeypatch.setattr(
+            adapter_mod,
+            "_project_env_adapter_rows",
+            lambda: [
+                {"adapter_id": "codex", "env_name": "CODEX_PROJECT_DIR"},
+                {"adapter_id": "openclaw", "env_name": "OPENCLAW_PROJECT_DIR"},
+            ],
+        )
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(tmp_path / "codex-project"))
+        monkeypatch.setenv("OPENCLAW_PROJECT_DIR", str(tmp_path / "oc-project"))
+        monkeypatch.setattr(
+            Path,
+            "resolve",
+            lambda self, *args, **kwargs: (_ for _ in ()).throw(OSError("resolve unavailable")),
+        )
+
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="lib.adapter"):
+            _auto_provision_from_env_if_needed()
+
+        assert "Failed to compare adapter project directories for auto-provision" in caplog.text
+        assert "resolve unavailable" in caplog.text
+
+    def test_auto_provision_project_dir_compare_failure_raises_when_failhard(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from lib import adapter as adapter_mod
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+        monkeypatch.setattr(
+            adapter_mod,
+            "_project_env_adapter_rows",
+            lambda: [
+                {"adapter_id": "codex", "env_name": "CODEX_PROJECT_DIR"},
+                {"adapter_id": "openclaw", "env_name": "OPENCLAW_PROJECT_DIR"},
+            ],
+        )
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(tmp_path / "codex-project"))
+        monkeypatch.setenv("OPENCLAW_PROJECT_DIR", str(tmp_path / "oc-project"))
+        monkeypatch.setattr(
+            Path,
+            "resolve",
+            lambda self, *args, **kwargs: (_ for _ in ()).throw(OSError("resolve unavailable")),
+        )
+
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(OSError, match="resolve unavailable"):
+                _auto_provision_from_env_if_needed()
+
     def test_installer_install_state_logs_instance_scan_failure(self, tmp_path, monkeypatch, caplog):
         instances_dir = tmp_path / "instances"
         instances_dir.mkdir()
@@ -597,11 +661,218 @@ class TestBaseAdapterConfig:
         monkeypatch.setattr(Path, "iterdir", _raise_iterdir)
         caplog.set_level("WARNING")
 
-        state = StandaloneAdapter.installer_install_state(str(tmp_path))
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=False):
+            state = StandaloneAdapter.installer_install_state(str(tmp_path))
 
         assert state["status"] == "can_install"
         assert "Installer state scan failed for standalone" in caplog.text
         assert "scan boom" in caplog.text
+
+    def test_installer_install_state_raises_instance_scan_failure_when_failhard(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        instances_dir = tmp_path / "instances"
+        instances_dir.mkdir()
+
+        def _raise_iterdir(self):
+            if self == instances_dir:
+                raise OSError("scan boom")
+            return iter(())
+
+        monkeypatch.setattr(Path, "iterdir", _raise_iterdir)
+
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(OSError, match="scan boom"):
+                StandaloneAdapter.installer_install_state(str(tmp_path))
+
+    def test_adapter_config_paths_warns_platform_config_scan_failure(
+        self,
+        tmp_path,
+        monkeypatch,
+        caplog,
+    ):
+        from lib import adapter as adapter_mod
+
+        shared_root = tmp_path / "shared" / "config"
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+        monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+        monkeypatch.setattr(adapter_mod, "_adapter_type_from_instance_id", lambda _instance: "")
+        original_glob = Path.glob
+
+        def _glob(path, pattern):
+            if path == shared_root and pattern == "*/config.json":
+                raise OSError("shared config unavailable")
+            return original_glob(path, pattern)
+
+        monkeypatch.setattr(Path, "glob", _glob)
+
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="lib.adapter"):
+            paths = adapter_mod._adapter_config_paths()
+
+        assert tmp_path / "shared" / "config" / "global" / "config.json" in paths
+        assert "Failed to scan shared platform configs" in caplog.text
+        assert "shared config unavailable" in caplog.text
+
+    def test_adapter_config_paths_raises_platform_config_scan_failure_when_failhard(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from lib import adapter as adapter_mod
+
+        shared_root = tmp_path / "shared" / "config"
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+        monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+        monkeypatch.setattr(adapter_mod, "_adapter_type_from_instance_id", lambda _instance: "")
+        original_glob = Path.glob
+
+        def _glob(path, pattern):
+            if path == shared_root and pattern == "*/config.json":
+                raise OSError("shared config unavailable")
+            return original_glob(path, pattern)
+
+        monkeypatch.setattr(Path, "glob", _glob)
+
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(OSError, match="shared config unavailable"):
+                adapter_mod._adapter_config_paths()
+
+    def test_adapter_instance_prefix_warns_manifest_failure_when_fail_open(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        from lib import adapter as adapter_mod
+
+        monkeypatch.setattr(adapter_mod, "_canonical_adapter_id", lambda value: value)
+        monkeypatch.setattr(
+            adapter_mod,
+            "_load_adapter_manifest",
+            lambda _adapter_id: (_ for _ in ()).throw(RuntimeError("manifest unavailable")),
+        )
+
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="lib.adapter"):
+            assert adapter_mod._adapter_instance_prefix("codex") == "codex"
+
+        assert "Failed to resolve adapter instance prefix for codex" in caplog.text
+        assert "manifest unavailable" in caplog.text
+
+    def test_adapter_instance_prefix_raises_manifest_failure_when_failhard(self, monkeypatch):
+        from lib import adapter as adapter_mod
+
+        monkeypatch.setattr(adapter_mod, "_canonical_adapter_id", lambda value: value)
+        monkeypatch.setattr(
+            adapter_mod,
+            "_load_adapter_manifest",
+            lambda _adapter_id: (_ for _ in ()).throw(RuntimeError("manifest unavailable")),
+        )
+
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="manifest unavailable"):
+                adapter_mod._adapter_instance_prefix("codex")
+
+    def test_manifest_adapter_ids_warns_repo_and_installed_scan_failures(
+        self,
+        tmp_path,
+        monkeypatch,
+        caplog,
+    ):
+        from lib import adapter as adapter_mod
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+
+        def _glob(path, pattern):
+            if path.name == "manifests" and pattern == "*.json":
+                raise OSError("repo manifests unavailable")
+            if path == tmp_path / "adaptors" and pattern == "*/adapter.json":
+                raise OSError("installed manifests unavailable")
+            return iter(())
+
+        monkeypatch.setattr(Path, "glob", _glob)
+
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="lib.adapter"):
+            assert adapter_mod._manifest_adapter_ids() == []
+
+        assert "Failed to scan repo adapter manifests" in caplog.text
+        assert "repo manifests unavailable" in caplog.text
+        assert "Failed to scan installed adapter manifests" in caplog.text
+        assert "installed manifests unavailable" in caplog.text
+
+    def test_manifest_adapter_ids_raises_repo_scan_failure_when_failhard(self, monkeypatch):
+        from lib import adapter as adapter_mod
+
+        def _glob(path, pattern):
+            if path.name == "manifests" and pattern == "*.json":
+                raise OSError("repo manifests unavailable")
+            return iter(())
+
+        monkeypatch.setattr(Path, "glob", _glob)
+
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(OSError, match="repo manifests unavailable"):
+                adapter_mod._manifest_adapter_ids()
+
+    def test_manifest_adapter_ids_raises_installed_scan_failure_when_failhard(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from lib import adapter as adapter_mod
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+
+        def _glob(path, pattern):
+            if path.name == "manifests" and pattern == "*.json":
+                return iter(())
+            if path == tmp_path / "adaptors" and pattern == "*/adapter.json":
+                raise OSError("installed manifests unavailable")
+            return iter(())
+
+        monkeypatch.setattr(Path, "glob", _glob)
+
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(OSError, match="installed manifests unavailable"):
+                adapter_mod._manifest_adapter_ids()
+
+    def test_adapter_runtime_config_warns_manifest_failure_when_fail_open(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        from lib import adapter as adapter_mod
+
+        monkeypatch.setattr(
+            adapter_mod,
+            "_load_adapter_manifest",
+            lambda _adapter_id: (_ for _ in ()).throw(RuntimeError("manifest unavailable")),
+        )
+
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="lib.adapter"):
+            assert adapter_mod._adapter_runtime_config("codex") == {}
+
+        assert "Failed to load adapter runtime config for codex" in caplog.text
+        assert "manifest unavailable" in caplog.text
+
+    def test_adapter_runtime_config_raises_manifest_failure_when_failhard(self, monkeypatch):
+        from lib import adapter as adapter_mod
+
+        monkeypatch.setattr(
+            adapter_mod,
+            "_load_adapter_manifest",
+            lambda _adapter_id: (_ for _ in ()).throw(RuntimeError("manifest unavailable")),
+        )
+
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="manifest unavailable"):
+                adapter_mod._adapter_runtime_config("codex")
 
     def test_bootstrap_instance_env_logs_bad_claude_settings_and_falls_back(self, tmp_path, monkeypatch, caplog):
         project_dir = tmp_path / "project"

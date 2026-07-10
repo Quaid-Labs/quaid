@@ -910,6 +910,8 @@ class QuaidAdapter(abc.ABC):
                         }
         except Exception as exc:
             logger.warning("Installer state scan failed for %s in %s: %s", adapter_id or cls.__name__, instances_dir, exc)
+            if is_fail_hard_enabled():
+                raise
 
         candidates = [
             str(cmd).strip()
@@ -1635,7 +1637,10 @@ def _adapter_config_paths() -> List[Path]:
                     p for p in shared_root.glob("*/config.json")
                     if p.parent.name != "global"
                 ]
-            except Exception:
+            except Exception as exc:
+                logger.warning("Failed to scan shared platform configs in %s: %s", shared_root, exc)
+                if is_fail_hard_enabled():
+                    raise
                 platform_cfgs = []
             if derived_adapter_type and not instance_config_exists:
                 paths.append(Path(home) / "shared" / "config" / derived_adapter_type / "config.json")
@@ -1744,7 +1749,9 @@ def _adapter_instance_prefix(adapter_type: str) -> str:
             if prefix:
                 return prefix[:-1] if prefix.endswith("-") else prefix
     except Exception as exc:
-        logger.debug("Failed to resolve adapter instance prefix for %s: %s", normalized, exc)
+        logger.warning("Failed to resolve adapter instance prefix for %s: %s", normalized, exc)
+        if is_fail_hard_enabled():
+            raise
     return normalized
 
 
@@ -1760,7 +1767,9 @@ def _manifest_adapter_ids() -> List[str]:
                 seen.add(adapter_id)
                 ids.append(adapter_id)
     except Exception as exc:
-        logger.debug("Failed to scan repo adapter manifests at %s: %s", repo_manifests, exc)
+        logger.warning("Failed to scan repo adapter manifests at %s: %s", repo_manifests, exc)
+        if is_fail_hard_enabled():
+            raise
     installed_adaptors = _registry_quaid_home() / "adaptors"
     try:
         for manifest_path in installed_adaptors.glob("*/adapter.json"):
@@ -1769,7 +1778,9 @@ def _manifest_adapter_ids() -> List[str]:
                 seen.add(adapter_id)
                 ids.append(adapter_id)
     except Exception as exc:
-        logger.debug("Failed to scan installed adapter manifests at %s: %s", installed_adaptors, exc)
+        logger.warning("Failed to scan installed adapter manifests at %s: %s", installed_adaptors, exc)
+        if is_fail_hard_enabled():
+            raise
     return ids
 
 
@@ -1789,7 +1800,9 @@ def _adapter_runtime_config(adapter_id: str) -> Dict[str, Any]:
     try:
         runtime = _load_adapter_manifest(adapter_id).get("runtime")
     except Exception as exc:
-        logger.debug("Failed to load adapter runtime config for %s: %s", adapter_id, exc)
+        logger.warning("Failed to load adapter runtime config for %s: %s", adapter_id, exc)
+        if is_fail_hard_enabled():
+            raise
         return {}
     return runtime if isinstance(runtime, dict) else {}
 
@@ -2029,7 +2042,10 @@ def _auto_provision_from_env_if_needed() -> None:
                         "refusing to guess an instance silo"
                     )
                     return
-            except Exception:
+            except Exception as exc:
+                logger.warning("Failed to compare adapter project directories for auto-provision: %s", exc)
+                if is_fail_hard_enabled():
+                    raise
                 return
 
         for row in project_env_rows:
