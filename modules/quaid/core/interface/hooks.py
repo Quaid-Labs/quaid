@@ -50,6 +50,17 @@ _IDENTITY_CONTEXT_FILES = ("USER.md", "SOUL.md", "ENVIRONMENT.md")
 _TURN_REFRESH_PARALLEL_REPLAY_SECONDS = 5
 _HOOK_INJECT_RECALL_TIMEOUT_FLOOR_MS = 30_000
 _SAFE_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_CODEX_TOOL_OUTPUT_SECRET_PATTERNS = (
+    re.compile(
+        r"(?i)\b[A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|"
+        r"client[_-]?secret|credential|password|passwd|secret)\b\s*[:=]\s*['\"]?[^'\"\s,;}]+"
+    ),
+    re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_-]{16,}\b"),
+    re.compile(r"\bsk-ant-[A-Za-z0-9_-]{16,}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+)
 
 _DAEMON_START_SKIP_ENV_KEYS = {
     "CLAUDE_CODE_OAUTH_TOKEN",
@@ -1431,6 +1442,19 @@ def _preinject_notice_rows(
     return rows
 
 
+def _redact_codex_tool_output_trace(text: str) -> tuple[str, int]:
+    """Redact obvious credential-bearing lines before writing hook traces."""
+    redacted_lines = 0
+    sanitized_lines: List[str] = []
+    for line in str(text or "").splitlines():
+        if any(pattern.search(line) for pattern in _CODEX_TOOL_OUTPUT_SECRET_PATTERNS):
+            sanitized_lines.append("[redacted: sensitive tool output line]")
+            redacted_lines += 1
+        else:
+            sanitized_lines.append(line)
+    return "\n".join(sanitized_lines), redacted_lines
+
+
 def _extract_codex_tool_output_trace(hook_input: dict, max_chars: int = 12000) -> Dict[str, Any]:
     """Return best-effort tool output details for Codex hook trace debugging."""
     if not isinstance(hook_input, dict):
@@ -1463,14 +1487,19 @@ def _extract_codex_tool_output_trace(hook_input: dict, max_chars: int = 12000) -
     for key, text in snippets:
         rendered.append(f"[{key}]\n{text}")
     combined = "\n\n".join(rendered)
-    truncated = len(combined) > max_chars
+    sanitized, redacted_lines = _redact_codex_tool_output_trace(combined)
+    truncated = len(sanitized) > max_chars
 
-    return {
+    payload = {
         "tool_output_keys": [key for key, _ in snippets],
-        "tool_output_len": len(combined),
+        "tool_output_len": len(sanitized),
         "tool_output_truncated": truncated,
-        "tool_output": combined[:max_chars],
+        "tool_output": sanitized[:max_chars],
     }
+    if redacted_lines:
+        payload["tool_output_redacted"] = True
+        payload["tool_output_redacted_lines"] = redacted_lines
+    return payload
 
 
 def _project_list_cli_hint_context(hook_input: dict) -> str:

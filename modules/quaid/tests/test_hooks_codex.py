@@ -1170,6 +1170,29 @@ def test_codex_hook_inject_traces_raw_tool_output_when_present(monkeypatch, tmp_
     assert "quaid-live-cli" in payload["tool_output"]
 
 
+def test_codex_tool_output_trace_redacts_sensitive_lines():
+    from core.interface import hooks
+
+    payload = hooks._extract_codex_tool_output_trace(
+        {
+            "tool_output": "\n".join(
+                [
+                    "quaid project list",
+                    "OPENAI_API_KEY=sk-live-abcdefghijklmnopqrstuvwxyz",
+                    "safe-project",
+                ]
+            )
+        }
+    )
+
+    assert payload["tool_output_redacted"] is True
+    assert payload["tool_output_redacted_lines"] == 1
+    assert "quaid project list" in payload["tool_output"]
+    assert "safe-project" in payload["tool_output"]
+    assert "OPENAI_API_KEY" not in payload["tool_output"]
+    assert "sk-live" not in payload["tool_output"]
+
+
 def test_hook_inject_adds_project_list_names_only_hint(monkeypatch, tmp_path):
     from core.interface import hooks
 

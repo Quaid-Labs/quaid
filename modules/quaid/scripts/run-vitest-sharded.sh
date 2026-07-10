@@ -34,7 +34,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "[vitest-sharded] shards=$SHARDS args=$*"
+echo "[vitest-sharded] shards=$SHARDS"
 for shard in $(seq 1 "$SHARDS"); do
   label="shard-${shard}-${SHARDS}"
   log="$log_dir/${label}.log"
