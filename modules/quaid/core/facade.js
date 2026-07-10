@@ -710,6 +710,9 @@ function createQuaidFacade(deps) {
     try {
       stats = getDatastoreStatsSync(NODE_COUNT_CACHE_MS);
     } catch (err) {
+      if (deps.isFailHardEnabled()) {
+        throw err;
+      }
       console.warn(`[quaid][facade] active node stats probe failed; using fallback=100: ${String(err?.message || err)}`);
     }
     const active = Number(stats?.active_nodes ?? stats?.by_status?.active ?? 0);

@@ -2225,14 +2225,23 @@ describe("QuaidFacade", () => {
     expect(facade.computeDynamicK()).toBe(10);
   });
 
-  it("computeDynamicK falls back when stats probe fails under failHard", () => {
+  it("computeDynamicK falls back when stats probe fails outside failHard", () => {
+    const facade = createQuaidFacade(makeMockDeps({
+      getDatastoreStatsSync: vi.fn(() => {
+        throw new Error("stats probe failed");
+      }),
+    }));
+    expect(facade.computeDynamicK()).toBe(5);
+  });
+
+  it("computeDynamicK propagates stats probe failure under failHard", () => {
     const facade = createQuaidFacade(makeMockDeps({
       isFailHardEnabled: vi.fn(() => true),
       getDatastoreStatsSync: vi.fn(() => {
         throw new Error("stats probe failed");
       }),
     }));
-    expect(facade.computeDynamicK()).toBe(5);
+    expect(() => facade.computeDynamicK()).toThrow(/datastore stats read failed/);
   });
 
   // -----------------------------------------------------------------------
