@@ -84,6 +84,12 @@ def test_rag_lifecycle_runs_and_returns_metrics(monkeypatch, tmp_path):
         def __init__(self, *args, **kwargs):
             pass
 
+        def get_all_project_definitions(self):
+            return {
+                "demo": SimpleNamespace(auto_index=True, home_dir="projects/demo"),
+                "off": SimpleNamespace(auto_index=False, home_dir="projects/off"),
+            }
+
         def auto_discover(self, _project_name):
             return ["a.md", "b.md"]
 
@@ -1218,6 +1224,35 @@ def test_lifecycle_registry_shutdown_is_noop():
     registry = LifecycleRegistry()
     # LLM scheduler is process-global; lifecycle shutdown intentionally does nothing.
     registry.shutdown(wait=False)
+
+
+def test_lifecycle_registry_uses_max_lock_registries_env(monkeypatch):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    monkeypatch.setenv("QUAID_MAX_LOCK_REGISTRIES", "3")
+    registry = LifecycleRegistry()
+
+    assert registry._max_lock_registries == 3
+
+
+def test_lifecycle_registry_clamps_nonpositive_max_lock_registries(monkeypatch):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    monkeypatch.setenv("QUAID_MAX_LOCK_REGISTRIES", "0")
+    registry = LifecycleRegistry()
+
+    assert registry._max_lock_registries == 1
+
+
+def test_lifecycle_registry_defaults_malformed_max_lock_registries(monkeypatch, caplog):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    monkeypatch.setenv("QUAID_MAX_LOCK_REGISTRIES", "bad")
+    with caplog.at_level(logging.WARNING, logger="core.lifecycle.janitor_lifecycle"):
+        registry = LifecycleRegistry()
+
+    assert registry._max_lock_registries == 64
+    assert "Invalid QUAID_MAX_LOCK_REGISTRIES='bad'; using default 64" in caplog.text
 
 
 def test_lifecycle_registry_caps_workspace_lock_registry_cache(tmp_path):

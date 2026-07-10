@@ -28,6 +28,20 @@ logger = logging.getLogger(__name__)
 _LIFECYCLE_PARALLEL_TELEMETRY_ENABLED = (
     str(os.environ.get("QUAID_LIFECYCLE_PARALLEL_TELEMETRY", "0")).strip() == "1"
 )
+_DEFAULT_MAX_LOCK_REGISTRIES = 64
+
+
+def _max_lock_registries_from_env() -> int:
+    raw = os.environ.get("QUAID_MAX_LOCK_REGISTRIES", str(_DEFAULT_MAX_LOCK_REGISTRIES))
+    try:
+        return max(1, int(raw or _DEFAULT_MAX_LOCK_REGISTRIES))
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid QUAID_MAX_LOCK_REGISTRIES=%r; using default %d",
+            raw,
+            _DEFAULT_MAX_LOCK_REGISTRIES,
+        )
+        return _DEFAULT_MAX_LOCK_REGISTRIES
 
 
 def _now_datetime() -> datetime:
@@ -77,7 +91,7 @@ class LifecycleRegistry:
         self._registry_guard = threading.Lock()
         self._lock_registries: Dict[str, ResourceLockRegistry] = {}
         self._lock_registries_guard = threading.Lock()
-        self._max_lock_registries = max(1, int(os.environ.get("QUAID_MAX_LOCK_REGISTRIES", "64") or 64))
+        self._max_lock_registries = _max_lock_registries_from_env()
 
     def register(
         self,
