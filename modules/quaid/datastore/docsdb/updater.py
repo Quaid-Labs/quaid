@@ -485,6 +485,14 @@ class CleanupInfo:
     reason: str  # "updates" or "growth" or "both"
 
 
+def _cleanup_reason_label(info: CleanupInfo) -> str:
+    return {
+        "updates": f"{info.updates_since_cleanup} updates",
+        "growth": f"{info.growth_ratio:.1f}x growth",
+        "both": f"{info.updates_since_cleanup} updates + {info.growth_ratio:.1f}x growth",
+    }.get(info.reason, str(info.reason or "unknown"))
+
+
 def check_cleanup_needed() -> Dict[str, CleanupInfo]:
     """Check which docs need cleanup based on churn heuristics.
 
@@ -640,11 +648,7 @@ def cmd_cleanup_check(json_output: bool = False) -> Dict[str, CleanupInfo]:
         else:
             print(f"Found {len(needs_cleanup)} doc(s) needing cleanup:\n")
             for doc_path, info in needs_cleanup.items():
-                reason_str = {
-                    "updates": f"{info.updates_since_cleanup} updates",
-                    "growth": f"{info.growth_ratio:.1f}x growth",
-                    "both": f"{info.updates_since_cleanup} updates + {info.growth_ratio:.1f}x growth",
-                }[info.reason]
+                reason_str = _cleanup_reason_label(info)
                 print(f"  {doc_path}")
                 print(f"    Reason: {reason_str}")
                 print(f"    Size: {info.chars_at_cleanup} -> {info.current_chars} chars")
@@ -2483,11 +2487,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             purposes = get_doc_purposes()
             cleaned = 0
             for doc_path, info in needs_cleanup.items():
-                reason_str = {
-                    "updates": f"{info.updates_since_cleanup} updates",
-                    "growth": f"{info.growth_ratio:.1f}x growth",
-                    "both": f"{info.updates_since_cleanup} updates + {info.growth_ratio:.1f}x growth",
-                }[info.reason]
+                reason_str = _cleanup_reason_label(info)
                 result.logs.append(f"  {doc_path} ({reason_str})")
                 allow_apply = not ctx.dry_run
                 if allow_apply and ctx.allow_doc_apply is not None:

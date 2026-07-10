@@ -1272,6 +1272,54 @@ class TestCleanupStateLocking:
 
             assert cleanup["docs/caf\u00e9.md"].current_chars == len("# Caf\u00e9\n\nR\u00e9sum\u00e9 details.\n")
 
+    def test_cmd_cleanup_check_handles_unknown_reason(self, monkeypatch, capsys):
+        from datastore.docsdb import updater
+
+        info = updater.CleanupInfo(
+            doc_path="docs/demo.md",
+            updates_since_cleanup=0,
+            chars_at_cleanup=10,
+            current_chars=20,
+            growth_ratio=2.0,
+            reason="stale",
+        )
+        monkeypatch.setattr(updater, "check_cleanup_needed", lambda: {"docs/demo.md": info})
+
+        result = updater.cmd_cleanup_check()
+
+        captured = capsys.readouterr()
+        assert result == {"docs/demo.md": info}
+        assert "Reason: stale" in captured.out
+
+    def test_docs_cleanup_lifecycle_handles_unknown_reason(self, monkeypatch):
+        from datastore.docsdb import updater
+
+        info = updater.CleanupInfo(
+            doc_path="docs/demo.md",
+            updates_since_cleanup=0,
+            chars_at_cleanup=10,
+            current_chars=20,
+            growth_ratio=2.0,
+            reason="stale",
+        )
+        handlers = {}
+
+        class _Registry:
+            def register(self, name, handler):
+                handlers[name] = handler
+
+        def _result_factory():
+            return SimpleNamespace(logs=[], errors=[], metrics={})
+
+        monkeypatch.setattr(updater, "check_cleanup_needed", lambda: {"docs/demo.md": info})
+        monkeypatch.setattr(updater, "get_doc_purposes", lambda: {})
+        updater.register_lifecycle_routines(_Registry(), _result_factory)
+
+        result = handlers["docs_cleanup"](SimpleNamespace(dry_run=True, allow_doc_apply=None))
+
+        assert result.errors == []
+        assert "  docs/demo.md (stale)" in result.logs
+
     def test_reset_cleanup_state_honors_quaid_now(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):
             import datastore.docsdb.updater as updater
