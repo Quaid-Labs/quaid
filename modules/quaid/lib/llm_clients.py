@@ -31,6 +31,7 @@ from lib.fail_policy import is_fail_hard_enabled
 from lib.llm_pool import acquire_llm_slot
 from lib.providers import LLMResult
 from lib.runtime_context import get_llm_provider, notify_agent
+from lib.tokens import estimate_tokens
 from prompt_sets import get_prompt
 
 logger = logging.getLogger(__name__)
@@ -192,6 +193,7 @@ _usage_calls: int = 0
 _usage_cache_read_tokens: int = 0
 _usage_cache_creation_tokens: int = 0
 _usage_by_model: Dict[str, Dict[str, int]] = {}  # {model: {input: N, output: N}}
+_usage_reserved_cost: float = 0.0
 _usage_lock = threading.RLock()
 
 # Default pricing per million tokens (as of Feb 2026)
@@ -254,6 +256,7 @@ def reset_token_usage():
     """Reset the per-run token usage counters."""
     global _usage_input_tokens, _usage_output_tokens, _usage_calls
     global _usage_cache_read_tokens, _usage_cache_creation_tokens, _usage_by_model
+    global _usage_reserved_cost
     with _usage_lock:
         _usage_input_tokens = 0
         _usage_output_tokens = 0
@@ -261,6 +264,7 @@ def reset_token_usage():
         _usage_cache_read_tokens = 0
         _usage_cache_creation_tokens = 0
         _usage_by_model = {}
+        _usage_reserved_cost = 0.0
 
 
 def get_token_usage() -> dict:
@@ -294,6 +298,33 @@ def get_token_usage() -> dict:
         }
 
 
+def _estimate_model_cost(model_name: Optional[str], input_tokens: int, output_tokens: int) -> float:
+    if not _PRICING:
+        return 0.0
+    cheapest = min(_PRICING.values(), key=lambda r: r["input"])
+    rate = _PRICING.get(str(model_name or ""), cheapest)
+    return input_tokens / 1_000_000 * rate["input"] + output_tokens / 1_000_000 * rate["output"]
+
+
+def _estimate_usage_cost_unlocked() -> float:
+    """Estimate tracked usage cost. Caller must hold _usage_lock."""
+    cost = 0.0
+    tracked_input = 0
+    tracked_output = 0
+    for model_name, counts in _usage_by_model.items():
+        input_tokens = int(counts.get("input", 0))
+        output_tokens = int(counts.get("output", 0))
+        cost += _estimate_model_cost(model_name, input_tokens, output_tokens)
+        tracked_input += input_tokens
+        tracked_output += output_tokens
+    # Fall back to cheapest rate for any untracked remainder
+    untracked_in = max(0, _usage_input_tokens - tracked_input)
+    untracked_out = max(0, _usage_output_tokens - tracked_output)
+    if untracked_in or untracked_out:
+        cost += _estimate_model_cost(None, untracked_in, untracked_out)
+    return cost
+
+
 def estimate_cost() -> float:
     """Estimate USD cost based on per-model token usage.
 
@@ -301,29 +332,45 @@ def estimate_cost() -> float:
     known rate for any untracked tokens.
     """
     _load_pricing()
-    if not _PRICING:
-        return 0.0
-
-    # Find the cheapest rate as fallback for unknown models
-    _cheapest = min(_PRICING.values(), key=lambda r: r["input"])
-
     with _usage_lock:
-        cost = 0.0
-        tracked_input = 0
-        tracked_output = 0
-        for model_name, counts in _usage_by_model.items():
-            rate = _PRICING.get(model_name, _cheapest)
-            cost += counts.get("input", 0) / 1_000_000 * rate["input"]
-            cost += counts.get("output", 0) / 1_000_000 * rate["output"]
-            tracked_input += counts.get("input", 0)
-            tracked_output += counts.get("output", 0)
-        # Fall back to cheapest rate for any untracked remainder
-        untracked_in = max(0, _usage_input_tokens - tracked_input)
-        untracked_out = max(0, _usage_output_tokens - tracked_output)
-        if untracked_in or untracked_out:
-            cost += untracked_in / 1_000_000 * _cheapest["input"]
-            cost += untracked_out / 1_000_000 * _cheapest["output"]
-        return round(cost, 4)
+        return round(_estimate_usage_cost_unlocked(), 4)
+
+
+def _estimate_llm_call_cost(
+    model_name: Optional[str],
+    system_prompt: str,
+    user_message: str,
+    max_tokens: int,
+) -> float:
+    """Conservative pre-call cost estimate for reserving cost-cap budget."""
+    _load_pricing()
+    input_tokens = estimate_tokens(str(system_prompt or "")) + estimate_tokens(str(user_message or ""))
+    output_tokens = max(0, int(max_tokens or 0))
+    return _estimate_model_cost(model_name, input_tokens, output_tokens)
+
+
+def _reserve_llm_cost_budget(cost_cap: float, estimated_cost: float) -> Tuple[bool, float, float, float]:
+    """Atomically reserve estimated in-flight LLM cost against the cost cap."""
+    global _usage_reserved_cost
+    _load_pricing()
+    reserved_cost = max(0.0, float(estimated_cost or 0.0))
+    with _usage_lock:
+        current_cost = _estimate_usage_cost_unlocked() + _usage_reserved_cost
+        projected_cost = current_cost + reserved_cost
+        if projected_cost > cost_cap:
+            return False, current_cost, projected_cost, reserved_cost
+        _usage_reserved_cost += reserved_cost
+        return True, current_cost, projected_cost, reserved_cost
+
+
+def _release_llm_cost_budget(reserved_cost: float) -> None:
+    """Release an in-flight cost reservation."""
+    global _usage_reserved_cost
+    reserved_cost = max(0.0, float(reserved_cost or 0.0))
+    if reserved_cost <= 0.0:
+        return
+    with _usage_lock:
+        _usage_reserved_cost = max(0.0, _usage_reserved_cost - reserved_cost)
 
 
 # Per-operation token budget — set by callers to limit total tokens for a
@@ -685,281 +732,291 @@ def call_llm(system_prompt: str, user_message: str,
 
     # Cost circuit breaker
     _COST_CAP = float(os.environ.get("JANITOR_COST_CAP", "5.0"))
-    current_cost = estimate_cost()
-    if current_cost > _COST_CAP:
+    estimated_call_cost = _estimate_llm_call_cost(model, system_prompt, user_message, max_tokens)
+    allowed, current_cost, projected_cost, reserved_cost = _reserve_llm_cost_budget(
+        _COST_CAP,
+        estimated_call_cost,
+    )
+    if not allowed:
         logger.warning(
-            "[llm_clients] COST CAP EXCEEDED: $%.4f > $%.2f, aborting call",
-            current_cost,
+            "[llm_clients] COST CAP EXCEEDED: projected $%.4f > $%.2f, aborting call",
+            projected_cost,
             _COST_CAP,
         )
         if is_fail_hard_enabled():
             raise RuntimeError(
-                f"LLM cost cap exceeded while failHard is enabled: ${current_cost:.4f} > ${_COST_CAP:.2f}"
+                "LLM cost cap exceeded while failHard is enabled: "
+                f"projected ${projected_cost:.4f} > ${_COST_CAP:.2f} "
+                f"(current/reserved ${current_cost:.4f}, requested ${reserved_cost:.4f})"
             )
         return (None, 0.0)
 
-    # Token budget check
-    if is_token_budget_exhausted():
-        budget_used, budget_total = get_token_budget_usage()
-        logger.warning(
-            "[llm_clients] TOKEN BUDGET EXHAUSTED: %s >= %s, aborting call",
-            f"{budget_used:,}",
-            f"{budget_total:,}",
+    try:
+        # Token budget check
+        if is_token_budget_exhausted():
+            budget_used, budget_total = get_token_budget_usage()
+            logger.warning(
+                "[llm_clients] TOKEN BUDGET EXHAUSTED: %s >= %s, aborting call",
+                f"{budget_used:,}",
+                f"{budget_total:,}",
+            )
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    f"LLM token budget exhausted while failHard is enabled: {budget_used:,} >= {budget_total:,}"
+                )
+            return (None, 0.0)
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ]
+
+        llm = get_llm_provider(model_tier=resolved_tier)
+        provider_name = llm.__class__.__name__
+        _trace_m15(
+            "llm.provider.resolved",
+            provider=provider_name,
+            requested_model=model,
+            resolved_tier=resolved_tier,
         )
-        if is_fail_hard_enabled():
-            raise RuntimeError(
-                f"LLM token budget exhausted while failHard is enabled: {budget_used:,} >= {budget_total:,}"
-            )
-        return (None, 0.0)
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_message},
-    ]
+        start_time = time.time()
+        deadline = None
+        if timeout is not None:
+            deadline = start_time + max(0.0, float(timeout))
+        retries = _MAX_RETRIES if max_retries is None else max_retries
+        last_error = None
+        explicit_slot_timeout = slot_timeout is not None
+        if explicit_slot_timeout:
+            slot_timeout = float(slot_timeout)
+            if slot_timeout <= 0:
+                raise ValueError("slot_timeout must be positive when provided")
 
-    llm = get_llm_provider(model_tier=resolved_tier)
-    provider_name = llm.__class__.__name__
-    _trace_m15(
-        "llm.provider.resolved",
-        provider=provider_name,
-        requested_model=model,
-        resolved_tier=resolved_tier,
-    )
+        _RETRYABLE_HTTP_CODES = {408, 429, 500, 502, 503, 504, 529}
 
-    start_time = time.time()
-    deadline = None
-    if timeout is not None:
-        deadline = start_time + max(0.0, float(timeout))
-    retries = _MAX_RETRIES if max_retries is None else max_retries
-    last_error = None
-    explicit_slot_timeout = slot_timeout is not None
-    if explicit_slot_timeout:
-        slot_timeout = float(slot_timeout)
-        if slot_timeout <= 0:
-            raise ValueError("slot_timeout must be positive when provided")
-
-    _RETRYABLE_HTTP_CODES = {408, 429, 500, 502, 503, 504, 529}
-
-    for attempt in range(retries + 1):
-        attempt_started = time.monotonic()
-        try:
-            timeout_for_attempt = timeout
-            if deadline is not None and not explicit_slot_timeout:
-                timeout_for_attempt = deadline - time.time()
-                if timeout_for_attempt <= 0:
-                    raise TimeoutError("LLM deadline exhausted before provider call")
-            acquire_timeout = slot_timeout if explicit_slot_timeout else timeout_for_attempt
-            with acquire_llm_slot(timeout_seconds=acquire_timeout, pool_kind=resolved_tier):
-                call_timeout = timeout_for_attempt
+        for attempt in range(retries + 1):
+            attempt_started = time.monotonic()
+            try:
+                timeout_for_attempt = timeout
                 if deadline is not None and not explicit_slot_timeout:
-                    call_timeout = deadline - time.time()
-                    if call_timeout <= 0:
-                        raise TimeoutError("LLM deadline exhausted while waiting for worker slot")
+                    timeout_for_attempt = deadline - time.time()
+                    if timeout_for_attempt <= 0:
+                        raise TimeoutError("LLM deadline exhausted before provider call")
+                acquire_timeout = slot_timeout if explicit_slot_timeout else timeout_for_attempt
+                with acquire_llm_slot(timeout_seconds=acquire_timeout, pool_kind=resolved_tier):
+                    call_timeout = timeout_for_attempt
+                    if deadline is not None and not explicit_slot_timeout:
+                        call_timeout = deadline - time.time()
+                        if call_timeout <= 0:
+                            raise TimeoutError("LLM deadline exhausted while waiting for worker slot")
+                    _trace_m15(
+                        "llm.provider.call_attempt",
+                        provider=provider_name,
+                        requested_model=model,
+                        resolved_tier=resolved_tier,
+                        attempt=attempt + 1,
+                        call_timeout=call_timeout,
+                    )
+                    result = llm.llm_call(messages, resolved_tier, max_tokens, call_timeout)
+                _track_usage(result)
+                _append_usage_event(
+                    result,
+                    tier=resolved_tier,
+                    provider_name=provider_name,
+                    requested_model=model,
+                )
+                if result.truncated:
+                    message = (
+                        "LLM response truncated by max_tokens "
+                        f"(provider={provider_name}, tier={resolved_tier}, "
+                        f"model={result.model or model}, max_tokens={max_tokens})"
+                    )
+                    logger.warning("[llm_clients] %s", message)
+                    if is_fail_hard_enabled():
+                        raise RuntimeError(f"{message} while failHard is enabled")
+                if result.text is None:
+                    raise RuntimeError(
+                        "No response from provider "
+                        f"(provider={provider_name}, tier={resolved_tier}, model={result.model or model}, "
+                        f"timeout={timeout_for_attempt})"
+                    )
+                _append_trace({
+                    "status": "ok",
+                    "provider": provider_name,
+                    "tier": resolved_tier,
+                    "requested_model": str(model or ""),
+                    "resolved_model": str(model or ""),
+                    "returned_model": str(result.model or ""),
+                    "attempt": int(attempt + 1),
+                    "duration_ms": int(max(0.0, float(result.duration or 0.0)) * 1000),
+                    "timeout_s": float(timeout_for_attempt if timeout_for_attempt is not None else 0.0),
+                    "request_preview": _preview(user_message, 30),
+                    "system_preview": _preview(system_prompt, 30),
+                    "response_preview": _preview(result.text, 30),
+                    "error_code": "",
+                    "key_fp": _key_fp(),
+                })
                 _trace_m15(
-                    "llm.provider.call_attempt",
+                    "llm.provider.call_ok",
+                    provider=provider_name,
+                    requested_model=model,
+                    returned_model=result.model,
+                    resolved_tier=resolved_tier,
+                    attempt=attempt + 1,
+                    duration_ms=int(max(0.0, float(result.duration or 0.0)) * 1000),
+                    response_preview=_preview(result.text, 30),
+                )
+                try:
+                    from lib.agent_notice import clear_pending_notices_by_source
+
+                    clear_pending_notices_by_source(sources={"provider", "llm_config"})
+                except Exception as notice_exc:
+                    logger.warning("Failed clearing provider pending notices after successful LLM call: %s", notice_exc)
+                return result.text, result.duration
+            except Exception as e:
+                last_error = e
+                _trace_m15(
+                    "llm.provider.call_error",
                     provider=provider_name,
                     requested_model=model,
                     resolved_tier=resolved_tier,
                     attempt=attempt + 1,
-                    call_timeout=call_timeout,
+                    exc_type=type(e).__name__,
+                    error=str(e),
+                    http_code=getattr(e, "code", None),
+                    rate_limits=_rate_limit_headers(e),
                 )
-                result = llm.llm_call(messages, resolved_tier, max_tokens, call_timeout)
-            _track_usage(result)
-            _append_usage_event(
-                result,
-                tier=resolved_tier,
-                provider_name=provider_name,
-                requested_model=model,
-            )
-            if result.truncated:
-                message = (
-                    "LLM response truncated by max_tokens "
-                    f"(provider={provider_name}, tier={resolved_tier}, "
-                    f"model={result.model or model}, max_tokens={max_tokens})"
-                )
-                logger.warning("[llm_clients] %s", message)
-                if is_fail_hard_enabled():
-                    raise RuntimeError(f"{message} while failHard is enabled")
-            if result.text is None:
-                raise RuntimeError(
-                    "No response from provider "
-                    f"(provider={provider_name}, tier={resolved_tier}, model={result.model or model}, "
-                    f"timeout={timeout_for_attempt})"
-                )
-            _append_trace({
-                "status": "ok",
-                "provider": provider_name,
-                "tier": resolved_tier,
-                "requested_model": str(model or ""),
-                "resolved_model": str(model or ""),
-                "returned_model": str(result.model or ""),
-                "attempt": int(attempt + 1),
-                "duration_ms": int(max(0.0, float(result.duration or 0.0)) * 1000),
-                "timeout_s": float(timeout_for_attempt if timeout_for_attempt is not None else 0.0),
-                "request_preview": _preview(user_message, 30),
-                "system_preview": _preview(system_prompt, 30),
-                "response_preview": _preview(result.text, 30),
-                "error_code": "",
-                "key_fp": _key_fp(),
-            })
-            _trace_m15(
-                "llm.provider.call_ok",
-                provider=provider_name,
-                requested_model=model,
-                returned_model=result.model,
-                resolved_tier=resolved_tier,
-                attempt=attempt + 1,
-                duration_ms=int(max(0.0, float(result.duration or 0.0)) * 1000),
-                response_preview=_preview(result.text, 30),
-            )
-            try:
-                from lib.agent_notice import clear_pending_notices_by_source
+                _append_trace({
+                    "status": "error",
+                    "provider": provider_name,
+                    "tier": resolved_tier,
+                    "requested_model": str(model or ""),
+                    "resolved_model": str(model or ""),
+                    "returned_model": "",
+                    "attempt": int(attempt + 1),
+                    "duration_ms": int((time.monotonic() - attempt_started) * 1000),
+                    "timeout_s": float(timeout if timeout is not None else 0.0),
+                    "request_preview": _preview(user_message, 30),
+                    "system_preview": _preview(system_prompt, 30),
+                    "response_preview": "",
+                    "error_code": _error_code(e),
+                    "error": str(e),
+                    "rate_limits": _rate_limit_headers(e),
+                    "key_fp": _key_fp(),
+                })
+                # Only retry on transient errors (rate limit, server errors, timeouts)
+                retryable = _is_retryable_llm_transport_error(e)
+                if isinstance(e, urllib.error.HTTPError):
+                    retryable = e.code in _RETRYABLE_HTTP_CODES
+                if retryable and attempt < retries:
+                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    delay = _retry_delay_for_error(e, delay)
+                    if deadline is not None:
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            break
+                        delay = min(delay, max(0.0, remaining))
+                        if delay <= 0:
+                            break
+                    code = getattr(e, 'code', type(e).__name__)
+                    logger.warning(
+                        "[llm_clients] Retryable error (%s), attempt %s/%s, retrying in %.1fs",
+                        code,
+                        attempt + 1,
+                        retries + 1,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                break
 
-                clear_pending_notices_by_source(sources={"provider", "llm_config"})
-            except Exception as notice_exc:
-                logger.warning("Failed clearing provider pending notices after successful LLM call: %s", notice_exc)
-            return result.text, result.duration
-        except Exception as e:
-            last_error = e
-            _trace_m15(
-                "llm.provider.call_error",
-                provider=provider_name,
-                requested_model=model,
-                resolved_tier=resolved_tier,
-                attempt=attempt + 1,
-                exc_type=type(e).__name__,
-                error=str(e),
-                http_code=getattr(e, "code", None),
-                rate_limits=_rate_limit_headers(e),
-            )
-            _append_trace({
-                "status": "error",
-                "provider": provider_name,
-                "tier": resolved_tier,
-                "requested_model": str(model or ""),
-                "resolved_model": str(model or ""),
-                "returned_model": "",
-                "attempt": int(attempt + 1),
-                "duration_ms": int((time.monotonic() - attempt_started) * 1000),
-                "timeout_s": float(timeout if timeout is not None else 0.0),
-                "request_preview": _preview(user_message, 30),
-                "system_preview": _preview(system_prompt, 30),
-                "response_preview": "",
-                "error_code": _error_code(e),
-                "error": str(e),
-                "rate_limits": _rate_limit_headers(e),
-                "key_fp": _key_fp(),
-            })
-            # Only retry on transient errors (rate limit, server errors, timeouts)
-            retryable = _is_retryable_llm_transport_error(e)
-            if isinstance(e, urllib.error.HTTPError):
-                retryable = e.code in _RETRYABLE_HTTP_CODES
-            if retryable and attempt < retries:
-                delay = _RETRY_BASE_DELAY * (2 ** attempt)
-                delay = _retry_delay_for_error(e, delay)
-                if deadline is not None:
-                    remaining = deadline - time.time()
-                    if remaining <= 0:
-                        break
-                    delay = min(delay, max(0.0, remaining))
-                    if delay <= 0:
-                        break
-                code = getattr(e, 'code', type(e).__name__)
-                logger.warning(
-                    "[llm_clients] Retryable error (%s), attempt %s/%s, retrying in %.1fs",
-                    code,
-                    attempt + 1,
-                    retries + 1,
-                    delay,
-                )
-                time.sleep(delay)
-                continue
-            break
-
-    duration = time.time() - start_time
-    logger.error("[llm_clients] LLM error: %s", last_error)
-    _trace_m15(
-        "llm.call.final_error",
-        provider=provider_name,
-        requested_model=model,
-        resolved_tier=resolved_tier,
-        duration_ms=int(duration * 1000),
-        exc_type=type(last_error).__name__ if last_error is not None else None,
-        error=str(last_error),
-    )
-
-    # Determine if this is a confirmed provider outage (retryable HTTP codes
-    # exhausted) vs. a bug or config error in our code.
-    _is_provider_outage = False
-    if _is_retryable_llm_transport_error(last_error):
-        _is_provider_outage = True
-    elif isinstance(last_error, urllib.error.HTTPError):
-        _is_provider_outage = last_error.code in _RETRYABLE_HTTP_CODES
-
-    if _is_provider_outage:
+        duration = time.time() - start_time
+        logger.error("[llm_clients] LLM error: %s", last_error)
         _trace_m15(
-            "llm.notice.provider_outage",
+            "llm.call.final_error",
             provider=provider_name,
             requested_model=model,
             resolved_tier=resolved_tier,
-            fail_hard=is_fail_hard_enabled(),
+            duration_ms=int(duration * 1000),
+            exc_type=type(last_error).__name__ if last_error is not None else None,
+            error=str(last_error),
         )
-        _notify_provider_access_error(
-            provider_name=provider_name,
-            resolved_tier=resolved_tier,
-            model=model,
-            last_error=last_error,
-            dedupe_prefix="llm-outage",
-            action="reach",
-        )
+
+        # Determine if this is a confirmed provider outage (retryable HTTP codes
+        # exhausted) vs. a bug or config error in our code.
+        _is_provider_outage = False
+        if _is_retryable_llm_transport_error(last_error):
+            _is_provider_outage = True
+        elif isinstance(last_error, urllib.error.HTTPError):
+            _is_provider_outage = last_error.code in _RETRYABLE_HTTP_CODES
+
+        if _is_provider_outage:
+            _trace_m15(
+                "llm.notice.provider_outage",
+                provider=provider_name,
+                requested_model=model,
+                resolved_tier=resolved_tier,
+                fail_hard=is_fail_hard_enabled(),
+            )
+            _notify_provider_access_error(
+                provider_name=provider_name,
+                resolved_tier=resolved_tier,
+                model=model,
+                last_error=last_error,
+                dedupe_prefix="llm-outage",
+                action="reach",
+            )
+            if is_fail_hard_enabled():
+                err_type = type(last_error).__name__ if last_error is not None else "UnknownError"
+                raise RuntimeError(
+                    "LLM call failed after retries while failHard is enabled "
+                    f"(provider={provider_name}, tier={resolved_tier}, model={model}, "
+                    f"error_type={err_type}, error={last_error})."
+                ) from last_error
+            raise ProviderUnavailableError(
+                f"Provider unavailable after {retries + 1} attempts "
+                f"(provider={provider_name}, tier={resolved_tier}, model={model}, "
+                f"error={last_error})"
+            ) from last_error
+
+        _is_provider_config = _is_provider_config_error(last_error)
+        if _is_provider_config:
+            _notify_provider_access_error(
+                provider_name=provider_name,
+                resolved_tier=resolved_tier,
+                model=model,
+                last_error=last_error,
+                dedupe_prefix="llm-config",
+            )
+
         if is_fail_hard_enabled():
+            _trace_m15(
+                "llm.call.raise_failhard",
+                provider=provider_name,
+                requested_model=model,
+                resolved_tier=resolved_tier,
+                exc_type=type(last_error).__name__ if last_error is not None else None,
+                error=str(last_error),
+            )
             err_type = type(last_error).__name__ if last_error is not None else "UnknownError"
-            raise RuntimeError(
+            error_cls = ProviderConfigError if _is_provider_config else RuntimeError
+            raise error_cls(
                 "LLM call failed after retries while failHard is enabled "
                 f"(provider={provider_name}, tier={resolved_tier}, model={model}, "
                 f"error_type={err_type}, error={last_error})."
             ) from last_error
-        raise ProviderUnavailableError(
-            f"Provider unavailable after {retries + 1} attempts "
-            f"(provider={provider_name}, tier={resolved_tier}, model={model}, "
-            f"error={last_error})"
-        ) from last_error
-
-    _is_provider_config = _is_provider_config_error(last_error)
-    if _is_provider_config:
-        _notify_provider_access_error(
-            provider_name=provider_name,
-            resolved_tier=resolved_tier,
-            model=model,
-            last_error=last_error,
-            dedupe_prefix="llm-config",
+        if _is_provider_config:
+            raise ProviderConfigError(
+                f"Quaid could not access its {resolved_tier} language model provider "
+                f"({provider_name}, model={model}). Error: {_short_error_text(last_error)}"
+            ) from last_error
+        logger.warning(
+            "[llm_clients][FALLBACK] Returning None after LLM failure because failHard is disabled."
         )
+        return None, duration
 
-    if is_fail_hard_enabled():
-        _trace_m15(
-            "llm.call.raise_failhard",
-            provider=provider_name,
-            requested_model=model,
-            resolved_tier=resolved_tier,
-            exc_type=type(last_error).__name__ if last_error is not None else None,
-            error=str(last_error),
-        )
-        err_type = type(last_error).__name__ if last_error is not None else "UnknownError"
-        error_cls = ProviderConfigError if _is_provider_config else RuntimeError
-        raise error_cls(
-            "LLM call failed after retries while failHard is enabled "
-            f"(provider={provider_name}, tier={resolved_tier}, model={model}, "
-            f"error_type={err_type}, error={last_error})."
-        ) from last_error
-    if _is_provider_config:
-        raise ProviderConfigError(
-            f"Quaid could not access its {resolved_tier} language model provider "
-            f"({provider_name}, model={model}). Error: {_short_error_text(last_error)}"
-        ) from last_error
-    logger.warning(
-        "[llm_clients][FALLBACK] Returning None after LLM failure because failHard is disabled."
-    )
-    return None, duration
+    finally:
+        _release_llm_cost_budget(reserved_cost)
 
 
 def call_fast_reasoning(prompt: str, max_tokens: int = 200,

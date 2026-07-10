@@ -789,6 +789,64 @@ class TestCallLlmProvider:
                 llm_clients.call_llm("system", "user")
         reset_token_usage()
 
+    def test_cost_cap_counts_inflight_reservations(self, monkeypatch):
+        """Concurrent calls should not all pass the same stale cost snapshot."""
+        import core.llm.clients as llm_clients
+
+        monkeypatch.setenv("JANITOR_COST_CAP", "1.5")
+        entered = threading.Event()
+        release = threading.Event()
+        calls = []
+        call_lock = threading.Lock()
+
+        class BlockingProvider:
+            def llm_call(self, _messages, _model_tier="deep", _max_tokens=4000, _timeout=600):
+                with call_lock:
+                    calls.append(object())
+                    call_number = len(calls)
+                if call_number == 1:
+                    entered.set()
+                    assert release.wait(timeout=2.0)
+                return LLMResult(
+                    text='{"ok": true}',
+                    duration=0.01,
+                    input_tokens=10,
+                    output_tokens=10,
+                    model="test-deep",
+                )
+
+        reset_token_usage()
+        old_models_loaded = llm_clients._models_loaded
+        old_fast_model = llm_clients._fast_reasoning_model
+        old_deep_model = llm_clients._deep_reasoning_model
+        llm_clients._models_loaded = True
+        llm_clients._deep_reasoning_model = "claude-opus-4-6"
+        provider = BlockingProvider()
+
+        try:
+            with patch("core.llm.clients.get_llm_provider", return_value=provider), \
+                 patch("core.llm.clients._estimate_llm_call_cost", return_value=1.0), \
+                 patch("core.llm.clients.is_fail_hard_enabled", return_value=False):
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    first = pool.submit(llm_clients.call_llm, "system", "user", max_retries=0)
+                    assert entered.wait(timeout=2.0)
+
+                    result, duration = llm_clients.call_llm("system", "user", max_retries=0)
+                    assert result is None
+                    assert duration == 0.0
+                    assert len(calls) == 1
+
+                    release.set()
+                    assert first.result(timeout=2.0)[0] == '{"ok": true}'
+
+            assert llm_clients._usage_reserved_cost == 0.0
+        finally:
+            release.set()
+            reset_token_usage()
+            llm_clients._models_loaded = old_models_loaded
+            llm_clients._fast_reasoning_model = old_fast_model
+            llm_clients._deep_reasoning_model = old_deep_model
+
     def test_model_tier_routing(self, test_adapter):
         """Haiku model should route as 'low' tier, others as 'high'."""
         import core.llm.clients as llm_clients
