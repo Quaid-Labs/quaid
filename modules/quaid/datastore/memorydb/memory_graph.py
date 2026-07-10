@@ -203,20 +203,6 @@ def _ensure_visible_identity_stubs() -> List[str]:
         created.append(name)
     return created
 
-# Prompt injection blocklist — defense-in-depth for stored facts
-_INJECTION_PATTERNS = [
-    re.compile(p, re.IGNORECASE) for p in [
-        r'ignore\s+(previous|earlier|all|these|my)\s+\w*\s*(instructions|prompts?)',
-        r'system\s+prompt',
-        r'\bAPI\s+key\b',
-        r'\bpassword\b(?!\s+manager)',
-        r'forget\s+(everything|all|previous)',
-        r'\byou\s+(are|must|should|will)\s+(now|always)\b',
-        r'\b(override|bypass|jailbreak)\b',
-        r'\b(secret\s+key|access\s+token|bearer\s+token)\b',
-    ]
-]
-
 _LOW_INFO_ENTITY_CATEGORIES = {"person", "place", "entity", "concept", "event", "organization", "pet"}
 _LOW_INFO_ENTITY_TEXT_RE = re.compile(r"[^\W\d_][\w'_-]*(?:\s+[^\W\d_][\w'_-]*)?", re.UNICODE)
 _RECALL_PLANNER_TIMEOUT_CAP_S = 60.0
@@ -3905,10 +3891,6 @@ def _relation_tokens_for_runtime() -> Dict[str, set[str]]:
             if len(token) < 3 or token in _RELATION_TOKEN_STOPWORDS:
                 continue
             tokens.add(token)
-            if token == "neighbor":
-                tokens.add("neighbour")
-            elif token == "neighbour":
-                tokens.add("neighbor")
             if token.endswith("ies") and len(token) > 4:
                 tokens.add(token[:-3] + "y")
             elif token.endswith("s") and len(token) > 4:
@@ -4468,9 +4450,8 @@ _RELATION_CHAIN_ACTIVITY_FACT_TERMS = {
 
 def _relation_chain_activity_answer_score(query: Optional[str], row: Dict[str, Any]) -> int:
     query_tokens = set(_normalize_relation_query_tokens(query or ""))
-    activity_query = bool(query_tokens & _RELATION_CHAIN_ACTIVITY_QUERY_TERMS) or bool(
-        _NAMED_ENTITY_ACTIVITY_QUERY_RE.search(str(query or "").lower())
-    )
+    relation_chain_query = len(_relation_chain_groups_for_query(query or "")) >= 2
+    activity_query = bool(query_tokens & _RELATION_CHAIN_ACTIVITY_QUERY_TERMS) or relation_chain_query
     if not activity_query:
         return 0
     searchable = " ".join([
@@ -8838,10 +8819,7 @@ def _seed_recall_lexical_anchor_planner_mode(
         return "deterministic"
 
     if graph_seed:
-        lowered = str(query or "").lower()
         if len(explicit_anchor_terms) >= 2:
-            return "deterministic"
-        if _NAMED_ENTITY_ACTIVITY_QUERY_RE.search(lowered):
             return "deterministic"
 
     return "llm"
@@ -14932,23 +14910,21 @@ def _prioritize_deliberate_confident_direct_anchor_rows(query: str, rows: List[D
     ]
 
 
+_STRUCTURAL_ISO_DATE_RE = re.compile(r"(?<!\d)(20\d{2}-\d{2}-\d{2})(?!\d)")
 _DATE_RANGE_CONNECTION_QUERY_RE = re.compile(
-    r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
-    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
-    r"nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}\s*[-/]\s*\d{1,2}\b"
+    r"(?<!\d)20\d{2}-\d{2}-\d{2}\s*[-/]\s*20\d{2}-\d{2}-\d{2}(?!\d)"
 )
-_MONTH_NAME_TOKENS = {
-    "january", "february", "march", "april", "may", "june",
-    "july", "august", "september", "october", "november", "december",
-    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
-}
+
+
+def _structural_date_tokens(value: Any) -> set[str]:
+    return set(_STRUCTURAL_ISO_DATE_RE.findall(str(value or "")))
 
 
 def _is_date_relation_callback_query(query: str) -> bool:
-    lower = str(query or "").lower()
-    if not lower:
+    text = str(query or "")
+    if not text.strip():
         return False
-    return bool(_DATE_RANGE_CONNECTION_QUERY_RE.search(lower))
+    return bool(_DATE_RANGE_CONNECTION_QUERY_RE.search(text)) or len(_structural_date_tokens(text)) >= 2
 
 
 def _prioritize_date_relation_callback_rows(query: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -14957,11 +14933,9 @@ def _prioritize_date_relation_callback_rows(query: str, rows: List[Dict[str, Any
         return rows
 
     query_terms = _extract_distinctive_query_terms(query, limit=8)
-    query_months = {
-        token
-        for token in re.findall(r"[a-z]+", str(query or "").lower())
-        if token in _MONTH_NAME_TOKENS
-    }
+    query_dates = _structural_date_tokens(query)
+    if not query_dates:
+        return rows
 
     def _row_text(row: Dict[str, Any]) -> str:
         return str((row or {}).get("text") or "")
@@ -14983,14 +14957,11 @@ def _prioritize_date_relation_callback_rows(query: str, rows: List[Dict[str, Any
     def _row_date_relation_score(row: Dict[str, Any]) -> int:
         if not isinstance(row, dict) or not _is_direct_memory_row(row):
             return 0
-        lower_text = _row_text(row).lower()
         score = 0
-        row_months = {
-            token
-            for token in re.findall(r"[a-z]+", lower_text)
-            if token in _MONTH_NAME_TOKENS
-        }
-        if row_months & query_months:
+        row_dates: set[str] = set()
+        for key in ("text", "source_date", "valid_from", "valid_until", "occurred_start", "occurred_end", "mentioned_at"):
+            row_dates.update(_structural_date_tokens((row or {}).get(key)))
+        if row_dates & query_dates:
             score += 1
         if score <= 0:
             return 0
@@ -15023,18 +14994,12 @@ def _prioritize_date_relation_callback_rows(query: str, rows: List[Dict[str, Any
     ]
 
 
-_NAMED_ENTITY_ACTIVITY_QUERY_RE = re.compile(r"\bwhat\s+do(?:es)?\b")
-
-
 def _prioritize_named_entity_activity_anchor_rows(query: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Prefer direct attached facts from the explicit entity on 'what does X do' queries."""
+    """Prefer direct attached facts from the explicit entity when graph evidence exists."""
     if not rows:
         return rows
-    lower_query = str(query or "").strip().lower()
-    if not lower_query or not _NAMED_ENTITY_ACTIVITY_QUERY_RE.search(lower_query):
-        return rows
     anchor_terms = {
-        str(term or "").strip().lower()
+        _unicode_casefold(str(term or "").strip())
         for term in _extract_explicit_query_anchor_terms(query, limit=4)
         if str(term or "").strip()
     }
@@ -15044,10 +15009,10 @@ def _prioritize_named_entity_activity_anchor_rows(query: str, rows: List[Dict[st
     def _is_direct_anchor_attached_fact(row: Dict[str, Any]) -> bool:
         if str((row or {}).get("via") or "") != "graph_attached_fact":
             return False
-        source_name = str((row or {}).get("source_name") or "").strip().lower()
+        source_name = _unicode_casefold(str((row or {}).get("source_name") or "").strip())
         if source_name and source_name in anchor_terms:
             return True
-        graph_path = str((row or {}).get("graph_path") or "").strip().lower()
+        graph_path = _unicode_casefold(str((row or {}).get("graph_path") or "").strip())
         return any(graph_path.startswith(f"{term} --has_fact-->") for term in anchor_terms)
 
     if not any(_is_direct_anchor_attached_fact(row) for row in rows):
@@ -22675,11 +22640,8 @@ def recall(
 
 
 def _check_injection_blocklist(text: str) -> Optional[str]:
-    """Check text for prompt injection patterns. Returns matched text if flagged, None otherwise."""
-    for pattern in _INJECTION_PATTERNS:
-        match = pattern.search(text)
-        if match:
-            return match.group(0)
+    """Datastore no longer runs English lexical injection checks on user facts."""
+    _ = text
     return None
 
 
@@ -22951,11 +22913,8 @@ def _select_final_recall_rows(
 
 
 def _sanitize_for_context(text: str) -> str:
-    """Strip potential injection patterns from recalled text (defense-in-depth)."""
-    result = text
-    for pattern in _INJECTION_PATTERNS:
-        result = pattern.sub("[FILTERED]", result)
-    return result
+    """Return recalled text unchanged; language-aware injection checks live above datastore."""
+    return text
 
 
 def _validate_confidence_unit_interval(value: Any, field_name: str) -> float:
