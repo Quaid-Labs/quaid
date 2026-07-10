@@ -9769,6 +9769,43 @@ class TestSignalRoundTrip:
         assert "disk full" in str(excinfo.value.__cause__)
         assert "failed writing session processing lock payload" in caplog.text
 
+    def test_session_processing_lock_reclaim_unexpected_failure_closes_retry_fd(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        opened_fds = iter([101, 202])
+        closed_fds = []
+
+        def fake_open(*_args, **_kwargs):
+            return next(opened_fds)
+
+        def fake_close(fd):
+            closed_fds.append(fd)
+
+        def fake_flock(fd, _op):
+            if fd == 101:
+                raise BlockingIOError("lock busy")
+            raise RuntimeError("flock failed")
+
+        monkeypatch.setattr(extraction_daemon.os, "open", fake_open)
+        monkeypatch.setattr(extraction_daemon.os, "close", fake_close)
+        monkeypatch.setattr(extraction_daemon.fcntl, "flock", fake_flock)
+        monkeypatch.setattr(extraction_daemon, "_processing_lock_holder_dead", lambda _path: True)
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_remove_stale_processing_lock",
+            lambda _path, *, holder_dead: holder_dead,
+        )
+
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            lock_fd = extraction_daemon._acquire_session_processing_lock("sess-reclaim-fails")
+
+        assert lock_fd is None
+        assert closed_fds == [101, 202]
+        assert "failed reopening stale session processing lock" in caplog.text
+        assert "flock failed" in caplog.text
+
     def test_processing_lock_active_ignores_unlocked_sidecar_with_live_pid(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")

@@ -3120,18 +3120,26 @@ def _acquire_session_processing_lock(session_id: str) -> Optional[int]:
             pass
         if not _remove_stale_processing_lock(lock_path, holder_dead=holder_dead):
             return None
+        retry_fd: Optional[int] = None
         try:
-            fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+            retry_fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+            fd = retry_fd
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except (OSError, IOError) as exc:
             logger.warning("failed reclaiming stale session processing lock for %s: %s", session_id, exc)
-            try:
-                os.close(fd)
-            except Exception:
-                pass
+            if retry_fd is not None:
+                try:
+                    os.close(retry_fd)
+                except Exception:
+                    pass
             return None
         except Exception as exc:
             logger.warning("failed reopening stale session processing lock for %s: %s", session_id, exc)
+            if retry_fd is not None:
+                try:
+                    os.close(retry_fd)
+                except Exception:
+                    pass
             return None
     payload = {
         "session_id": _validate_session_id(session_id),
