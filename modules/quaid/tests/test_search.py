@@ -200,6 +200,48 @@ class TestSearchFTS:
             assert high_signal_words == ["美玲", "Noor"]
             assert common_words == ["archive"]
 
+    def test_fts_fallback_escapes_like_wildcards(self, tmp_path):
+        items = [
+            ("Ari keeps alpha_tmp marker", "Fact", "quaid"),
+            ("Ari keeps alphaXtmp marker", "Fact", "quaid"),
+        ]
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            graph = _make_graph_with_data(tmp_path, items=items)
+            original_get_conn = graph._get_conn
+
+            class _ProxyConn:
+                def __init__(self, conn):
+                    self._conn = conn
+
+                def execute(self, sql, params=(), *args, **kwargs):
+                    if "nodes_fts MATCH" in str(sql):
+                        raise sqlite3.OperationalError("fts unavailable")
+                    return self._conn.execute(sql, params, *args, **kwargs)
+
+                def __getattr__(self, name):
+                    return getattr(self._conn, name)
+
+            class _ProxyCtx:
+                def __init__(self, ctx):
+                    self._ctx = ctx
+
+                def __enter__(self):
+                    return _ProxyConn(self._ctx.__enter__())
+
+                def __exit__(self, exc_type, exc, tb):
+                    return self._ctx.__exit__(exc_type, exc, tb)
+
+            def _wrapped_conn():
+                return _ProxyCtx(original_get_conn())
+
+            with patch.object(graph, "_get_conn", side_effect=_wrapped_conn), \
+                 patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False):
+                results = graph.search_fts("alpha_tmp", limit=5)
+
+            names = [node.name for node, _ in results]
+            assert "Ari keeps alpha_tmp marker" in names
+            assert "Ari keeps alphaXtmp marker" not in names
+
     def test_fts_query_error_raises_when_fail_hard_enabled(self, tmp_path):
         with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)

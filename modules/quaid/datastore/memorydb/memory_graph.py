@@ -2935,11 +2935,11 @@ class MemoryGraph:
             node_hits: dict = {}
 
             for word in proper_nouns:
-                pattern = f"%{word}%"
+                pattern = f"%{_escape_like_pattern(word)}%"
                 params = [pattern] + ([owner_id] if owner_id else []) + [limit * 3]
                 rows = conn.execute(f"""
                     SELECT * FROM nodes
-                    WHERE name LIKE ? AND (status IS NULL OR status IN ('approved', 'pending', 'active'))
+                    WHERE name LIKE ? ESCAPE '\\' AND (status IS NULL OR status IN ('approved', 'pending', 'active'))
                     AND deleted_at IS NULL AND superseded_by IS NULL
                     {owner_clause}
                     LIMIT ?
@@ -2952,11 +2952,11 @@ class MemoryGraph:
                         node_hits[node.id] = (node, 3)
 
             for word in common_words:
-                pattern = f"%{word}%"
+                pattern = f"%{_escape_like_pattern(word)}%"
                 params = [pattern] + ([owner_id] if owner_id else []) + [limit * 2]
                 rows = conn.execute(f"""
                     SELECT * FROM nodes
-                    WHERE name LIKE ? AND (status IS NULL OR status IN ('approved', 'pending', 'active'))
+                    WHERE name LIKE ? ESCAPE '\\' AND (status IS NULL OR status IN ('approved', 'pending', 'active'))
                     AND deleted_at IS NULL AND superseded_by IS NULL
                     {owner_clause}
                     LIMIT ?
