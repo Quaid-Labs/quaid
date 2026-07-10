@@ -83,19 +83,29 @@ def _registry_path(parent_session_id: str) -> Path:
     return _registry_dir() / f"{parent_session_id}.json"
 
 
+def _empty_registry(parent_session_id: str) -> Dict[str, Any]:
+    return {"parent_session_id": parent_session_id, "children": {}}
+
+
 def _read_registry(parent_session_id: str) -> Dict[str, Any]:
     """Read registry file for a parent session."""
     p = _registry_path(parent_session_id)
     if not p.exists():
-        return {"parent_session_id": parent_session_id, "children": {}}
+        return _empty_registry(parent_session_id)
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
-            return {"parent_session_id": parent_session_id, "children": {}}
+            message = f"[subagent-registry] invalid registry shape in {p}: expected object"
+            logger.warning(message)
+            if _fail_hard_enabled():
+                raise RuntimeError(message)
+            return _empty_registry(parent_session_id)
         return data
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("[subagent-registry] failed to read %s: %s", p, e)
-        return {"parent_session_id": parent_session_id, "children": {}}
+        if _fail_hard_enabled():
+            raise RuntimeError(f"Failed to read subagent registry {p}") from e
+        return _empty_registry(parent_session_id)
 
 
 @contextmanager

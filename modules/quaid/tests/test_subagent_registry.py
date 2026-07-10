@@ -511,15 +511,35 @@ class TestAtomicWrite:
         assert isinstance(data, dict)
         assert "children" in data
 
-    def test_malformed_existing_file_falls_back_to_empty(self, tmp_path):
+    def test_malformed_existing_file_falls_back_to_empty(self, tmp_path, monkeypatch):
         """If the registry file is corrupted, register() recovers gracefully."""
+        import core.subagent_registry as registry
         from core.subagent_registry import register
+
+        monkeypatch.setattr(registry, "_fail_hard_enabled", lambda: False)
         reg_dir = tmp_path / "instances" / "pytest-runner" / "data" / "subagent-registry"
         reg_dir.mkdir(parents=True, exist_ok=True)
         (reg_dir / "parent-1.json").write_text("}{invalid json", encoding="utf-8")
         register("parent-1", "child-A")
         data = _read_raw(tmp_path, "parent-1")
         assert "child-A" in data["children"]
+
+    def test_malformed_existing_file_raises_fail_hard_without_writeback(self, tmp_path, monkeypatch):
+        import core.subagent_registry as registry
+        from core.subagent_registry import mark_complete
+
+        monkeypatch.setattr(registry, "_fail_hard_enabled", lambda: True)
+        reg_dir = tmp_path / "instances" / "pytest-runner" / "data" / "subagent-registry"
+        reg_dir.mkdir(parents=True, exist_ok=True)
+        registry_file = reg_dir / "parent-1.json"
+        corrupt_json = "}{invalid json"
+        registry_file.write_text(corrupt_json, encoding="utf-8")
+
+        with pytest.raises(RuntimeError, match="Failed to read subagent registry") as excinfo:
+            mark_complete("parent-1", "child-A", transcript_path="/logs/child-A.jsonl")
+
+        assert isinstance(excinfo.value.__cause__, json.JSONDecodeError)
+        assert registry_file.read_text(encoding="utf-8") == corrupt_json
 
     def test_duplicate_register_does_not_downgrade_completed_child(self, tmp_path):
         from core.subagent_registry import register, mark_complete
