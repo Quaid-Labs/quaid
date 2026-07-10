@@ -7,7 +7,7 @@ Do not edit manually. Regenerate with:
 python3 modules/quaid/scripts/generate-config-reference.py
 ```
 
-Source hash: `56442f163441`
+Source hash: `00d6a8ce0b52`
 
 Notes:
 - Keys are documented in `snake_case` (loader also accepts camelCase aliases).
