@@ -468,6 +468,50 @@ def test_janitor_lock_filesystem_failure_honors_fail_hard(monkeypatch, tmp_path)
         janitor._acquire_lock()
 
 
+def test_janitor_lock_filesystem_failure_warns_when_fail_open(monkeypatch, tmp_path):
+    from core.lifecycle import janitor
+
+    blocked_data_dir = tmp_path / "data-file"
+    blocked_data_dir.write_text("not a directory", encoding="utf-8")
+    warnings = []
+    monkeypatch.setattr(janitor, "_data_dir", lambda: blocked_data_dir)
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(janitor.janitor_logger, "warn", lambda event, **data: warnings.append((event, data)))
+    janitor._lock_fd = None
+
+    assert janitor._acquire_lock() is False
+    assert warnings
+    assert warnings[0][0] == "janitor_lock_acquire_failed"
+    assert str(blocked_data_dir) in str(warnings[0][1].get("error", ""))
+
+
+def test_janitor_lock_wait_defaults_to_short_direct_window(monkeypatch):
+    from core.lifecycle import janitor
+
+    monkeypatch.delenv("QUAID_JANITOR_LOCK_WAIT_SECONDS", raising=False)
+    monkeypatch.delenv("QUAID_SUPERVISOR_PID", raising=False)
+
+    assert janitor._janitor_lock_wait_seconds() == 60.0
+
+
+def test_janitor_lock_wait_preserves_long_supervisor_window(monkeypatch):
+    from core.lifecycle import janitor
+
+    monkeypatch.delenv("QUAID_JANITOR_LOCK_WAIT_SECONDS", raising=False)
+    monkeypatch.setenv("QUAID_SUPERVISOR_PID", "12345")
+
+    assert janitor._janitor_lock_wait_seconds() == 1800.0
+
+
+def test_janitor_lock_wait_env_override_wins(monkeypatch):
+    from core.lifecycle import janitor
+
+    monkeypatch.setenv("QUAID_SUPERVISOR_PID", "12345")
+    monkeypatch.setenv("QUAID_JANITOR_LOCK_WAIT_SECONDS", "7.5")
+
+    assert janitor._janitor_lock_wait_seconds() == 7.5
+
+
 def test_janitor_main_routes_all_apply_without_instance_bootstrap(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))

@@ -467,21 +467,32 @@ def _lock_file_path() -> Path:
 _lock_fd = None  # File descriptor for flock-based locking
 _lock_guard = threading.Lock()
 _LOCK_RETRY_SECONDS = 5.0
-_LOCK_WAIT_SECONDS = 30 * 60
+_DIRECT_LOCK_WAIT_SECONDS = 60
+_SUPERVISOR_LOCK_WAIT_SECONDS = 30 * 60
+
+
+def _supervisor_owned_janitor_context() -> bool:
+    return bool(os.environ.get("QUAID_SUPERVISOR_PID", "").strip())
+
+
+def _default_janitor_lock_wait_seconds() -> float:
+    if _supervisor_owned_janitor_context():
+        return float(_SUPERVISOR_LOCK_WAIT_SECONDS)
+    return float(_DIRECT_LOCK_WAIT_SECONDS)
 
 
 def _janitor_lock_wait_seconds() -> float:
     """Return how long a direct janitor run should wait for an active janitor."""
     raw = str(os.environ.get("QUAID_JANITOR_LOCK_WAIT_SECONDS", "") or "").strip()
     if not raw:
-        return float(_LOCK_WAIT_SECONDS)
+        return _default_janitor_lock_wait_seconds()
     try:
         return max(0.0, float(raw))
     except ValueError as exc:
         janitor_logger.warn("invalid_janitor_lock_wait_seconds", value=raw)
         if is_fail_hard_enabled():
             raise RuntimeError("Invalid QUAID_JANITOR_LOCK_WAIT_SECONDS") from exc
-        return float(_LOCK_WAIT_SECONDS)
+        return _default_janitor_lock_wait_seconds()
 
 
 def _pid_alive(pid: int) -> bool:
@@ -545,10 +556,11 @@ def _acquire_lock() -> bool:
                 _lock_fd.close()
                 _lock_fd = None
             return False
-        except (IOError, OSError):
+        except (IOError, OSError) as exc:
             if _lock_fd:
                 _lock_fd.close()
                 _lock_fd = None
+            janitor_logger.warn("janitor_lock_acquire_failed", error=str(exc))
             if is_fail_hard_enabled():
                 raise
             return False

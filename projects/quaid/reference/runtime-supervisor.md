@@ -124,6 +124,12 @@ When the routine is already running inside a supervisor-owned janitor worker, it
 uses the live `QUAID_SUPERVISOR_PID` instead of recursively starting another
 supervisor.
 
+Janitor lock contention is intentionally different for interactive and
+supervisor-owned runs. Direct CLI runs wait briefly before reporting that another
+janitor owns the lock, while supervisor-owned workers can wait longer because the
+supervisor is the durable coordinator. `QUAID_JANITOR_LOCK_WAIT_SECONDS` remains
+an explicit override for either path.
+
 ## Teardown Pattern
 
 Preferred cleanup:
