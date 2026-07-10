@@ -9731,12 +9731,16 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 try:
                     process_signal(sig)
                 except _ProviderConfigError as pce:
+                    if _fail_hard_enabled():
+                        raise
                     logger.error(
                         "Provider configuration error during signal processing - will retry after config repair "
                         "(signal preserved; notice queued): %s",
                         pce,
                     )
                 except _ProviderUnavailableError as pue:
+                    if _fail_hard_enabled():
+                        raise
                     # Provider is confirmed down (retryable HTTP codes exhausted).
                     # Default: log clearly and let the natural retry loop handle it —
                     # the signal stays preserved, daemon retries next poll cycle.
@@ -9913,9 +9917,13 @@ def flush_pending_signals(
                 try:
                     process_signal(sig)
                 except _ProviderConfigError as exc:
+                    if _fail_hard_enabled():
+                        raise
                     summary["errors"] = int(summary["errors"]) + 1
                     logger.error("flush signal provider config error; signal preserved: %s", exc)
                 except _ProviderUnavailableError as exc:
+                    if _fail_hard_enabled():
+                        raise
                     summary["errors"] = int(summary["errors"]) + 1
                     logger.error("flush signal provider unavailable; signal preserved: %s", exc)
                 except Exception as exc:

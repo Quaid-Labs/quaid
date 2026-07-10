@@ -861,7 +861,7 @@ def test_daemon_loop_raises_signal_processing_failure_under_failhard(monkeypatch
     assert read_calls == 1
 
 
-def test_daemon_loop_preserves_provider_config_signal_under_failhard(monkeypatch, caplog):
+def test_daemon_loop_raises_provider_config_signal_under_failhard(monkeypatch):
     from lib.llm_clients import ProviderConfigError
 
     signal_payload = {"session_id": "sess-1", "type": "reset"}
@@ -904,14 +904,59 @@ def test_daemon_loop_preserves_provider_config_signal_under_failhard(monkeypatch
     monkeypatch.setattr(extraction_daemon.time, "sleep", fake_sleep)
     monkeypatch.setattr(extraction_daemon.signal, "signal", lambda *_args, **_kwargs: None)
 
-    with caplog.at_level("ERROR", logger="quaid.daemon"), pytest.raises(_StopDaemonLoop):
+    with pytest.raises(ProviderConfigError, match="invalid-model-m6-probe"):
         extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
 
     assert marked == []
-    assert read_calls >= 1
+    assert read_calls == 1
     assert process_calls == 1
-    assert "Provider configuration error during signal processing" in caplog.text
-    assert "signal preserved" in caplog.text
+
+
+def test_daemon_loop_raises_provider_unavailable_signal_under_failhard(monkeypatch):
+    from lib.llm_clients import ProviderUnavailableError
+
+    signal_payload = {"session_id": "sess-1", "type": "reset"}
+    marked = []
+    read_calls = 0
+    process_calls = 0
+
+    def fake_read_pending_signals():
+        nonlocal read_calls
+        read_calls += 1
+        return [signal_payload] if read_calls == 1 else []
+
+    def fake_process_signal(_sig):
+        nonlocal process_calls
+        process_calls += 1
+        raise ProviderUnavailableError("provider down")
+
+    monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
+    monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
+    monkeypatch.setattr("core.compatibility.VersionWatcher", _NoopVersionWatcher)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", fake_read_pending_signals)
+    monkeypatch.setattr(extraction_daemon, "process_signal", fake_process_signal)
+    monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda sig: marked.append(sig))
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_supervisor_alive", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
+    monkeypatch.setattr(extraction_daemon, "_retry_missing_embeddings", lambda: 0)
+    monkeypatch.setattr(extraction_daemon, "check_chunk_ready_sessions", lambda: None)
+    monkeypatch.setattr(
+        "core.compatibility.read_circuit_breaker",
+        lambda _data_dir: types.SimpleNamespace(
+            allows_writes=lambda: True,
+            status="normal",
+            message="",
+        ),
+    )
+    monkeypatch.setattr(extraction_daemon.signal, "signal", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(ProviderUnavailableError, match="provider down"):
+        extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
+
+    assert marked == []
+    assert read_calls == 1
+    assert process_calls == 1
 
 
 def test_daemon_loop_warns_on_version_watcher_failure_when_fail_open(monkeypatch, caplog):
@@ -1375,7 +1420,7 @@ def test_flush_pending_signals_raises_processing_failure_under_failhard(monkeypa
     assert signal_path.exists()
 
 
-def test_flush_pending_signals_preserves_provider_config_error_under_failhard(monkeypatch, tmp_path, caplog):
+def test_flush_pending_signals_raises_provider_config_error_under_failhard(monkeypatch, tmp_path):
     from lib.llm_clients import ProviderConfigError
 
     signal_path = tmp_path / "signal.json"
@@ -1394,15 +1439,36 @@ def test_flush_pending_signals_preserves_provider_config_error_under_failhard(mo
     )
     monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
 
-    with caplog.at_level("ERROR", logger="quaid.daemon"):
-        summary = extraction_daemon.flush_pending_signals(timeout_seconds=0, poll_interval=0, max_passes=1)
+    with pytest.raises(ProviderConfigError, match="invalid-model-m6-probe"):
+        extraction_daemon.flush_pending_signals(timeout_seconds=0, poll_interval=0, max_passes=1)
 
-    assert summary["attempted"] == 1
-    assert summary["errors"] == 1
-    assert summary["preserved"] == 1
-    assert summary["processed"] == 0
     assert signal_path.exists()
-    assert "flush signal provider config error; signal preserved" in caplog.text
+    assert "QUAID_DAEMON" not in os.environ
+
+
+def test_flush_pending_signals_raises_provider_unavailable_under_failhard(monkeypatch, tmp_path):
+    from lib.llm_clients import ProviderUnavailableError
+
+    signal_path = tmp_path / "signal.json"
+    signal_path.write_text("{}", encoding="utf-8")
+    signal_payload = {"session_id": "sess-flush", "type": "reset", "_signal_path": str(signal_path)}
+
+    monkeypatch.delenv("QUAID_DAEMON", raising=False)
+    monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "pytest-runner")
+    monkeypatch.setattr(extraction_daemon, "_instance_root", lambda: tmp_path)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [signal_payload])
+    monkeypatch.setattr(extraction_daemon, "_pending_signal_count", lambda: 1)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "process_signal",
+        lambda _sig: (_ for _ in ()).throw(ProviderUnavailableError("provider down")),
+    )
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(ProviderUnavailableError, match="provider down"):
+        extraction_daemon.flush_pending_signals(timeout_seconds=0, poll_interval=0, max_passes=1)
+
+    assert signal_path.exists()
     assert "QUAID_DAEMON" not in os.environ
 
 
