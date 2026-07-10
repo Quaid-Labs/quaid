@@ -104,6 +104,7 @@ def _file_lock(path: Path):
                 raise RuntimeError(f"Failed to acquire file lock: {path}") from exc
         yield
     finally:
+        release_exc: Optional[OSError] = None
         if locked:
             try:
                 import fcntl  # type: ignore
@@ -111,8 +112,12 @@ def _file_lock(path: Path):
             except OSError as exc:
                 logger.warning("Failed to release file lock for %s: %s", path, exc)
                 if is_fail_hard_enabled():
-                    raise RuntimeError(f"Failed to release file lock: {path}") from exc
-        handle.close()
+                    release_exc = exc
+        try:
+            handle.close()
+        finally:
+            if release_exc is not None:
+                raise RuntimeError(f"Failed to release file lock: {path}") from release_exc
 
 
 def _git_subprocess_budget_seconds() -> float:
@@ -235,7 +240,15 @@ def _atomic_write_text_unlocked(path: Path, content: str) -> None:
         text=True,
     )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
+        try:
+            tmp_file = os.fdopen(fd, "w", encoding="utf-8")
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
+        with tmp_file:
             tmp_file.write(content)
             tmp_file.flush()
             os.fsync(tmp_file.fileno())

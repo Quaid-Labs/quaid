@@ -1253,6 +1253,68 @@ def test_project_log_queue_failed_flock_does_not_authorize_drain(project_env, mo
             project_log_queue.drain_project_log_queue("demo")
 
 
+def test_project_log_queue_closes_handle_when_unlock_fails_fail_hard(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from datastore.docsdb import project_log_queue
+
+    class Handle:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    handle = Handle()
+    real_open = project_log_queue.Path.open
+
+    def _open(path, *args, **kwargs):
+        if path.name == ".drain.lock":
+            return handle
+        return real_open(path, *args, **kwargs)
+
+    class Fcntl:
+        LOCK_EX = 1
+        LOCK_UN = 2
+
+        @staticmethod
+        def flock(_handle, flags):
+            if flags == Fcntl.LOCK_UN:
+                raise OSError("unlock failed")
+
+    monkeypatch.setattr(project_log_queue.Path, "open", _open)
+    monkeypatch.setitem(sys.modules, "fcntl", Fcntl)
+    monkeypatch.setattr(project_log_queue, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(OSError, match="unlock failed"):
+        with project_log_queue.project_queue_lock("demo"):
+            pass
+
+    assert handle.closed is True
+
+
+def test_project_log_queue_atomic_write_json_closes_raw_fd_when_fdopen_fails(monkeypatch, tmp_path):
+    from datastore.docsdb import project_log_queue
+
+    real_close = project_log_queue.os.close
+    closed_fds = []
+
+    def _fail_fdopen(*_args, **_kwargs):
+        raise OSError("fdopen failed")
+
+    def _close(fd):
+        closed_fds.append(fd)
+        real_close(fd)
+
+    target = tmp_path / "queued.json"
+    monkeypatch.setattr(project_log_queue.os, "fdopen", _fail_fdopen)
+    monkeypatch.setattr(project_log_queue.os, "close", _close)
+
+    with pytest.raises(OSError, match="fdopen failed"):
+        project_log_queue._atomic_write_json(target, {"ok": True})
+
+    assert closed_fds
+    assert list(tmp_path.glob(f".{target.name}.*.tmp")) == []
+
+
 def test_execute_update_once_drains_project_log_queue_under_worker_lock(project_env):
     _tmp_path, _src, entry = project_env
     from core import project_docs

@@ -92,6 +92,40 @@ def test_file_lock_raises_on_lock_failure_when_fail_hard(monkeypatch, tmp_path):
             pass
 
 
+def test_file_lock_closes_handle_when_unlock_fails_fail_hard(monkeypatch, tmp_path):
+    from datastore.docsdb import updater
+
+    class Handle:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    handle = Handle()
+
+    def _open(_path, *_args, **_kwargs):
+        return handle
+
+    class Fcntl:
+        LOCK_EX = 1
+        LOCK_UN = 2
+
+        @staticmethod
+        def flock(_handle, flags):
+            if flags == Fcntl.LOCK_UN:
+                raise OSError("unlock failed")
+
+    monkeypatch.setattr(updater, "open", _open, raising=False)
+    monkeypatch.setitem(sys.modules, "fcntl", Fcntl)
+    monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Failed to release file lock"):
+        with updater._file_lock(tmp_path / "docs-update.lock"):
+            pass
+
+    assert handle.closed is True
+
+
 def test_atomic_write_text_locks_project_md(monkeypatch, tmp_path):
     from datastore.docsdb import updater
 
@@ -109,6 +143,30 @@ def test_atomic_write_text_locks_project_md(monkeypatch, tmp_path):
 
     assert seen == [target.with_name(".PROJECT.md.lock")]
     assert target.read_text(encoding="utf-8") == "# Demo\n"
+
+
+def test_atomic_write_text_closes_raw_fd_when_fdopen_fails(monkeypatch, tmp_path):
+    from datastore.docsdb import updater
+
+    real_close = updater.os.close
+    closed_fds = []
+
+    def _fail_fdopen(*_args, **_kwargs):
+        raise OSError("fdopen failed")
+
+    def _close(fd):
+        closed_fds.append(fd)
+        real_close(fd)
+
+    target = tmp_path / "PROJECT.md"
+    monkeypatch.setattr(updater.os, "fdopen", _fail_fdopen)
+    monkeypatch.setattr(updater.os, "close", _close)
+
+    with pytest.raises(OSError, match="fdopen failed"):
+        updater._atomic_write_text_unlocked(target, "content")
+
+    assert closed_fds
+    assert list(tmp_path.glob(f".{target.name}.*.tmp")) == []
 
 
 def test_resolve_path_rejects_workspace_escape(tmp_path):

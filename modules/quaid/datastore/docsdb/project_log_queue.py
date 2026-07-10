@@ -85,16 +85,22 @@ def project_queue_lock(project: str, *, quaid_home: Optional[Path] = None):
             finally:
                 _LOCK_STATE.held_projects = set(held)
     finally:
+        release_exc: Optional[BaseException] = None
         if locked:
             try:
                 import fcntl  # type: ignore
 
                 fcntl.flock(handle, fcntl.LOCK_UN)
-            except Exception:
+            except Exception as exc:
                 if is_fail_hard_enabled():
-                    raise
-                logger.warning("Failed releasing project-log queue lock for %s", project, exc_info=True)
-        handle.close()
+                    release_exc = exc
+                else:
+                    logger.warning("Failed releasing project-log queue lock for %s", project, exc_info=True)
+        try:
+            handle.close()
+        finally:
+            if release_exc is not None:
+                raise release_exc
 
 
 def _assert_project_queue_lock_held(project: str) -> str:
@@ -195,7 +201,15 @@ def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     tmp = Path(tmp_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        try:
+            handle = os.fdopen(fd, "w", encoding="utf-8")
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
+        with handle:
             json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
             handle.write("\n")
             handle.flush()

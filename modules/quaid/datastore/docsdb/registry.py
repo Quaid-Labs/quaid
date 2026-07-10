@@ -140,6 +140,7 @@ def _project_md_write_lock(path: Path):
                 raise RuntimeError(f"Failed to acquire PROJECT.md lock: {path}") from exc
         yield
     finally:
+        release_exc: Optional[OSError] = None
         if locked:
             try:
                 import fcntl  # type: ignore
@@ -148,8 +149,12 @@ def _project_md_write_lock(path: Path):
             except OSError as exc:
                 logger.warning("Failed to release PROJECT.md lock for %s: %s", path, exc)
                 if _fail_hard_enabled():
-                    raise RuntimeError(f"Failed to release PROJECT.md lock: {path}") from exc
-        handle.close()
+                    release_exc = exc
+        try:
+            handle.close()
+        finally:
+            if release_exc is not None:
+                raise RuntimeError(f"Failed to release PROJECT.md lock: {path}") from release_exc
 
 
 @contextlib.contextmanager
@@ -170,6 +175,7 @@ def _config_write_lock(path: Path):
                 raise RuntimeError(f"Failed to acquire config.json lock: {path}") from exc
         yield
     finally:
+        release_exc: Optional[OSError] = None
         if locked:
             try:
                 import fcntl  # type: ignore
@@ -178,8 +184,12 @@ def _config_write_lock(path: Path):
             except OSError as exc:
                 logger.warning("Failed to release config.json lock for %s: %s", path, exc)
                 if _fail_hard_enabled():
-                    raise RuntimeError(f"Failed to release config.json lock: {path}") from exc
-        handle.close()
+                    release_exc = exc
+        try:
+            handle.close()
+        finally:
+            if release_exc is not None:
+                raise RuntimeError(f"Failed to release config.json lock: {path}") from release_exc
 
 
 def _atomic_write_text_unlocked(path: Path, content: str, *, encoding: str = "utf-8") -> None:

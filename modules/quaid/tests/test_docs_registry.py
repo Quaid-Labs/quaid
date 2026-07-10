@@ -871,6 +871,74 @@ class TestCreateProject:
 
         assert project_md.read_text(encoding="utf-8") == "existing content"
 
+    def test_project_md_lock_closes_handle_when_unlock_fails_fail_hard(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+
+        class Handle:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        handle = Handle()
+
+        def _open(_path, *_args, **_kwargs):
+            return handle
+
+        class Fcntl:
+            LOCK_EX = 1
+            LOCK_UN = 2
+
+            @staticmethod
+            def flock(_handle, flags):
+                if flags == Fcntl.LOCK_UN:
+                    raise OSError("unlock failed")
+
+        monkeypatch.setattr(registry_mod, "open", _open, raising=False)
+        monkeypatch.setitem(sys.modules, "fcntl", Fcntl)
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        project_md = setup_env / "projects" / "test-project" / "PROJECT.md"
+        with pytest.raises(RuntimeError, match="Failed to release PROJECT.md lock"):
+            with registry_mod._project_md_write_lock(project_md):
+                pass
+
+        assert handle.closed is True
+
+    def test_config_lock_closes_handle_when_unlock_fails_fail_hard(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+
+        class Handle:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        handle = Handle()
+
+        def _open(_path, *_args, **_kwargs):
+            return handle
+
+        class Fcntl:
+            LOCK_EX = 1
+            LOCK_UN = 2
+
+            @staticmethod
+            def flock(_handle, flags):
+                if flags == Fcntl.LOCK_UN:
+                    raise OSError("unlock failed")
+
+        monkeypatch.setattr(registry_mod, "open", _open, raising=False)
+        monkeypatch.setitem(sys.modules, "fcntl", Fcntl)
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        config_path = setup_env / "config.json"
+        with pytest.raises(RuntimeError, match="Failed to release config.json lock"):
+            with registry_mod._config_write_lock(config_path):
+                pass
+
+        assert handle.closed is True
+
     def test_write_text_if_missing_checks_existence_under_lock(self, setup_env, monkeypatch):
         from datastore.docsdb import registry as registry_mod
 

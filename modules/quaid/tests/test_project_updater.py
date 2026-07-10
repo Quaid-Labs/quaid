@@ -108,6 +108,30 @@ def _get_registry():
     return DocsRegistry(db_path=_tmp_db)
 
 
+def test_atomic_write_text_closes_raw_fd_when_fdopen_fails(monkeypatch, tmp_path):
+    from datastore.docsdb import project_updater
+
+    real_close = project_updater.os.close
+    closed_fds = []
+
+    def _fail_fdopen(*_args, **_kwargs):
+        raise OSError("fdopen failed")
+
+    def _close(fd):
+        closed_fds.append(fd)
+        real_close(fd)
+
+    target = tmp_path / "PROJECT.md"
+    monkeypatch.setattr(project_updater.os, "fdopen", _fail_fdopen)
+    monkeypatch.setattr(project_updater.os, "close", _close)
+
+    with pytest.raises(OSError, match="fdopen failed"):
+        project_updater._atomic_write_text(target, "content")
+
+    assert closed_fds
+    assert list(tmp_path.glob(f".{target.name}.*.tmp")) == []
+
+
 class TestRefreshProjectMd:
     def test_updates_file_list(self, setup_env):
         """Refresh regenerates the file list in PROJECT.md."""
