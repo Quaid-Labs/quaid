@@ -671,10 +671,10 @@ If installing individual platforms instead of all-at-once, send a separate messa
 to each tester pane specifying only its own platform and instance name.
 
 **CC instance caveat:** Do NOT tell the CC tester to set `QUAID_INSTANCE` in their
-shell. CC derives the instance from the transcript path — `/tmp/cc-livetest` →
-`claude-code-cc-livetest-51aa91834f73`. Setting `QUAID_INSTANCE` in the shell has
+shell. CC derives the instance from the project path — `/Users/admin/cc-livetest` →
+`claude-code-cc-livetest-c44589bcb738`. Setting `QUAID_INSTANCE` in the shell has
 no effect on where facts are stored. For coordinator verification: always use
-`QUAID_INSTANCE=claude-code-cc-livetest-51aa91834f73 quaid recall <query>`.
+`QUAID_INSTANCE=claude-code-cc-livetest-c44589bcb738 quaid recall <query>`.
 
 **CDX instance caveat:** CDX also uses the adapter's path-derived instance for
 its project directory. For the standard `/tmp/cdx-livetest` lane, the canonical
@@ -903,7 +903,7 @@ Examine the Quaid install on REMOTE_HOST for platform PLATFORM.
 6. Platform-specific checks:
    - OC: verify ~/.openclaw/extensions/quaid/ is a real directory copy containing the Quaid plugin files (not a symlink)
    - CC: verify ~/.claude/settings.json has Quaid hooks registered
-     AND `verify-cc-session-capture.sh` passes for `/tmp/cc-livetest`; project
+     AND `verify-cc-session-capture.sh` passes for `/Users/admin/cc-livetest`; project
      settings may omit `QUAID_INSTANCE` when the path-derived instance matches
    - CDX: verify ~/.codex/hooks.json has Quaid hooks registered
 
@@ -1015,10 +1015,10 @@ Concrete rules:
   explicit boundaries — otherwise you lose the ability to gate on fix-deploys
   between milestones.
 - **CC requires a session-capture proof before M2.** A green launch screen is
-  not enough. Before M2, require evidence that Claude created a fresh transcript
-  under `~/.claude/projects/-tmp-cc-livetest/*.jsonl` after the first real user
-  message. If no fresh JSONL exists, halt the CC lane immediately: hooks may be
-  installed, but Quaid has no session input to extract.
+  not enough. Before M2, require `verify-cc-session-capture.sh` to pass for the
+  configured CC project directory after the first real user message. If no fresh
+  JSONL exists, halt the CC lane immediately: hooks may be installed, but Quaid
+  has no session input to extract.
 - **Silence is not passing.** If a tester has been quiet past the expected
   duration for a milestone (see per-milestone expected windows in the guide),
   nudge it for a STATUS before assuming work is in flight. A common failure
