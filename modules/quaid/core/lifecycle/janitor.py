@@ -578,6 +578,8 @@ def _release_lock():
                 _lock_fd = None
         except Exception as exc:
             janitor_logger.warn("janitor_lock_release_failed", error=str(exc))
+            if is_fail_hard_enabled():
+                raise
 
 
 def _check_for_updates() -> Optional[Dict[str, str]]:
@@ -834,6 +836,8 @@ def _trim_decision_log_tail(path: Path, max_lines: int) -> None:
         rotate_log_file(path, archive_dir=path.parent / "decision-log-archive")
     except Exception as exc:
         janitor_logger.warn("decision_log_rotation_failed", path=str(path), error=str(exc))
+        if is_fail_hard_enabled():
+            raise
 
 
 def _append_decision_log(kind: str, payload: Dict[str, Any]) -> None:
@@ -852,6 +856,8 @@ def _append_decision_log(kind: str, payload: Dict[str, Any]) -> None:
         _trim_decision_log_tail(log_path, _decision_log_max_lines())
     except Exception as exc:
         janitor_logger.warn("decision_log_append_failed", error=str(exc))
+        if is_fail_hard_enabled():
+            raise
 
 
 def _pending_approvals_json_path() -> Path:
@@ -979,6 +985,8 @@ def _queue_delayed_notification(
         )
     except Exception as e:
         janitor_logger.warn("delayed_notification_queue_failed", kind=kind, priority=priority, error=str(e))
+        if is_fail_hard_enabled():
+            raise
 
 
 def _queue_approval_request(scope: str, task_name: str, summary: str) -> None:

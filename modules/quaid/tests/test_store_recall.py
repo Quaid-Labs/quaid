@@ -348,6 +348,40 @@ def test_list_relation_types_missing_optional_tables_do_not_failhard():
         assert mg.list_relation_types() == []
 
 
+def test_generate_keywords_for_relation_llm_failure_respects_failhard(capsys):
+    import datastore.memorydb.memory_graph as mg
+
+    with patch.object(mg, "_HAS_LLM_CLIENTS", True), \
+         patch("lib.llm_clients.call_fast_reasoning", side_effect=RuntimeError("llm down")), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="Failed to generate graph edge keywords") as excinfo:
+            mg.generate_keywords_for_relation("mentors")
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert str(excinfo.value.__cause__) == "llm down"
+    assert "LLM generation failed for mentors" in capsys.readouterr().err
+
+
+def test_generate_keywords_for_relation_llm_failure_returns_none_when_fail_open(capsys):
+    import datastore.memorydb.memory_graph as mg
+
+    with patch.object(mg, "_HAS_LLM_CLIENTS", True), \
+         patch("lib.llm_clients.call_fast_reasoning", side_effect=RuntimeError("llm down")), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=False):
+        assert mg.generate_keywords_for_relation("mentors") is None
+
+    assert "LLM generation failed for mentors" in capsys.readouterr().err
+
+
+def test_trace_m15_failure_respects_failhard():
+    import datastore.memorydb.memory_graph as mg
+
+    with patch("lib.m15_trace.trace_m15", side_effect=RuntimeError("trace down")), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="trace down"):
+            mg._trace_m15("edge_keyword.test")
+
+
 def test_relation_chain_edge_load_failure_respects_failhard(caplog):
     import datastore.memorydb.memory_graph as mg
 

@@ -485,6 +485,28 @@ def test_janitor_lock_filesystem_failure_warns_when_fail_open(monkeypatch, tmp_p
     assert str(blocked_data_dir) in str(warnings[0][1].get("error", ""))
 
 
+def test_janitor_lock_release_failure_honors_fail_hard(monkeypatch, tmp_path):
+    import fcntl
+
+    from core.lifecycle import janitor
+
+    lock_file = open(tmp_path / "janitor.lock", "a+")
+    janitor._lock_fd = lock_file
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        fcntl,
+        "flock",
+        lambda *_args: (_ for _ in ()).throw(OSError("unlock down")),
+    )
+
+    try:
+        with pytest.raises(OSError, match="unlock down"):
+            janitor._release_lock()
+    finally:
+        lock_file.close()
+        janitor._lock_fd = None
+
+
 def test_janitor_lock_wait_defaults_to_short_direct_window(monkeypatch):
     from core.lifecycle import janitor
 

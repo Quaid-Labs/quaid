@@ -591,6 +591,61 @@ def test_append_decision_log_honors_quaid_now(tmp_path, monkeypatch):
     assert payload["ts"] == "2026-02-03T04:05:06+00:00"
 
 
+def test_append_decision_log_raises_when_fail_hard(monkeypatch):
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        janitor,
+        "_decision_log_path",
+        lambda: (_ for _ in ()).throw(RuntimeError("decision path down")),
+    )
+
+    with pytest.raises(RuntimeError, match="decision path down"):
+        janitor._append_decision_log("test", {"idx": 1})
+
+
+def test_trim_decision_log_tail_raises_when_fail_hard(tmp_path, monkeypatch):
+    from core import log_rotation
+
+    decision_path = tmp_path / "decision-log.jsonl"
+    decision_path.write_text('{"kind":"test"}\n', encoding="utf-8")
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        log_rotation,
+        "rotate_log_file",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("rotation down")),
+    )
+
+    with pytest.raises(RuntimeError, match="rotation down"):
+        janitor._trim_decision_log_tail(decision_path, 1)
+
+
+def test_queue_delayed_notification_raises_when_fail_hard(monkeypatch):
+    from lib import runtime_context
+
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        runtime_context,
+        "queue_deferred_notice",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("notice queue down")),
+    )
+
+    with pytest.raises(RuntimeError, match="notice queue down"):
+        janitor._queue_delayed_notification("janitor summary", kind="janitor", priority="normal")
+
+
+def test_queue_delayed_notification_falls_back_when_fail_open(monkeypatch):
+    from lib import runtime_context
+
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(
+        runtime_context,
+        "queue_deferred_notice",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("notice queue down")),
+    )
+
+    janitor._queue_delayed_notification("janitor summary", kind="janitor", priority="normal")
+
+
 def test_janitor_now_rejects_malformed_quaid_now(monkeypatch):
     monkeypatch.setenv("QUAID_NOW", "not-a-date")
 

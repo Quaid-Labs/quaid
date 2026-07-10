@@ -175,6 +175,8 @@ def _trace_m15(event: str, **fields: Any) -> None:
         trace_m15(event, **fields)
     except Exception as exc:
         logger.debug("Failed to write memory graph M15 trace: %s", exc, exc_info=True)
+        if _is_fail_hard_mode():
+            raise
 
 
 def _ensure_visible_identity_stubs() -> List[str]:
@@ -3569,6 +3571,8 @@ class MemoryGraph:
                         llm_score = min(int(m.group(1)), 5) / 5.0
                         return min(1.0, base * llm_score)
             except Exception:
+                if _is_fail_hard_mode():
+                    raise
                 logger.debug("BEAM llm scoring failed; falling back to heuristic", exc_info=True)
             # Fallback to heuristic on LLM failure
             return self._beam_score_candidate(
@@ -4606,6 +4610,10 @@ Example output: ["keyword1", "keyword2", "keyword3"]"""
         return None
     except Exception as e:
         print(f"[edge_keywords] LLM generation failed for {relation}: {e}", file=sys.stderr)
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                f"Failed to generate graph edge keywords for relation {relation!r} while failHard is enabled"
+            ) from e
         return None
 
 

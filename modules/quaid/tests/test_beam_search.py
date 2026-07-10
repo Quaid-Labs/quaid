@@ -319,6 +319,7 @@ class TestBeamScoring:
         node = _add_node(graph, "Test Node", confidence=0.8)
 
         with patch("lib.llm_clients.call_fast_reasoning", side_effect=RuntimeError("llm down")), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False), \
              patch("datastore.memorydb.memory_graph.logger.debug") as log_debug:
             score = graph._beam_score_candidate(
                 query="test",
@@ -334,6 +335,25 @@ class TestBeamScoring:
 
         assert score > 0
         assert any("BEAM llm scoring failed" in str(call.args[0]) for call in log_debug.call_args_list)
+
+    def test_llm_scoring_failure_raises_when_failhard_enabled(self, graph):
+        """LLM scoring exceptions must not fall back when failHard is enabled."""
+        node = _add_node(graph, "Test Node", confidence=0.8)
+
+        with patch("lib.llm_clients.call_fast_reasoning", side_effect=RuntimeError("llm down")), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="llm down"):
+                graph._beam_score_candidate(
+                    query="test",
+                    node=node,
+                    relation="knows",
+                    edge_weight=1.0,
+                    parent_score=1.0,
+                    hop_depth=1,
+                    intent=None,
+                    type_boosts=None,
+                    scoring_mode="llm",
+                )
 
     def test_hop_decay_reduces_score(self, graph):
         """Multi-hop propagation: each hop decays score by hop_decay factor.
