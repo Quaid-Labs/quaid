@@ -72,6 +72,31 @@ def test_collect_plugin_health_includes_initialize_diagnostics(monkeypatch, tmp_
     assert payload["warnings"] == ["init-warn", "health-warn", "dash-warn"]
 
 
+def test_collect_plugin_health_collects_surfaces_non_strict_when_config_is_strict(monkeypatch):
+    fake_cfg = SimpleNamespace(plugins=_plugins_cfg(enabled=True))
+    fake_cfg.plugins.strict = True
+    monkeypatch.setattr("config.get_config", lambda: fake_cfg)
+    monkeypatch.setattr("core.runtime.plugins.get_runtime_registry", lambda: object())
+    strict_values = []
+
+    def _collect(**kwargs):
+        strict_values.append(kwargs.get("strict"))
+        if kwargs.get("surface") == "health":
+            return (["health-error"], [], [])
+        if kwargs.get("surface") == "dashboard":
+            return (["dashboard-error"], [], [])
+        raise AssertionError(f"unexpected surface: {kwargs.get('surface')}")
+
+    monkeypatch.setattr(
+        "core.runtime.plugins.run_plugin_contract_surface_collect",
+        _collect,
+    )
+
+    payload = plugin_health.collect_plugin_health()
+    assert strict_values == [False, False]
+    assert payload["errors"] == ["health-error", "dashboard-error"]
+
+
 def test_plugin_health_main_outputs_json(monkeypatch, capsys):
     monkeypatch.setattr(plugin_health, "collect_plugin_health", lambda: {"enabled": True, "plugins": {"x": {"ok": True}}})
     assert plugin_health.main() == 0
