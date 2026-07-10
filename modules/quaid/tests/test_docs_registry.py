@@ -778,7 +778,10 @@ class TestAutoDiscover:
         from datastore.docsdb import registry as registry_mod
 
         r = _get_registry()
-        r._get_config().projects.definitions["test-project"].patterns = ["../*.md"]
+        defn = r.get_project_definition("test-project")
+        assert defn is not None
+        defn.patterns = ["../*.md"]
+        r.save_project_definition("test-project", defn, link_current_instance=False)
         monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
 
         with pytest.raises(ValueError, match="parent path segments"):
@@ -2039,6 +2042,73 @@ class TestProjectDefinitionsTable:
         assert renamed is not None
         assert renamed.home_dir == "projects/db-renamed-proj/"
         assert (visible_home / "projects" / "db-renamed-proj" / "notes.md").exists()
+
+    def test_project_lifecycle_uses_db_project_definitions(self, setup_env):
+        """Archive/delete/verify should honor DB-only project definitions."""
+        from config import ProjectDefinition
+
+        r = _get_registry()
+        visible_home = setup_env.parents[1]
+        archive_dir = visible_home / "projects" / "db-archive-proj"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        (archive_dir / "PROJECT.md").write_text("# DB Archive\n", encoding="utf-8")
+        (archive_dir / "notes.md").write_text("# Notes\n", encoding="utf-8")
+        r.save_project_definition(
+            "db-archive-proj",
+            ProjectDefinition(
+                label="DB Archive",
+                home_dir="projects/db-archive-proj/",
+                patterns=["*.md"],
+                description="DB archive project",
+            ),
+        )
+        assert "db-archive-proj" not in r._get_config().projects.definitions
+
+        verified = r.verify_project("db-archive-proj")
+        assert "projects/db-archive-proj/PROJECT.md" in verified["orphans"]
+        assert "projects/db-archive-proj/notes.md" in verified["orphans"]
+
+        r.register("projects/db-archive-proj/PROJECT.md", project="db-archive-proj")
+        archive_result = r.archive_project("db-archive-proj")
+        assert archive_result["dir_moved"] is True
+        assert len(r.list_docs(project="db-archive-proj", state="archived")) == 1
+        assert (visible_home / "projects" / "archive" / "db-archive-proj" / "notes.md").exists()
+
+        delete_dir = visible_home / "projects" / "db-delete-proj"
+        delete_dir.mkdir(parents=True, exist_ok=True)
+        (delete_dir / "PROJECT.md").write_text("# DB Delete\n", encoding="utf-8")
+        r.save_project_definition(
+            "db-delete-proj",
+            ProjectDefinition(
+                label="DB Delete",
+                home_dir="projects/db-delete-proj/",
+                patterns=["*.md"],
+                description="DB delete project",
+            ),
+        )
+        r.register("projects/db-delete-proj/PROJECT.md", project="db-delete-proj")
+
+        def _trash_side_effect(cmd, **kwargs):
+            target = Path(cmd[1])
+            if target.exists():
+                import shutil
+                shutil.rmtree(target)
+            return None
+
+        with patch("datastore.docsdb.registry.subprocess.run") as mock_run:
+            mock_run.side_effect = _trash_side_effect
+            delete_result = r.delete_project("db-delete-proj")
+
+        assert delete_result["dir_deleted"] is True
+        assert not delete_dir.exists()
+        from lib.database import get_connection
+        with get_connection(r.db_path) as conn:
+            row = conn.execute(
+                "SELECT state FROM doc_registry WHERE project = ?",
+                ("db-delete-proj",),
+            ).fetchone()
+        assert row is not None
+        assert row["state"] == "deleted"
 
     def test_get_project_definition_returns_none_for_missing(self, setup_env):
         """get_project_definition returns None for non-existent project."""

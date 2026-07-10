@@ -1993,7 +1993,7 @@ class DocsRegistry:
     def _remove_project_rag_chunks(
         self,
         project_name: str,
-        cfg: Any,
+        defn: Optional[Any],
         *,
         states: Tuple[str, ...],
     ) -> int:
@@ -2004,7 +2004,6 @@ class DocsRegistry:
                 path_val = str(row.get("file_path") or "").strip()
                 if path_val:
                     rag_paths.append(path_val)
-        defn = cfg.projects.definitions.get(project_name)
         if defn:
             rag_paths.append(str(self._resolve_path(defn.home_dir) / "PROJECT.md"))
 
@@ -2039,12 +2038,11 @@ class DocsRegistry:
         Returns: {"archived": count, "dir_moved": bool}
         """
         project_name = _validate_project_name(project_name)
-        # Guard: project must exist (in config or registry)
-        cfg = self._get_config()
-        defn = cfg.projects.definitions.get(project_name)
-        has_config = defn is not None
+        # Guard: project must exist (in project definitions or registry)
+        defn = self.get_project_definition(project_name)
+        has_definition = defn is not None
         has_docs = len(self.list_docs(project=project_name)) > 0
-        if not has_config and not has_docs:
+        if not has_definition and not has_docs:
             raise ValueError(f"Project '{project_name}' does not exist.")
 
         dir_moved = False
@@ -2067,7 +2065,7 @@ class DocsRegistry:
                     dir_moved = True
 
             # Archived project content must stop participating in docs recall.
-            rag_chunk_deleted = self._remove_project_rag_chunks(project_name, cfg, states=("active",))
+            rag_chunk_deleted = self._remove_project_rag_chunks(project_name, defn, states=("active",))
 
             # Archive registry rows and project definition atomically.
             with get_connection(self.db_path) as conn:
@@ -2114,18 +2112,18 @@ class DocsRegistry:
         Returns: {"deleted": count, "dir_deleted": bool}
         """
         project_name = _validate_project_name(project_name)
-        # Guard: project must exist (in config or registry)
-        cfg = self._get_config()
-        has_config = project_name in cfg.projects.definitions
+        # Guard: project must exist (in project definitions or registry)
+        defn = self.get_project_definition(project_name)
+        has_definition = defn is not None
         has_docs = len(self.list_docs(project=project_name)) > 0
-        if not has_config and not has_docs:
+        if not has_definition and not has_docs:
             raise ValueError(f"Project '{project_name}' does not exist.")
 
         # Clean docs RAG chunks for all project paths before registry state transition.
         # This prevents deleted project content from continuing to inject via recall.
         rag_chunk_deleted = self._remove_project_rag_chunks(
             project_name,
-            cfg,
+            defn,
             states=("active", "archived"),
         )
 
@@ -2138,8 +2136,6 @@ class DocsRegistry:
             deleted = cursor.rowcount
 
         # 2. Remove directory (trash > rm)
-        cfg = self._get_config()
-        defn = cfg.projects.definitions.get(project_name)
         dir_deleted = False
         if defn:
             project_dir = self._resolve_path(defn.home_dir)
@@ -2229,8 +2225,7 @@ class DocsRegistry:
         Returns: {"total": N, "exists": N, "missing": [...], "orphans": [...]}
         """
         project_name = _validate_project_name(project_name)
-        cfg = self._get_config()
-        defn = cfg.projects.definitions.get(project_name)
+        defn = self.get_project_definition(project_name)
 
         # Check registered files exist on disk
         docs = self.list_docs(project=project_name)
