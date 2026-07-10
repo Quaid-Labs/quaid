@@ -192,6 +192,16 @@ def _docs_index_timeout_seconds() -> float:
     return parsed
 
 
+_DOCS_INDEX_TIMEOUT_THREADS: List[threading.Thread] = []
+_DOCS_INDEX_TIMEOUT_THREADS_LOCK = threading.Lock()
+
+
+def _prune_docs_index_timeout_threads_locked() -> None:
+    _DOCS_INDEX_TIMEOUT_THREADS[:] = [
+        thread for thread in _DOCS_INDEX_TIMEOUT_THREADS if thread.is_alive()
+    ]
+
+
 def _index_doc_with_timeout(rag: Any, file_path: str, timeout_seconds: float) -> int:
     """Run rag.index_document with a hard wall-clock timeout.
 
@@ -202,6 +212,14 @@ def _index_doc_with_timeout(rag: Any, file_path: str, timeout_seconds: float) ->
     result: Dict[str, Any] = {}
     error: Dict[str, BaseException] = {}
     done = threading.Event()
+
+    with _DOCS_INDEX_TIMEOUT_THREADS_LOCK:
+        _prune_docs_index_timeout_threads_locked()
+        if _DOCS_INDEX_TIMEOUT_THREADS:
+            raise TimeoutError(
+                "previous docs index timed out and is still running; "
+                f"refusing to start another index for {file_path}"
+            )
 
     def _worker() -> None:
         try:
@@ -218,6 +236,9 @@ def _index_doc_with_timeout(rag: Any, file_path: str, timeout_seconds: float) ->
     )
     thread.start()
     if not done.wait(timeout_s):
+        with _DOCS_INDEX_TIMEOUT_THREADS_LOCK:
+            if thread.is_alive():
+                _DOCS_INDEX_TIMEOUT_THREADS.append(thread)
         raise TimeoutError(f"docs index timed out after {timeout_s:.1f}s for {file_path}")
     if "exc" in error:
         raise error["exc"]

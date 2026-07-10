@@ -169,6 +169,40 @@ def test_atomic_write_text_closes_raw_fd_when_fdopen_fails(monkeypatch, tmp_path
     assert list(tmp_path.glob(f".{target.name}.*.tmp")) == []
 
 
+def test_index_doc_timeout_refuses_new_index_while_prior_thread_alive():
+    from datastore.docsdb import updater
+
+    release = threading.Event()
+    started = []
+
+    class HangingRag:
+        def index_document(self, file_path):
+            started.append(file_path)
+            release.wait(10)
+            return 1
+
+    with updater._DOCS_INDEX_TIMEOUT_THREADS_LOCK:
+        updater._DOCS_INDEX_TIMEOUT_THREADS.clear()
+
+    try:
+        with pytest.raises(TimeoutError, match="docs index timed out"):
+            updater._index_doc_with_timeout(HangingRag(), "first.md", 1.0)
+
+        assert started == ["first.md"]
+
+        with pytest.raises(TimeoutError, match="previous docs index timed out"):
+            updater._index_doc_with_timeout(HangingRag(), "second.md", 1.0)
+
+        assert started == ["first.md"]
+    finally:
+        release.set()
+        with updater._DOCS_INDEX_TIMEOUT_THREADS_LOCK:
+            threads = list(updater._DOCS_INDEX_TIMEOUT_THREADS)
+            updater._DOCS_INDEX_TIMEOUT_THREADS.clear()
+        for thread in threads:
+            thread.join(timeout=2)
+
+
 def test_resolve_path_rejects_workspace_escape(tmp_path):
     with _adapter_patch(tmp_path):
         from datastore.docsdb import updater
