@@ -1270,6 +1270,117 @@ def test_recall_once_domain_filter_join_failure_logs_and_falls_back(caplog):
     assert "Domain filter join table unavailable" in caplog.text
 
 
+def test_recall_once_co_session_failure_respects_failhard():
+    import datastore.memorydb.memory_graph as mg
+
+    node = mg.Node.create(
+        "Fact",
+        "The operator keeps the co-session marker in the field notebook.",
+        owner_id="operator",
+        session_id="session-a",
+    )
+
+    class _FailingConn:
+        def execute(self, *_args, **_kwargs):
+            raise sqlite3.OperationalError("co-session down")
+
+    class _FailingCtx:
+        def __enter__(self):
+            return _FailingConn()
+
+        def __exit__(self, *_exc):
+            return False
+
+    graph = SimpleNamespace(
+        search_hybrid=MagicMock(return_value=[(node, 0.95)]),
+        search_fts=MagicMock(return_value=[]),
+        _get_conn=lambda: _FailingCtx(),
+    )
+    cfg = SimpleNamespace(retrieval=SimpleNamespace())
+
+    with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+         patch("config.get_config", return_value=cfg), \
+         patch.object(mg, "_relation_matches_for_query", return_value=[]), \
+         patch.object(mg, "_has_generic_graph_signal", return_value=False), \
+         patch.object(mg, "_ollama_healthy", return_value=True), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(sqlite3.OperationalError, match="co-session down"):
+            mg._recall_once(
+                "co-session marker",
+                owner_id="operator",
+                limit=5,
+                min_similarity=0.0,
+                use_routing=False,
+                use_aliases=False,
+                use_intent=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=True,
+                include_mmr=False,
+                include_lexical_anchor_shaping=False,
+                low_signal_retry=False,
+                track_access=False,
+            )
+
+
+def test_recall_once_co_session_failure_logs_and_falls_back(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    node = mg.Node.create(
+        "Fact",
+        "The operator keeps the co-session fallback marker in the field notebook.",
+        owner_id="operator",
+        session_id="session-a",
+    )
+
+    class _FailingConn:
+        def execute(self, *_args, **_kwargs):
+            raise sqlite3.OperationalError("co-session down")
+
+    class _FailingCtx:
+        def __enter__(self):
+            return _FailingConn()
+
+        def __exit__(self, *_exc):
+            return False
+
+    graph = SimpleNamespace(
+        search_hybrid=MagicMock(return_value=[(node, 0.95)]),
+        search_fts=MagicMock(return_value=[]),
+        _get_conn=lambda: _FailingCtx(),
+    )
+    cfg = SimpleNamespace(retrieval=SimpleNamespace())
+
+    with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+         patch("config.get_config", return_value=cfg), \
+         patch.object(mg, "_relation_matches_for_query", return_value=[]), \
+         patch.object(mg, "_has_generic_graph_signal", return_value=False), \
+         patch.object(mg, "_ollama_healthy", return_value=True), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=False), \
+         caplog.at_level("WARNING"):
+        rows = mg._recall_once(
+            "co-session fallback marker",
+            owner_id="operator",
+            limit=5,
+            min_similarity=0.0,
+            use_routing=False,
+            use_aliases=False,
+            use_intent=False,
+            use_multi_pass=False,
+            use_reranker=False,
+            include_graph_traversal=False,
+            include_co_session=True,
+            include_mmr=False,
+            include_lexical_anchor_shaping=False,
+            low_signal_retry=False,
+            track_access=False,
+        )
+
+    assert [row["id"] for row in rows] == [node.id]
+    assert "Co-session recall expansion failed for session session-a" in caplog.text
+
+
 def test_recall_fast_deadline_failure_respects_failhard(caplog):
     import datastore.memorydb.memory_graph as mg
 

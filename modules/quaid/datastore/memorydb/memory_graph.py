@@ -13179,8 +13179,10 @@ def _recall_once(
                                     "source_type": _co_attrs.get("source_type"),
                                     "project": _co_attrs.get("project"),
                                 })
-            except Exception:
-                pass  # Temporal contiguity is best-effort
+            except Exception as exc:
+                if _is_fail_hard_mode():
+                    raise
+                logger.warning("Co-session recall expansion failed for session %s: %s", sid, exc)
         _phase_ms["co_session_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     # Add related nodes via multi-hop graph traversal
