@@ -1638,7 +1638,7 @@ def update_doc_from_transcript(
                 print(f"  Updated {doc_path}")
             log_doc_update(doc_path, trigger, sources, f"Full replacement: {summary}",
                            dry_run, True, chars_before, chars_after)
-            return True
+            return not dry_run
         print(f"  No valid edits parsed from response")
         log_doc_update(doc_path, trigger, sources, "No valid edits parsed",
                        dry_run, False, chars_before, 0)
@@ -1689,7 +1689,7 @@ def update_doc_from_transcript(
                     raise
         log_doc_update(doc_path, trigger, sources, f"{applied} edit(s): {summary}",
                        dry_run, True, chars_before, chars_after)
-        return True
+        return not dry_run
     else:
         print(f"  Could not match edits to doc content")
         log_doc_update(doc_path, trigger, sources, "Edits didn't match doc content",

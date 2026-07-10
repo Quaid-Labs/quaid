@@ -1643,9 +1643,32 @@ NEW: Updated line.
             dry_run=True,
         )
 
-    assert ok is True
+    assert ok is False
     assert captured["timeout"] == 1.0
+    assert doc.read_text(encoding="utf-8") == "# Doc\n\nExisting line.\n"
     assert "Non-positive QUAID_DOCS_TRANSCRIPT_TIMEOUT_SECONDS='0'; using minimum 1s" in caplog.text
+
+
+def test_update_doc_from_transcript_full_replacement_dry_run_returns_false(tmp_path, monkeypatch):
+    with _adapter_patch(tmp_path) as iroot:
+        from datastore.docsdb import updater
+
+        doc = iroot / "docs" / "doc.md"
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text("# Doc\n\nExisting line.\n", encoding="utf-8")
+
+        response = "# Doc\n\n" + "Updated line.\n" * 120 + "\n<<<SUMMARY: full replacement >>>"
+        monkeypatch.setattr(updater, "call_deep_reasoning", lambda **_kwargs: (response, 0.1))
+
+        ok = updater.update_doc_from_transcript(
+            "docs/doc.md",
+            "test purpose",
+            "short transcript",
+            dry_run=True,
+        )
+
+    assert ok is False
+    assert doc.read_text(encoding="utf-8") == "# Doc\n\nExisting line.\n"
 
 
 def test_update_doc_from_transcript_registry_timestamp_failure_warns_when_fail_open(
