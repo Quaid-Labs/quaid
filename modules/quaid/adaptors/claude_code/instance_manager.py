@@ -5,6 +5,7 @@ Creates a Quaid silo and writes QUAID_INSTANCE into the target project's
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -15,6 +16,8 @@ from lib.instance_manager import InstanceManager
 
 if TYPE_CHECKING:
     from lib.adapter import QuaidAdapter
+
+logger = logging.getLogger(__name__)
 
 
 class ClaudeCodeInstanceManager(InstanceManager):
@@ -149,9 +152,10 @@ class ClaudeCodeInstanceManager(InstanceManager):
         if config_path.is_file():
             try:
                 cfg = json.loads(config_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError) as exc:
                 if is_fail_hard_enabled():
                     raise
+                logger.warning("_write_model_config: could not read existing config at %s, resetting: %s", config_path, exc)
                 cfg = {}
 
         models = cfg.setdefault("models", {})
@@ -184,10 +188,10 @@ class ClaudeCodeInstanceManager(InstanceManager):
             if config_path.is_file():
                 try:
                     cfg = json.loads(config_path.read_text(encoding="utf-8"))
-                except Exception:
+                except Exception as exc:
                     if is_fail_hard_enabled():
                         raise
-                    pass
+                    logger.warning("auto_provision: failed reading config for %s: %s", name, exc)
             models = cfg.setdefault("models", {})
             models.setdefault("deepReasoning", self.DEFAULT_DEEP_MODEL)
             models.setdefault("fastReasoning", self.DEFAULT_FAST_MODEL)
@@ -237,9 +241,10 @@ class ClaudeCodeInstanceManager(InstanceManager):
         if settings_path.is_file():
             try:
                 settings = json.loads(settings_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError) as exc:
                 if is_fail_hard_enabled():
                     raise
+                logger.warning("_write_hooks: could not read existing settings at %s, resetting: %s", settings_path, exc)
                 settings = {}
 
         if "hooks" not in settings:
@@ -295,9 +300,10 @@ class ClaudeCodeInstanceManager(InstanceManager):
         if settings_path.is_file():
             try:
                 settings = json.loads(settings_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError) as exc:
                 if is_fail_hard_enabled():
                     raise
+                logger.warning("_write_settings: could not read existing project settings at %s, resetting: %s", settings_path, exc)
                 settings = {}
         else:
             settings = {}

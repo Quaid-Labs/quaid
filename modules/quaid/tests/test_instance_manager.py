@@ -644,6 +644,23 @@ class TestClaudeCodeInstanceManager:
         with pytest.raises(json.JSONDecodeError):
             mgr._write_model_config(silo_root, "deep-model", "fast-model")
 
+    def test_write_model_config_logs_malformed_config_when_fail_open(self, tmp_path, monkeypatch, caplog):
+        from adaptors.claude_code import instance_manager as manager_mod
+        from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
+
+        silo_root = tmp_path / "instances" / "claude-code-main"
+        silo_root.mkdir(parents=True)
+        (silo_root / "config.json").write_text("}{bad json", encoding="utf-8")
+        mgr = ClaudeCodeInstanceManager(MagicMock())
+        monkeypatch.setattr(manager_mod, "is_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level("WARNING", logger="adaptors.claude_code.instance_manager"):
+            mgr._write_model_config(silo_root, "deep-model", "fast-model")
+
+        data = json.loads((silo_root / "config.json").read_text(encoding="utf-8"))
+        assert data["models"]["deepReasoning"] == "deep-model"
+        assert "_write_model_config: could not read existing config" in caplog.text
+
     def test_auto_provision_raises_malformed_config_when_failhard(self, tmp_path, monkeypatch):
         from adaptors.claude_code import instance_manager as manager_mod
         from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
@@ -666,6 +683,33 @@ class TestClaudeCodeInstanceManager:
         with pytest.raises(json.JSONDecodeError):
             mgr.auto_provision("auto")
 
+    def test_auto_provision_logs_malformed_config_when_fail_open(self, tmp_path, monkeypatch, caplog):
+        from adaptors.claude_code import instance_manager as manager_mod
+        from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
+
+        adapter = MagicMock()
+        adapter.agent_id_prefix.return_value = "claude-code"
+        adapter.quaid_home.return_value = tmp_path / "quaid"
+        adapter.instance_root.return_value = tmp_path / "quaid" / "instances" / "claude-code-main"
+        mgr = ClaudeCodeInstanceManager(adapter)
+        silo_root = tmp_path / "quaid" / "instances" / "claude-code-auto"
+
+        def fake_create(_name):
+            silo_root.mkdir(parents=True)
+            (silo_root / "config.json").write_text("}{bad json", encoding="utf-8")
+            return silo_root
+
+        monkeypatch.setattr(mgr, "create", fake_create)
+        monkeypatch.setattr(manager_mod, "is_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level("WARNING", logger="adaptors.claude_code.instance_manager"):
+            instance_id, was_new = mgr.auto_provision("auto")
+
+        data = json.loads((silo_root / "config.json").read_text(encoding="utf-8"))
+        assert (instance_id, was_new) == ("claude-code-auto", True)
+        assert data["models"]["fastReasoning"] == "claude-haiku-4-5"
+        assert "auto_provision: failed reading config for auto" in caplog.text
+
     def test_write_hooks_raises_malformed_settings_when_failhard(self, tmp_path, monkeypatch):
         from adaptors.claude_code import instance_manager as manager_mod
         from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
@@ -682,6 +726,26 @@ class TestClaudeCodeInstanceManager:
         with pytest.raises(json.JSONDecodeError):
             mgr._write_hooks("claude-code-main", settings_path=settings_path)
 
+    def test_write_hooks_logs_malformed_settings_when_fail_open(self, tmp_path, monkeypatch, caplog):
+        from adaptors.claude_code import instance_manager as manager_mod
+        from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
+
+        adapter = MagicMock()
+        adapter.quaid_home.return_value = tmp_path / "quaid"
+        adapter.visible_home.return_value = tmp_path / "visible"
+        mgr = ClaudeCodeInstanceManager(adapter)
+        settings_path = tmp_path / ".claude" / "settings.json"
+        settings_path.parent.mkdir(parents=True)
+        settings_path.write_text("}{bad json", encoding="utf-8")
+        monkeypatch.setattr(manager_mod, "is_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level("WARNING", logger="adaptors.claude_code.instance_manager"):
+            mgr._write_hooks("claude-code-main", settings_path=settings_path)
+
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert data["env"]["QUAID_INSTANCE"] == "claude-code-main"
+        assert "_write_hooks: could not read existing settings" in caplog.text
+
     def test_write_settings_raises_malformed_settings_when_failhard(self, tmp_path, monkeypatch):
         from adaptors.claude_code import instance_manager as manager_mod
         from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
@@ -695,6 +759,24 @@ class TestClaudeCodeInstanceManager:
 
         with pytest.raises(json.JSONDecodeError):
             mgr._write_settings(project_dir, "claude-code-main")
+
+    def test_write_settings_logs_malformed_settings_when_fail_open(self, tmp_path, monkeypatch, caplog):
+        from adaptors.claude_code import instance_manager as manager_mod
+        from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
+
+        project_dir = tmp_path / "project"
+        settings_path = project_dir / ".claude" / "settings.json"
+        settings_path.parent.mkdir(parents=True)
+        settings_path.write_text("}{bad json", encoding="utf-8")
+        mgr = ClaudeCodeInstanceManager(MagicMock())
+        monkeypatch.setattr(manager_mod, "is_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level("WARNING", logger="adaptors.claude_code.instance_manager"):
+            mgr._write_settings(project_dir, "claude-code-main")
+
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert data["env"]["QUAID_INSTANCE"] == "claude-code-main"
+        assert "_write_settings: could not read existing project settings" in caplog.text
 
 
 # ---- Adapter registration ----
