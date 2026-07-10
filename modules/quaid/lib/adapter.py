@@ -23,6 +23,7 @@ Tests use set_adapter() / reset_adapter() for isolation.
 from __future__ import annotations
 
 import abc
+import contextlib
 import importlib
 import json
 import logging
@@ -30,10 +31,11 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, Iterator, List, Optional, TYPE_CHECKING
 
 from lib.platform_guard import assert_supported_platform  # noqa: F401
 from lib.fail_policy import is_fail_hard_enabled
@@ -45,6 +47,50 @@ if TYPE_CHECKING:
     from lib.instance_manager import InstanceManager
 
 logger = logging.getLogger(__name__)
+
+
+def _atomic_write_text(path: Path, content: str, *, mode: Optional[int] = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    tmp = Path(tmp_name)
+    try:
+        if mode is not None:
+            os.fchmod(fd, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+@contextlib.contextmanager
+def _exclusive_file_lock(path: Path) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(f".{path.name}.lock")
+    try:
+        import fcntl
+    except ImportError as exc:
+        logger.warning("File locking unavailable for %s: %s", path, exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"File locking unavailable for {path}") from exc
+        yield
+        return
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 @dataclass
@@ -347,15 +393,18 @@ class QuaidAdapter(abc.ABC):
         if not value:
             raise ValueError("auth credential token is required")
         path = self.shared_auth_registry_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        data = self._read_shared_auth_registry()
-        creds = data.get("credentials", {}) if isinstance(data, dict) else {}
-        if not isinstance(creds, dict):
-            creds = {}
-        creds[normalized_kind] = {"token": value}
-        data["credentials"] = creds
-        path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        path.chmod(0o600)
+        with _exclusive_file_lock(path):
+            data = self._read_shared_auth_registry()
+            creds = data.get("credentials", {}) if isinstance(data, dict) else {}
+            if not isinstance(creds, dict):
+                creds = {}
+            creds[normalized_kind] = {"token": value}
+            data["credentials"] = creds
+            _atomic_write_text(
+                path,
+                json.dumps(data, indent=2, sort_keys=True) + "\n",
+                mode=0o600,
+            )
         return path
 
     def read_auth_token(self) -> Optional[str]:

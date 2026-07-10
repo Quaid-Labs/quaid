@@ -441,6 +441,69 @@ class TestBaseAdapterConfig:
 
         assert "Failed to read shared auth registry" in caplog.text
 
+    def test_store_shared_auth_registry_uses_atomic_replace(self, standalone, monkeypatch):
+        path = standalone.shared_auth_registry_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"credentials": {"anthropic_api": {"token": "sk-ant-existing"}}}) + "\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o600)
+        real_replace = os.replace
+        replace_calls = []
+
+        def tracking_replace(src, dst):
+            src_path = Path(src)
+            dst_path = Path(dst)
+            replace_calls.append((src_path, dst_path))
+            assert dst_path == path
+            assert src_path.parent == path.parent
+            assert src_path.name.startswith(f".{path.name}.")
+            assert src_path.name.endswith(".tmp")
+            assert (src_path.stat().st_mode & 0o777) == 0o600
+            return real_replace(src, dst)
+
+        monkeypatch.setattr("lib.adapter.os.replace", tracking_replace)
+
+        standalone.store_shared_auth_token("openai_api", "sk-new")
+
+        assert len(replace_calls) == 1
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert data["credentials"]["anthropic_api"]["token"] == "sk-ant-existing"
+        assert data["credentials"]["openai_api"]["token"] == "sk-new"
+        assert (path.stat().st_mode & 0o777) == 0o600
+        assert not list(path.parent.glob(f".{path.name}.*.tmp"))
+
+    def test_store_shared_auth_registry_replace_failure_keeps_existing_file(self, standalone, monkeypatch):
+        path = standalone.shared_auth_registry_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        original = json.dumps({"credentials": {"anthropic_api": {"token": "sk-ant-existing"}}}) + "\n"
+        path.write_text(original, encoding="utf-8")
+
+        def fail_replace(_src, _dst):
+            raise OSError("replace failed")
+
+        monkeypatch.setattr("lib.adapter.os.replace", fail_replace)
+
+        with pytest.raises(OSError, match="replace failed"):
+            standalone.store_shared_auth_token("openai_api", "sk-new")
+
+        assert path.read_text(encoding="utf-8") == original
+        assert not list(path.parent.glob(f".{path.name}.*.tmp"))
+
+    def test_store_shared_auth_registry_takes_file_lock(self, standalone, monkeypatch):
+        events = []
+        fake_fcntl = SimpleNamespace(
+            LOCK_EX=1,
+            LOCK_UN=8,
+            flock=lambda _fd, op: events.append(op),
+        )
+        monkeypatch.setitem(sys.modules, "fcntl", fake_fcntl)
+
+        standalone.store_shared_auth_token("openai_api", "sk-new")
+
+        assert events == [fake_fcntl.LOCK_EX, fake_fcntl.LOCK_UN]
+
     def test_quaid_identity_dir_raises_instance_resolution_failure_when_failhard(self, tmp_path):
         with patch("lib.instance.instance_id", side_effect=RuntimeError("no instance")), \
              patch("lib.adapter.is_fail_hard_enabled", return_value=True):
