@@ -9936,6 +9936,122 @@ class TestCursorRoundTrip:
                 str(preserved_path),
             )
 
+    @pytest.mark.parametrize(
+        ("case", "expected"),
+        [
+            ("terminal_checkpoint", "terminal checkpoint source cursor lookup failed"),
+            ("grown_transcript", "grown transcript source cursor lookup failed"),
+            ("stale_signal", "stale signal transcript source cursor lookup failed"),
+            ("empty_preserved", "empty preserved cursor source lookup failed"),
+            ("larger_preserved", "larger preserved mirror lookup failed"),
+            ("larger_live", "larger live transcript lookup failed"),
+        ],
+    )
+    def test_cursor_resolution_helpers_warn_when_fail_open(
+        self,
+        monkeypatch,
+        tmp_path,
+        caplog,
+        case,
+        expected,
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+        session_id = "019e60ec-838e-7eb1-8ed6-7f52f2b47570"
+
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            if case in {"terminal_checkpoint", "grown_transcript"}:
+                monkeypatch.setattr(
+                    extraction_daemon,
+                    "_signal_source_cursor_key",
+                    lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("cursor lookup failed")),
+                )
+                fn = (
+                    extraction_daemon._active_source_cursor_for_terminal_checkpoint_tail
+                    if case == "terminal_checkpoint"
+                    else extraction_daemon._active_source_cursor_for_grown_transcript
+                )
+                assert fn(
+                    cursor_file=tmp_path / "alias.json",
+                    session_id=session_id,
+                    transcript_path=str(tmp_path / f"{session_id}.jsonl"),
+                    cursor_data={},
+                ) == ({}, Path(), "")
+            elif case in {"stale_signal", "empty_preserved"}:
+                preserved_path = (
+                    tmp_path
+                    / "instances"
+                    / "openclaw-main"
+                    / "logs"
+                    / "quaid"
+                    / "sessions"
+                    / f"{session_id}.jsonl"
+                )
+                preserved_path.parent.mkdir(parents=True, exist_ok=True)
+                preserved_path.write_text("", encoding="utf-8")
+                monkeypatch.setattr(
+                    extraction_daemon,
+                    "_transcript_size_bytes",
+                    lambda _path: (_ for _ in ()).throw(RuntimeError("size lookup failed")),
+                )
+                if case == "stale_signal":
+                    assert extraction_daemon._active_source_cursor_for_stale_signal_transcript(
+                        session_id,
+                        str(preserved_path),
+                    ) == ("", "")
+                else:
+                    assert extraction_daemon._active_source_cursor_for_empty_preserved_cursor(
+                        session_id,
+                        str(preserved_path),
+                    ) == ({}, "", "")
+            elif case == "larger_preserved":
+                live_path = tmp_path / f"{session_id}.jsonl"
+                live_path.write_text('{"role":"user","content":"live"}\n', encoding="utf-8")
+                monkeypatch.setattr(
+                    extraction_daemon,
+                    "_adapter_owns_transcript_path",
+                    lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("ownership failed")),
+                )
+                assert extraction_daemon._larger_preserved_mirror_for_live_transcript(
+                    session_id,
+                    str(live_path),
+                    adapter=object(),
+                ) == ""
+            else:
+                preserved_path = (
+                    tmp_path
+                    / "instances"
+                    / "openclaw-main"
+                    / "logs"
+                    / "quaid"
+                    / "sessions"
+                    / f"{session_id}.jsonl"
+                )
+                live_path = tmp_path / f"{session_id}.jsonl"
+                preserved_path.parent.mkdir(parents=True, exist_ok=True)
+                preserved_path.write_text('{"role":"user","content":"mirror"}\n', encoding="utf-8")
+                live_path.write_text('{"role":"user","content":"live richer"}\n', encoding="utf-8")
+                monkeypatch.setattr(
+                    extraction_daemon,
+                    "_adapter_owns_transcript_path",
+                    lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("ownership failed")),
+                )
+
+                class _Adapter:
+                    def get_session_path(self, session_id_arg):
+                        assert session_id_arg == session_id
+                        return live_path
+
+                assert extraction_daemon._larger_live_transcript_for_preserved_mirror(
+                    session_id,
+                    str(preserved_path),
+                    adapter=_Adapter(),
+                ) == ""
+
+        assert expected in caplog.text
+        assert "returning empty" in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # check_idle_sessions() — additional coverage

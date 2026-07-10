@@ -2103,9 +2103,15 @@ def _active_source_cursor_for_terminal_checkpoint_tail(
             transcript_path,
             cursor_data=cursor_data,
         )
-    except Exception:
+    except Exception as exc:
         if _fail_hard_enabled():
             raise
+        logger.warning(
+            "session %s terminal checkpoint source cursor lookup failed for %s; returning empty: %s",
+            session_id,
+            transcript_path,
+            exc,
+        )
         return {}, Path(), ""
     if cursor_file.stem == source_key:
         return {}, Path(), ""
@@ -2127,9 +2133,15 @@ def _active_source_cursor_for_terminal_checkpoint_tail(
         return {}, Path(), ""
     try:
         total_lines = count_transcript_lines(transcript_path)
-    except Exception:
+    except Exception as exc:
         if _fail_hard_enabled():
             raise
+        logger.warning(
+            "session %s terminal checkpoint transcript line count failed for %s; returning empty: %s",
+            session_id,
+            transcript_path,
+            exc,
+        )
         return {}, Path(), ""
     if source_offset >= total_lines:
         return {}, Path(), ""
@@ -2152,9 +2164,15 @@ def _active_source_cursor_for_grown_transcript(
             transcript_path,
             cursor_data=cursor_data,
         )
-    except Exception:
+    except Exception as exc:
         if _fail_hard_enabled():
             raise
+        logger.warning(
+            "session %s grown transcript source cursor lookup failed for %s; returning empty: %s",
+            session_id,
+            transcript_path,
+            exc,
+        )
         return {}, Path(), ""
     if cursor_file.stem == source_key:
         return {}, Path(), ""
@@ -2166,6 +2184,12 @@ def _active_source_cursor_for_grown_transcript(
     except (json.JSONDecodeError, OSError) as exc:
         if isinstance(exc, OSError) and _fail_hard_enabled():
             raise
+        logger.warning(
+            "session %s grown transcript source cursor read failed for %s; returning empty: %s",
+            session_id,
+            source_file,
+            exc,
+        )
         return {}, Path(), ""
     if "transcript_size_bytes" not in source_raw:
         return {}, Path(), ""
@@ -2262,9 +2286,15 @@ def _active_source_cursor_for_stale_signal_transcript(
         )
         if active_cursor and active_path and active_key:
             return active_path, active_key
-    except Exception:
+    except Exception as exc:
         if _fail_hard_enabled():
             raise
+        logger.warning(
+            "session %s stale signal transcript source cursor lookup failed for %s; returning empty: %s",
+            session_id,
+            transcript_path,
+            exc,
+        )
     return "", ""
 
 
@@ -2307,9 +2337,15 @@ def _active_source_cursor_for_empty_preserved_cursor(
                 best = (mtime, cursor_data, candidate_path, cursor_key)
         if best is not None:
             return best[1], best[2], best[3]
-    except Exception:
+    except Exception as exc:
         if _fail_hard_enabled():
             raise
+        logger.warning(
+            "session %s empty preserved cursor source lookup failed for %s; returning empty: %s",
+            session_id,
+            transcript_path,
+            exc,
+        )
     return {}, "", ""
 
 
@@ -2354,9 +2390,15 @@ def _larger_preserved_mirror_for_live_transcript(session_id: str, transcript_pat
         mirror_size = _transcript_size_bytes(str(mirror_path))
         if mirror_size > 0 and mirror_size > live_size and _transcript_has_jsonl_rows(str(mirror_path)):
             return str(mirror_path)
-    except Exception:
+    except Exception as exc:
         if _fail_hard_enabled():
             raise
+        logger.warning(
+            "session %s larger preserved mirror lookup failed for %s; returning empty: %s",
+            session_id,
+            transcript_path,
+            exc,
+        )
     return ""
 
 
@@ -2384,9 +2426,15 @@ def _larger_live_transcript_for_preserved_mirror(session_id: str, transcript_pat
         live_size = _transcript_size_bytes(str(live_path))
         if live_size > mirror_size and _transcript_has_jsonl_rows(str(live_path)):
             return str(live_path)
-    except Exception:
+    except Exception as exc:
         if _fail_hard_enabled():
             raise
+        logger.warning(
+            "session %s larger live transcript lookup failed for %s; returning empty: %s",
+            session_id,
+            transcript_path,
+            exc,
+        )
     return ""
 
 
