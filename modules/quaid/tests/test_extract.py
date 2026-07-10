@@ -5906,6 +5906,36 @@ class TestExtractFromTranscript:
         assert payload["edges_created"] == 0
         assert "edge failed for Maya --uses--> blue notebook" in caplog.text
 
+    def test_extraction_publish_counts_terminal_not_found_store_result_as_skipped(self, monkeypatch):
+        monkeypatch.setattr(
+            "datastore.memorydb.extraction_publish.get_config",
+            lambda: SimpleNamespace(retrieval=SimpleNamespace(domains={"personal": "Personal facts"})),
+        )
+        initial_snapshot = MagicMock()
+        initial_snapshot.execute.return_value.fetchone.return_value = (0,)
+        write_conn = MagicMock()
+        contexts = iter([nullcontext(initial_snapshot), nullcontext(write_conn)])
+
+        class _MemoryService:
+            def warm_embeddings(self, texts, *, timeout_s=None):
+                return {"requested": len(texts), "unique": len(set(texts)), "cache_hits": 0, "warmed": len(texts), "failed": 0}
+
+            def batch_write(self):
+                return next(contexts)
+
+            def store(self, **_kwargs):
+                return {"id": None, "status": "not_found", "reason": "store target missing", "dedup_telemetry": {}}
+
+        payload = self._raw_fact_publish_payload()
+
+        self._run_direct_extraction_publish(payload, _MemoryService(), fail_hard_enabled=lambda: False)
+
+        assert payload["facts_stored"] == 0
+        assert payload["facts_skipped"] == 1
+        assert payload["facts_planned"] == 0
+        assert payload["facts"][0]["status"] == "not_found"
+        assert payload["facts"][0]["reason"] == "store target missing"
+
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_passes_temporal_provenance_to_store(self, mock_store):
         from ingest.extract import apply_extracted_payloads
@@ -7289,6 +7319,75 @@ class TestExtractFromTranscript:
         assert seen_calls[0]["_dedup_only"] is True
         assert seen_calls[0]["_dedup_rowid_min_exclusive"] == 10
         assert seen_calls[0]["_dedup_rowid_max"] == 12
+
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_does_not_count_delta_not_found_as_skipped(self, mock_store):
+        from ingest.extract import apply_extracted_payloads
+
+        initial_snapshot = MagicMock()
+        initial_snapshot.execute.return_value.fetchone.return_value = (10,)
+        write_conn = MagicMock()
+
+        def write_execute(sql, *_args, **_kwargs):
+            res = MagicMock()
+            if "MAX(rowid)" in sql:
+                res.fetchone.return_value = (12,)
+            return res
+
+        write_conn.execute.side_effect = write_execute
+        conns = iter([initial_snapshot, write_conn])
+
+        @contextmanager
+        def fake_batch_write():
+            yield next(conns)
+
+        seen_calls = []
+
+        def fake_store(**kwargs):
+            seen_calls.append(kwargs)
+            if kwargs.get("_dedup_only"):
+                return {"id": None, "status": "not_found", "dedup_telemetry": {}}
+            return {"id": "fact-new", "status": "created", "dedup_telemetry": {}}
+
+        mock_store.side_effect = fake_store
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Maya wants dietary tagging in the recipe app",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        with patch("ingest.extract._memory.batch_write", side_effect=fake_batch_write):
+            applied = apply_extracted_payloads(
+                payload,
+                owner_id="test",
+                label="rolling-flush",
+                session_id="sess-delta-recheck",
+                dry_run=False,
+            )
+
+        assert applied["facts_stored"] == 1
+        assert applied["facts_skipped"] == 0
+        assert len(seen_calls) == 2
+        assert seen_calls[0]["_dedup_only"] is True
+        assert "_dedup_only" not in seen_calls[1]
 
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_writes_publish_trace_events(self, mock_store, workspace_dir, monkeypatch):

@@ -795,6 +795,7 @@ def run_extraction_publish_payload(
         fact: Dict[str, Any],
         fact_entry: Dict[str, Any],
         write_conn: Any,
+        terminal_not_found: bool = True,
     ) -> bool:
         _accumulate_dedup_meta(store_result)
 
@@ -817,7 +818,12 @@ def run_extraction_publish_payload(
             result["facts"].append(fact_entry)
             return True
         elif status == "not_found":
-            fact_entry["status"] = "pending"
+            if not terminal_not_found:
+                fact_entry["status"] = "pending"
+                return False
+            fact_entry["status"] = "not_found"
+            fact_entry["reason"] = store_result.get("reason", "not_found")
+            result["facts_skipped"] += 1
             return False
         else:
             fact_entry["status"] = "failed"
@@ -1228,6 +1234,7 @@ def run_extraction_publish_payload(
                             fact=fact,
                             fact_entry=delta_entry,
                             write_conn=write_conn,
+                            terminal_not_found=False,
                         ):
                             should_abort = True
                             break
