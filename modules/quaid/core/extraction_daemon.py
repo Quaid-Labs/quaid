@@ -883,8 +883,11 @@ def read_pid() -> Optional[int]:
     pid_file = _pid_path()
     if not pid_file.is_file():
         return None
+    pid: Optional[int] = None
+    raw_pid: Optional[str] = None
     try:
-        pid = int(pid_file.read_text().strip())
+        raw_pid = pid_file.read_text().strip()
+        pid = int(raw_pid)
         # Check if process is alive
         os.kill(pid, 0)
         # Verify it's actually our daemon (PID reuse guard)
@@ -902,10 +905,10 @@ def read_pid() -> Optional[int]:
         return pid
     except (ValueError, OSError):
         # PID file exists but process is dead or stale
-        try:
-            pid_file.unlink()
-        except OSError:
-            pass
+        if pid is not None:
+            _remove_pid_if_matches(pid)
+        elif raw_pid is not None:
+            _remove_pid_if_text_matches(raw_pid)
         return None
 
 
@@ -928,6 +931,20 @@ def _remove_pid_if_matches(expected_pid: int) -> None:
     except (OSError, ValueError):
         return
     if current != int(expected_pid):
+        return
+    try:
+        pid_file.unlink()
+    except OSError:
+        pass
+
+
+def _remove_pid_if_text_matches(expected_text: str) -> None:
+    pid_file = _pid_path()
+    try:
+        current = pid_file.read_text().strip()
+    except OSError:
+        return
+    if current != str(expected_text).strip():
         return
     try:
         pid_file.unlink()
@@ -9817,7 +9834,7 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 )
 
     finally:
-        remove_pid()
+        _remove_pid_if_matches(os.getpid())
         logger.info("extraction daemon exited")
 
 
@@ -10262,12 +10279,13 @@ def stop_daemon() -> bool:
         if match_pid not in targets:
             targets.append(match_pid)
     if not targets:
-        remove_pid()
         return False
     stopped = False
     for target_pid in targets:
-        stopped = _terminate_daemon_pid(target_pid) or stopped
-    remove_pid()
+        target_stopped = _terminate_daemon_pid(target_pid)
+        stopped = target_stopped or stopped
+        if target_stopped:
+            _remove_pid_if_matches(target_pid)
     return stopped
 
 

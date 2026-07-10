@@ -2830,6 +2830,33 @@ def test_stop_daemon_disables_supervisor_instance_monitor(monkeypatch):
     assert disabled == [("claude-code-livetest", "daemon_stop")]
 
 
+def test_read_pid_preserves_newer_pidfile_when_stale_pid_races(monkeypatch, tmp_path):
+    pid_path = tmp_path / "extraction-daemon.pid"
+    pid_path.write_text("8424", encoding="utf-8")
+
+    def fake_kill(pid, sig):
+        assert pid == 8424
+        assert sig == 0
+        pid_path.write_text("8452", encoding="utf-8")
+        raise OSError("dead pid")
+
+    monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
+    monkeypatch.setattr(extraction_daemon.os, "kill", fake_kill)
+
+    assert extraction_daemon.read_pid() is None
+    assert pid_path.read_text(encoding="utf-8").strip() == "8452"
+
+
+def test_read_pid_removes_unchanged_malformed_pidfile(monkeypatch, tmp_path):
+    pid_path = tmp_path / "extraction-daemon.pid"
+    pid_path.write_text("not-a-pid", encoding="utf-8")
+
+    monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
+
+    assert extraction_daemon.read_pid() is None
+    assert not pid_path.exists()
+
+
 def test_config_reload_watcher_reloads_when_config_mtime_changes(monkeypatch, tmp_path):
     cfg_path = tmp_path / "instances" / "pytest-runner" / "config.json"
     cfg_path.parent.mkdir(parents=True)
@@ -3255,11 +3282,11 @@ def test_stop_daemon_kills_pidfile_target_and_matching_orphans(monkeypatch):
         "_terminate_daemon_pid",
         lambda pid, **_kwargs: terminated.append(pid) or True,
     )
-    monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: removed.append(True))
+    monkeypatch.setattr(extraction_daemon, "_remove_pid_if_matches", lambda pid: removed.append(pid))
 
     assert extraction_daemon.stop_daemon() is True
     assert terminated == [111, 222]
-    assert removed == [True]
+    assert removed == [111, 222]
 
 
 def test_remove_pid_if_matches_preserves_newer_pidfile(monkeypatch, tmp_path):
@@ -3273,6 +3300,19 @@ def test_remove_pid_if_matches_preserves_newer_pidfile(monkeypatch, tmp_path):
 
     extraction_daemon._remove_pid_if_matches(8452)
     assert not pid_path.exists()
+
+
+def test_stop_daemon_preserves_pid_when_terminate_fails(monkeypatch):
+    removed = []
+
+    monkeypatch.setenv("QUAID_SUPERVISOR_DISABLE", "1")
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: 111)
+    monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [])
+    monkeypatch.setattr(extraction_daemon, "_terminate_daemon_pid", lambda _pid, **_kwargs: False)
+    monkeypatch.setattr(extraction_daemon, "_remove_pid_if_matches", lambda pid: removed.append(pid))
+
+    assert extraction_daemon.stop_daemon() is False
+    assert removed == []
 
 
 def test_check_idle_sessions_writes_timeout_signal_for_idle_unextracted_session(monkeypatch, tmp_path):
