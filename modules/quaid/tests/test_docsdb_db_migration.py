@@ -84,6 +84,56 @@ def test_migrate_legacy_docs_tables_rejects_malformed_quaid_now_without_done_cac
     assert state == ("2026-03-11T05:06:07+00:00",)
 
 
+def test_migrate_legacy_docs_tables_preserves_existing_rows_on_conflict(tmp_path, monkeypatch):
+    target = tmp_path / "target.db"
+    source = tmp_path / "source.db"
+    target_conn = sqlite3.connect(str(target))
+    try:
+        target_conn.execute(
+            "CREATE TABLE doc_chunks (id TEXT PRIMARY KEY, source_file TEXT, content TEXT, quality_score REAL)"
+        )
+        target_conn.execute(
+            "INSERT INTO doc_chunks (id, source_file, content, quality_score) VALUES (?, ?, ?, ?)",
+            ("chunk-1", "docs/current.md", "current content", 0.75),
+        )
+        target_conn.commit()
+    finally:
+        target_conn.close()
+
+    source_conn = sqlite3.connect(str(source))
+    try:
+        source_conn.execute("CREATE TABLE doc_chunks (id TEXT PRIMARY KEY, source_file TEXT, content TEXT)")
+        source_conn.execute(
+            "INSERT INTO doc_chunks (id, source_file, content) VALUES (?, ?, ?)",
+            ("chunk-1", "docs/legacy.md", "legacy content"),
+        )
+        source_conn.execute(
+            "INSERT INTO doc_chunks (id, source_file, content) VALUES (?, ?, ?)",
+            ("chunk-2", "docs/new.md", "new content"),
+        )
+        source_conn.commit()
+    finally:
+        source_conn.close()
+
+    monkeypatch.setattr(db_migration, "_legacy_instance_db_paths", lambda _target: [source])
+    db_migration._PROCESS_DONE_KEYS.clear()
+
+    db_migration.migrate_legacy_docs_tables(target, ("doc_chunks",))
+
+    target_conn = sqlite3.connect(str(target))
+    try:
+        rows = target_conn.execute(
+            "SELECT id, source_file, content, quality_score FROM doc_chunks ORDER BY id"
+        ).fetchall()
+    finally:
+        target_conn.close()
+
+    assert rows == [
+        ("chunk-1", "docs/current.md", "current content", 0.75),
+        ("chunk-2", "docs/new.md", "new content", None),
+    ]
+
+
 def test_migrate_legacy_docs_tables_skips_signature_failures_with_warning(
     tmp_path,
     monkeypatch,

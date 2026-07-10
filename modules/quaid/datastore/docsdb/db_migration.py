@@ -218,7 +218,7 @@ def _copy_table_rows(conn: sqlite3.Connection, source_schema: str, table_name: s
 
     cols_sql = ", ".join(f'"{c}"' for c in common_cols)
     sql = (
-        f'INSERT OR REPLACE INTO "{table_name}" ({cols_sql}) '
+        f'INSERT OR IGNORE INTO "{table_name}" ({cols_sql}) '
         f'SELECT {cols_sql} FROM {source_schema}."{table_name}"'
     )
     conn.execute(sql)
