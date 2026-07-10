@@ -10,6 +10,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _fail_hard_value_enabled(value) -> bool:
+    if value is None:
+        return True
+    return bool(value)
+
+
 def is_fail_hard_enabled() -> bool:
     """Return True when fallback behavior must be disabled.
 
@@ -44,7 +50,7 @@ def is_fail_hard_enabled() -> bool:
         if not isinstance(retrieval, dict):
             return True
         if "fail_hard" in retrieval:
-            return bool(retrieval.get("fail_hard"))
+            return _fail_hard_value_enabled(retrieval.get("fail_hard"))
     except Exception as exc:
         logger.warning("Failed to load fail-hard policy from lightweight config; defaulting to enabled: %s", exc)
         return True

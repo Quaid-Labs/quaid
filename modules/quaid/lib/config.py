@@ -178,7 +178,10 @@ def _fail_hard_from_raw_lightweight_config() -> bool:
     if not isinstance(retrieval, dict):
         return True
     if "fail_hard" in retrieval:
-        return bool(retrieval.get("fail_hard"))
+        value = retrieval.get("fail_hard")
+        if value is None:
+            return True
+        return bool(value)
     return True
 
 

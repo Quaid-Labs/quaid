@@ -449,6 +449,18 @@ class TestConfigPathResolution:
         finally:
             config._config = old_config
 
+    def test_raw_lightweight_fail_hard_treats_null_as_enabled(self, tmp_path, monkeypatch):
+        from lib import config as lib_config
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+        monkeypatch.setenv("QUAID_ADAPTER_TYPE", "codex")
+        config_file = tmp_path / "instances" / "codex-main" / "config.json"
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(json.dumps({"retrieval": {"fail_hard": None}}), encoding="utf-8")
+
+        assert lib_config._fail_hard_from_raw_lightweight_config() is True
+
     def test_load_from_json_file_reads_utf8(self, tmp_path):
         import config
         old_config = config._config

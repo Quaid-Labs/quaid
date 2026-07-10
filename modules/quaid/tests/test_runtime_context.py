@@ -100,6 +100,18 @@ def test_fail_policy_skips_corrupt_layer_and_uses_valid_policy(caplog, tmp_path,
     assert any("Failed to load fail-hard policy" in rec.message for rec in caplog.records)
 
 
+def test_fail_policy_treats_null_fail_hard_as_enabled(tmp_path, monkeypatch):
+    from lib.fail_policy import is_fail_hard_enabled
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+    cfg = tmp_path / "instances" / "codex-main" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text('{"retrieval": {"fail_hard": null}}', encoding="utf-8")
+
+    assert is_fail_hard_enabled() is True
+
+
 def test_get_deferred_notice_status_passes_through_options():
     from lib import runtime_context
 
