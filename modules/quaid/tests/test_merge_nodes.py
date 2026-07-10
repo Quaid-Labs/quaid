@@ -609,6 +609,54 @@ class TestMergeEdgeMigrationAdvanced:
         assert contra_count == 0, "Contradictions not cleaned after merge"
         assert decay_count == 0, "Decay queue not cleaned after merge"
 
+    def test_contradiction_merge_keeps_resolution_audit_row(self, tmp_path):
+        """Contradiction MERGE resolves before cleanup so the audit row survives."""
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
+        graph, _ = _make_graph(tmp_path)
+        node_a = _store_and_get(graph, "Quaid keeps coffee beans in the pantry")
+        node_b = _store_and_get(graph, "Quaid keeps espresso beans in the pantry")
+
+        with graph._get_conn() as conn:
+            conn.execute(
+                "INSERT INTO contradictions (id, node_a_id, node_b_id, status) VALUES (?, ?, ?, ?)",
+                ("contra-merge-1", node_a.id, node_b.id, "pending"),
+            )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", False):
+            _merge_nodes_into(
+                graph,
+                "Quaid keeps espresso beans in the pantry",
+                [node_a.id, node_b.id],
+                source="contradiction_merge",
+                contradiction_id="contra-merge-1",
+                contradiction_resolution="merge",
+                contradiction_reason="merged duplicate pantry wording",
+            )
+
+        with graph._get_conn() as conn:
+            live_row = conn.execute(
+                "SELECT id FROM contradictions WHERE id = ?",
+                ("contra-merge-1",),
+            ).fetchone()
+            log_row = conn.execute(
+                """
+                SELECT node_a_id, node_b_id, resolution, resolution_reason, merged_node_id
+                FROM contradiction_resolution_log
+                WHERE contradiction_id = ?
+                """,
+                ("contra-merge-1",),
+            ).fetchone()
+
+        assert live_row is None
+        assert log_row is not None
+        assert log_row["node_a_id"] == node_a.id
+        assert log_row["node_b_id"] == node_b.id
+        assert log_row["resolution"] == "merge"
+        assert log_row["resolution_reason"] == "merged duplicate pantry wording"
+        assert log_row["merged_node_id"]
+
     def test_missing_originals_still_creates_merge(self, tmp_path):
         """Merge with non-existent original IDs still creates the merged node."""
         from datastore.memorydb.maintenance_ops import _merge_nodes_into

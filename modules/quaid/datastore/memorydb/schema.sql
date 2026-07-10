@@ -239,6 +239,22 @@ CREATE TABLE IF NOT EXISTS contradictions (
 
 CREATE INDEX IF NOT EXISTS idx_contradictions_status ON contradictions(status);
 
+-- Durable contradiction resolution audit. This intentionally does not FK to
+-- nodes because resolved MERGE operations delete/supersede original nodes.
+CREATE TABLE IF NOT EXISTS contradiction_resolution_log (
+    contradiction_id TEXT PRIMARY KEY,
+    node_a_id TEXT,
+    node_b_id TEXT,
+    explanation TEXT,
+    resolution TEXT,
+    resolution_reason TEXT,
+    resolved_at TEXT,
+    merged_node_id TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_contradiction_resolution_log_resolved
+    ON contradiction_resolution_log(resolved_at);
+
 -- Dedup log - tracks all dedup rejections for review
 CREATE TABLE IF NOT EXISTS dedup_log (
     id TEXT PRIMARY KEY,

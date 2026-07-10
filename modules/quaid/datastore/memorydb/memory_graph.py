@@ -529,6 +529,7 @@ class MemoryGraph:
         "node_domains",
         "source_chunks",
         "contradictions",
+        "contradiction_resolution_log",
         "dedup_log",
         "decay_review_queue",
         "metadata",

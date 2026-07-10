@@ -434,6 +434,9 @@ def _merge_nodes_into(
     original_ids: List[str],
     source: str = "dedup_merge",
     dry_run: bool = False,
+    contradiction_id: Optional[str] = None,
+    contradiction_resolution: Optional[str] = None,
+    contradiction_reason: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Merge multiple nodes into one, preserving strength signals and migrating edges.
 
@@ -515,6 +518,52 @@ def _merge_nodes_into(
             "UPDATE nodes SET confirmation_count = ?, storage_strength = ? WHERE id = ?",
             (total_confirms, max_storage, merged_id),
         )
+
+        if contradiction_id:
+            now_iso = _quaid_now().isoformat()
+            contradiction_row = conn.execute(
+                """
+                SELECT node_a_id, node_b_id, explanation
+                FROM contradictions
+                WHERE id = ?
+                """,
+                (contradiction_id,),
+            ).fetchone()
+            result_row = conn.execute(
+                """
+                UPDATE contradictions
+                SET status = 'resolved', resolution = ?, resolution_reason = ?,
+                    resolved_at = ?
+                WHERE id = ?
+                """,
+                (
+                    contradiction_resolution or "merge",
+                    contradiction_reason or "",
+                    now_iso,
+                    contradiction_id,
+                ),
+            )
+            if result_row.rowcount <= 0:
+                raise RuntimeError(f"Contradiction {contradiction_id!r} disappeared before merge resolution")
+            if contradiction_row:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO contradiction_resolution_log (
+                        contradiction_id, node_a_id, node_b_id, explanation,
+                        resolution, resolution_reason, resolved_at, merged_node_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        contradiction_id,
+                        contradiction_row["node_a_id"],
+                        contradiction_row["node_b_id"],
+                        contradiction_row["explanation"],
+                        contradiction_resolution or "merge",
+                        contradiction_reason or "",
+                        now_iso,
+                        merged_id,
+                    ),
+                )
 
         # Migrate edges: repoint to merged node instead of deleting.
         source_fact_ids = [oid for oid in original_ids if oid]
@@ -599,7 +648,17 @@ def _merge_nodes_into(
 
         # Delete originals
         for oid in original_ids:
-            conn.execute("DELETE FROM contradictions WHERE node_a_id = ? OR node_b_id = ?", (oid, oid))
+            if contradiction_id:
+                conn.execute(
+                    """
+                    DELETE FROM contradictions
+                    WHERE (node_a_id = ? OR node_b_id = ?)
+                      AND id != ?
+                    """,
+                    (oid, oid, contradiction_id),
+                )
+            else:
+                conn.execute("DELETE FROM contradictions WHERE node_a_id = ? OR node_b_id = ?", (oid, oid))
             conn.execute("DELETE FROM decay_review_queue WHERE node_id = ?", (oid,))
             try:
                 conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (oid,))
@@ -2139,8 +2198,10 @@ JSON array only:"""
                             graph, merged_text,
                             [id_a, id_b],
                             source="contradiction_merge",
+                            contradiction_id=c["id"],
+                            contradiction_resolution="merge",
+                            contradiction_reason=reason,
                         )
-                        resolve_contradiction(c["id"], "merge", reason)
 
                         # Create resolution summary artifact
                         summary_text = (
