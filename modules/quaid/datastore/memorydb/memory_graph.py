@@ -5739,8 +5739,10 @@ def _graph_attached_fact_rows(
     try:
         query_relation_groups = _relation_chain_groups_for_query(str(query or ""))
     except Exception as exc:
-        query_relation_groups = []
         logger.warning("_graph_attached_fact_rows: relation groups extraction failed: %s", exc)
+        if _is_fail_hard_mode():
+            raise
+        query_relation_groups = []
     relation_sequence_groups = _relation_groups_for_sequence(list(relation_sequence or []))
     terminal_relation_chain_anchor = bool(query_relation_groups) and (
         _prefix_relation_group_match_length(relation_sequence_groups, query_relation_groups)
@@ -13260,6 +13262,8 @@ def _recall_once(
                         config_retrieval=config_retrieval,
                     )
                 except Exception:
+                    if _is_fail_hard_mode():
+                        raise
                     # BEAM failed — fall back to BFS for this node
                     related = []
                     try:
@@ -13777,6 +13781,8 @@ def _recall_once(
                         )
                 except Exception as exc:
                     logger.warning("low-signal recall retry failed: %s", exc)
+                    if _is_fail_hard_mode():
+                        raise RuntimeError("low-signal recall retry failed") from exc
 
     return _return_validated_recall(
         final_output,

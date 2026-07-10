@@ -595,6 +595,50 @@ def test_graph_attached_fact_rows_fact_load_failure_respects_failhard(caplog):
     assert "Skipping graph-attached fact bad-fact after load failure: fact load failed" in caplog.text
 
 
+def test_graph_attached_fact_rows_relation_group_failure_respects_failhard(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    anchor = mg.Node.create("Person", "Ari")
+    graph = SimpleNamespace(get_edges=MagicMock(return_value=[]))
+
+    with patch.object(
+        mg,
+        "_relation_chain_groups_for_query",
+        side_effect=RuntimeError("relation parse down"),
+    ), patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="relation parse down"):
+            mg._graph_attached_fact_rows(
+                graph,
+                anchor_node=anchor,
+                anchor_text="Ari",
+                anchor_score=0.9,
+                graph_path="Ari",
+                relation_sequence=[],
+                hop_depth=0,
+                seen_ids=set(),
+                query="Ari mentor chain",
+            )
+
+    with patch.object(
+        mg,
+        "_relation_chain_groups_for_query",
+        side_effect=RuntimeError("relation parse down"),
+    ), patch.object(mg, "_is_fail_hard_mode", return_value=False), caplog.at_level("WARNING"):
+        assert mg._graph_attached_fact_rows(
+            graph,
+            anchor_node=anchor,
+            anchor_text="Ari",
+            anchor_score=0.9,
+            graph_path="Ari",
+            relation_sequence=[],
+            hop_depth=0,
+            seen_ids=set(),
+            query="Ari mentor chain",
+        ) == []
+
+    assert "_graph_attached_fact_rows: relation groups extraction failed: relation parse down" in caplog.text
+
+
 def test_relation_chain_rank_prefers_explicit_zero_hop_depth():
     import datastore.memorydb.memory_graph as mg
 
@@ -1124,6 +1168,39 @@ def test_recall_once_reranker_raises_when_failhard_enabled(tmp_path):
                     use_multi_pass=False,
                     use_reranker=True,
                     include_graph_traversal=False,
+                    include_co_session=False,
+                    include_mmr=False,
+                    include_lexical_anchor_shaping=False,
+                    low_signal_retry=False,
+                )
+
+
+def test_recall_once_beam_traversal_failure_respects_failhard(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _ = _make_graph(tmp_path)
+    with patch.object(mg, "get_graph", return_value=graph), \
+         patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        mg.store(
+            "Maya keeps the beam traversal marker in the cedar ledger.",
+            owner_id="quaid",
+            skip_dedup=True,
+        )
+
+        with patch.object(graph, "beam_search_graph", side_effect=RuntimeError("beam down")), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="beam down"):
+                mg._recall_once(
+                    "beam traversal marker",
+                    owner_id="quaid",
+                    limit=5,
+                    min_similarity=0.0,
+                    use_routing=False,
+                    use_aliases=False,
+                    use_intent=False,
+                    use_multi_pass=False,
+                    use_reranker=False,
+                    include_graph_traversal=True,
                     include_co_session=False,
                     include_mmr=False,
                     include_lexical_anchor_shaping=False,
@@ -2853,6 +2930,7 @@ class TestStoreBasic:
         with patch.object(mg, "get_graph", return_value=graph), \
              patch.object(mg, "_expand_low_signal_query", return_value="expanded sparse query"), \
              patch.object(mg, "_recall_once", side_effect=RuntimeError("retry failed")), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=False), \
              caplog.at_level("WARNING"):
             rows = original_recall_once(
                 "sparse query",
@@ -2872,6 +2950,39 @@ class TestStoreBasic:
             )
 
         assert rows == []
+        assert "low-signal recall retry failed: retry failed" in caplog.text
+
+    def test_low_signal_retry_failure_raises_when_failhard_enabled(self, tmp_path, caplog):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        original_recall_once = mg._recall_once
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_expand_low_signal_query", return_value="expanded sparse query"), \
+             patch.object(mg, "_recall_once", side_effect=RuntimeError("retry failed")), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True), \
+             caplog.at_level("WARNING"):
+            with pytest.raises(RuntimeError, match="low-signal recall retry failed") as excinfo:
+                original_recall_once(
+                    "sparse query",
+                    owner_id="quaid",
+                    limit=5,
+                    min_similarity=0.99,
+                    use_routing=False,
+                    use_aliases=False,
+                    use_intent=False,
+                    use_multi_pass=False,
+                    use_reranker=False,
+                    include_graph_traversal=False,
+                    include_co_session=False,
+                    include_mmr=False,
+                    include_lexical_anchor_shaping=False,
+                    low_signal_retry=True,
+                )
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "retry failed" in str(excinfo.value.__cause__)
         assert "low-signal recall retry failed: retry failed" in caplog.text
 
     def test_plan_fanout_queries_bails_for_structural_low_information_message(self):
