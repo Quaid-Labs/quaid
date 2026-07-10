@@ -2593,6 +2593,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
         cfg = ctx.cfg
         dry_run = ctx.dry_run
         workspace = ctx.workspace
+        project_definitions: Dict[str, Any] = {}
 
         try:
             if dry_run:
@@ -2608,8 +2609,9 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                         from datastore.docsdb.registry import DocsRegistry
 
                     docs_registry = DocsRegistry()
+                    project_definitions = docs_registry.get_all_project_definitions()
                     total_discovered = 0
-                    for proj_name, proj_defn in cfg.projects.definitions.items():
+                    for proj_name, proj_defn in project_definitions.items():
                         if proj_defn.auto_index:
                             discovered = docs_registry.auto_discover(proj_name)
                             total_discovered += len(discovered)
@@ -2617,7 +2619,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                     if total_discovered > 0:
                         result.logs.append(f"  Discovered {total_discovered} new file(s)")
 
-                    for proj_name in cfg.projects.definitions:
+                    for proj_name in project_definitions:
                         try:
                             docs_registry.sync_external_files(proj_name)
                         except Exception as exc:
@@ -2643,7 +2645,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             chunks = int(rag_result.get("total_chunks", 0))
 
             if cfg.projects.enabled:
-                for proj_name, proj_defn in cfg.projects.definitions.items():
+                for proj_name, proj_defn in project_definitions.items():
                     proj_dir = _resolve_project_root(proj_defn.home_dir)
                     if proj_dir.exists():
                         result.logs.append(f"Reindexing project {proj_name}: {proj_dir}...")

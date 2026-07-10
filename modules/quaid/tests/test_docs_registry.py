@@ -1690,6 +1690,40 @@ Test project.
         assert len(found) == 2
         assert "docs/api-reference.md" in found
 
+    def test_sync_external_files_uses_db_project_definition(self, setup_env):
+        from config import ProjectDefinition
+
+        r = _get_registry()
+        project_dir = setup_env.parents[1] / "projects" / "db-external-proj"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "PROJECT.md").write_text("""# Project: DB External
+
+## Files & Assets
+
+### External Files
+| File | Purpose | Auto-Update |
+|------|---------|-------------|
+| docs/db-api.md | DB API docs | No |
+
+## Documents
+""", encoding="utf-8")
+        r.save_project_definition(
+            "db-external-proj",
+            ProjectDefinition(
+                label="DB External",
+                home_dir="projects/db-external-proj/",
+                description="DB-only external project",
+            ),
+        )
+        assert "db-external-proj" not in r._get_config().projects.definitions
+
+        found = r.sync_external_files("db-external-proj")
+
+        assert found == ["docs/db-api.md"]
+        entry = r.get("docs/db-api.md")
+        assert entry is not None
+        assert entry["project"] == "db-external-proj"
+
     def test_idempotent(self, setup_env):
         tmp_path = setup_env
         r = _get_registry()

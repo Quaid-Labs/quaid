@@ -3557,18 +3557,18 @@ class TestRagMaintenanceThirdPass:
             rag=SimpleNamespace(docs_dir="docs"),
             projects=SimpleNamespace(
                 enabled=True,
-                definitions={
-                    "recipe-app": SimpleNamespace(
-                        auto_index=True,
-                        home_dir="projects/recipe-app",
-                        source_roots=["projects/recipe-app"],
-                    )
-                },
+                definitions={},
             ),
         )
         ctx = SimpleNamespace(cfg=cfg, dry_run=False, workspace=tmp_path)
 
+        project_defn = SimpleNamespace(
+            auto_index=True,
+            home_dir="projects/recipe-app",
+            source_roots=["projects/recipe-app"],
+        )
         fake_reg = MagicMock()
+        fake_reg.get_all_project_definitions.return_value = {"recipe-app": project_defn}
         fake_reg.auto_discover.return_value = []
         fake_reg.sync_external_files.return_value = None
         fake_reg.list_docs.return_value = [{"file_path": "projects/recipe-app/tests/recipe.test.js"}]
@@ -3581,6 +3581,8 @@ class TestRagMaintenanceThirdPass:
             result = handler(ctx)
 
         mock_index.assert_called_once_with(str(test_file))
+        fake_reg.auto_discover.assert_called_once_with("recipe-app")
+        fake_reg.sync_external_files.assert_called_once_with("recipe-app")
         assert result.metrics["rag_files_indexed"] >= 1
         assert result.metrics["rag_chunks_created"] >= 4
 

@@ -1717,8 +1717,7 @@ class DocsRegistry:
         Returns list of newly registered file paths.
         """
         project_name = _validate_project_name(project_name)
-        cfg = self._get_config()
-        defn = cfg.projects.definitions.get(project_name)
+        defn = self.get_project_definition(project_name)
         if not defn:
             return []
 
