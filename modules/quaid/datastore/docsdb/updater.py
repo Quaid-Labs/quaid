@@ -159,6 +159,7 @@ def _run_git_command(args: List[str], deadline: float) -> subprocess.CompletedPr
         args,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         cwd=str(_workspace()),
         timeout=timeout,
     )
@@ -356,7 +357,7 @@ def _load_changelog() -> List[dict]:
     if not _changelog_path().exists():
         return []
     try:
-        return json.loads(_changelog_path().read_text())
+        return json.loads(_changelog_path().read_text(encoding="utf-8"))
     except (json.JSONDecodeError, IOError) as exc:
         logger.warning("Failed reading docs updater changelog; starting empty: %s", exc)
         return []
@@ -436,7 +437,7 @@ def _load_cleanup_state() -> Dict[str, dict]:
     if not _cleanup_state_path().exists():
         return {}
     try:
-        return json.loads(_cleanup_state_path().read_text())
+        return json.loads(_cleanup_state_path().read_text(encoding="utf-8"))
     except (json.JSONDecodeError, IOError) as exc:
         logger.warning("Failed reading docs cleanup state; starting empty: %s", exc)
         return {}

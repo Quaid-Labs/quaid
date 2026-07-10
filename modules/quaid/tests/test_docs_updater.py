@@ -493,6 +493,23 @@ class TestMapSourcesToDocs:
 class TestGetGitDiff:
     """Tests for get_git_diff()."""
 
+    def test_run_git_command_decodes_utf8_output(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            from datastore.docsdb import updater
+
+            captured = {}
+
+            def fake_run(*args, **kwargs):
+                captured["kwargs"] = kwargs
+                return MagicMock(returncode=0, stdout="café\n", stderr="")
+
+            monkeypatch.setattr(updater.subprocess, "run", fake_run)
+
+            result = updater._run_git_command(["git", "log"], deadline=updater.time.monotonic() + 10)
+
+            assert result.stdout == "café\n"
+            assert captured["kwargs"]["encoding"] == "utf-8"
+
     def test_returns_empty_for_nonexistent_file(self, tmp_path):
         with _adapter_patch(tmp_path):
             from datastore.docsdb.updater import get_git_diff
@@ -1184,6 +1201,26 @@ class TestCleanupStateLocking:
 
             assert "Failed reading docs updater changelog; starting empty" in caplog.text
 
+    def test_load_changelog_reads_utf8(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            path = updater._changelog_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("[]", encoding="utf-8")
+            seen = {}
+            real_read_text = Path.read_text
+
+            def tracking_read_text(self, *args, **kwargs):
+                if self == path:
+                    seen["encoding"] = kwargs.get("encoding")
+                return real_read_text(self, *args, **kwargs)
+
+            monkeypatch.setattr(Path, "read_text", tracking_read_text)
+
+            assert updater._load_changelog() == []
+            assert seen["encoding"] == "utf-8"
+
     def test_load_cleanup_state_logs_corrupt_file(self, tmp_path, caplog):
         with _adapter_patch(tmp_path):
             import datastore.docsdb.updater as updater
@@ -1196,6 +1233,26 @@ class TestCleanupStateLocking:
             assert updater._load_cleanup_state() == {}
 
             assert "Failed reading docs cleanup state; starting empty" in caplog.text
+
+    def test_load_cleanup_state_reads_utf8(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            path = updater._cleanup_state_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}", encoding="utf-8")
+            seen = {}
+            real_read_text = Path.read_text
+
+            def tracking_read_text(self, *args, **kwargs):
+                if self == path:
+                    seen["encoding"] = kwargs.get("encoding")
+                return real_read_text(self, *args, **kwargs)
+
+            monkeypatch.setattr(Path, "read_text", tracking_read_text)
+
+            assert updater._load_cleanup_state() == {}
+            assert seen["encoding"] == "utf-8"
 
     def test_reset_cleanup_state_honors_quaid_now(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):
