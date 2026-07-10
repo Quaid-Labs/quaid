@@ -4012,7 +4012,9 @@ def _check_janitor_health() -> str:
     except Exception as exc:
         if _is_invalid_quaid_now_error(exc):
             raise
-        pass
+        if _fail_hard_enabled():
+            raise
+        logger.warning("Janitor health check failed: %s", exc)
     return ""
 
 

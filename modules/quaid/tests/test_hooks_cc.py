@@ -1345,6 +1345,41 @@ def test_janitor_health_rejects_malformed_quaid_now(tmp_path, mock_adapter, monk
         hooks._check_janitor_health()
 
 
+def test_janitor_health_raises_checkpoint_parse_failure_when_fail_hard(tmp_path, mock_adapter, monkeypatch):
+    from core.interface import hooks
+
+    logs_dir = tmp_path / "logs"
+    checkpoint = logs_dir / "janitor" / "checkpoint-all.json"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_text("{bad json", encoding="utf-8")
+    mock_adapter.logs_dir.return_value = logs_dir
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(json.JSONDecodeError):
+        hooks._check_janitor_health()
+
+
+def test_janitor_health_logs_checkpoint_parse_failure_when_fail_open(
+    tmp_path,
+    mock_adapter,
+    monkeypatch,
+    caplog,
+):
+    from core.interface import hooks
+
+    logs_dir = tmp_path / "logs"
+    checkpoint = logs_dir / "janitor" / "checkpoint-all.json"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_text("{bad json", encoding="utf-8")
+    mock_adapter.logs_dir.return_value = logs_dir
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger=hooks.__name__):
+        assert hooks._check_janitor_health() == ""
+
+    assert "Janitor health check failed" in caplog.text
+
+
 # ===========================================================================
 # hook_inject — cursor seeding
 # ===========================================================================
