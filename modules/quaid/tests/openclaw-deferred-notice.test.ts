@@ -7,8 +7,12 @@ import { fileURLToPath } from "node:url";
 const childProcessState = vi.hoisted(() => ({
   daemonStartCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
   daemonRunningInstances: new Set<string>(),
+  deferredNoticeQueueError: undefined as Error | undefined,
+  deferredNoticeQueueStatus: undefined as number | undefined,
   deferredRelayStdout: "" as string,
   gatewayRestartSpawns: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
+  subagentHookError: undefined as Error | undefined,
+  subagentHookStatus: undefined as number | undefined,
 }));
 
 vi.mock("node:child_process", async () => {
@@ -51,6 +55,40 @@ vi.mock("node:child_process", async () => {
           stdout: childProcessState.deferredRelayStdout,
           stderr: "",
           output: [null, childProcessState.deferredRelayStdout, ""],
+          pid: 0,
+        } as any;
+      }
+      if (
+        typeof childProcessState.deferredNoticeQueueStatus === "number"
+        && inlineScript.includes("queue_deferred_notice")
+      ) {
+        if (childProcessState.deferredNoticeQueueError) {
+          throw childProcessState.deferredNoticeQueueError;
+        }
+        return {
+          status: childProcessState.deferredNoticeQueueStatus,
+          signal: null,
+          error: undefined,
+          stdout: "",
+          stderr: "queue failed",
+          output: [null, "", "queue failed"],
+          pid: 0,
+        } as any;
+      }
+      if (
+        typeof childProcessState.subagentHookStatus === "number"
+        && (normalizedArgs[0] === "hook-subagent-start" || normalizedArgs[0] === "hook-subagent-stop")
+      ) {
+        if (childProcessState.subagentHookError) {
+          throw childProcessState.subagentHookError;
+        }
+        return {
+          status: childProcessState.subagentHookStatus,
+          signal: null,
+          error: undefined,
+          stdout: "",
+          stderr: "hook failed",
+          output: [null, "", "hook failed"],
           pid: 0,
         } as any;
       }
@@ -215,8 +253,12 @@ function seedDeferredNoticeFixture(prefix: string, instanceId: string, message: 
 afterEach(() => {
   childProcessState.daemonStartCalls = [];
   childProcessState.daemonRunningInstances.clear();
+  childProcessState.deferredNoticeQueueError = undefined;
+  childProcessState.deferredNoticeQueueStatus = undefined;
   childProcessState.deferredRelayStdout = "";
   childProcessState.gatewayRestartSpawns = [];
+  childProcessState.subagentHookError = undefined;
+  childProcessState.subagentHookStatus = undefined;
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -224,6 +266,182 @@ afterEach(() => {
 });
 
 describe("openclaw deferred notices", () => {
+  it("raises deferred notice queue failures when failHard is enabled", async () => {
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-deferred-queue-failhard-home-",
+      "openclaw-main",
+      "[Quaid] queue failhard fixture",
+    );
+    const configPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "config.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    writeJson(configPath, {
+      ...config,
+      retrieval: { ...config.retrieval, failHard: true },
+    });
+    childProcessState.deferredNoticeQueueStatus = 1;
+
+    await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const adapterModule = await import("../adaptors/openclaw/adapter.js");
+
+    expect(() => (adapterModule as any).__test.queueDeferredNoticeForAgent(
+      "main",
+      "provider down",
+      { source: "provider" },
+    )).toThrow(/deferred notice queue failed/);
+
+    removeTempDir(fixture.home);
+  });
+
+  it("returns false for deferred notice queue failures when failHard is disabled", async () => {
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-deferred-queue-failopen-home-",
+      "openclaw-main",
+      "[Quaid] queue failopen fixture",
+    );
+    childProcessState.deferredNoticeQueueStatus = 1;
+
+    await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const adapterModule = await import("../adaptors/openclaw/adapter.js");
+
+    expect((adapterModule as any).__test.queueDeferredNoticeForAgent(
+      "main",
+      "provider down",
+      { source: "provider" },
+    )).toBe(false);
+
+    removeTempDir(fixture.home);
+  });
+
+  it("raises deferred notice queue exceptions when failHard is enabled", async () => {
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-deferred-queue-throw-failhard-home-",
+      "openclaw-main",
+      "[Quaid] queue throw failhard fixture",
+    );
+    const configPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "config.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    writeJson(configPath, {
+      ...config,
+      retrieval: { ...config.retrieval, failHard: true },
+    });
+    childProcessState.deferredNoticeQueueStatus = 1;
+    childProcessState.deferredNoticeQueueError = new Error("queue spawn failed");
+
+    await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const adapterModule = await import("../adaptors/openclaw/adapter.js");
+
+    expect(() => (adapterModule as any).__test.queueDeferredNoticeForAgent(
+      "main",
+      "provider down",
+      { source: "provider" },
+    )).toThrow(/queue spawn failed/);
+
+    removeTempDir(fixture.home);
+  });
+
+  it("raises subagent hook command failures when failHard is enabled", async () => {
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-subagent-hook-failhard-home-",
+      "openclaw-main",
+      "[Quaid] subagent failhard fixture",
+    );
+    const configPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "config.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    writeJson(configPath, {
+      ...config,
+      retrieval: { ...config.retrieval, failHard: true },
+    });
+    childProcessState.subagentHookStatus = 1;
+
+    await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const adapterModule = await import("../adaptors/openclaw/adapter.js");
+
+    expect(() => (adapterModule as any).__test.runSubagentHookCommand(
+      "hook-subagent-start",
+      { session_id: "child-session", agent_id: "worker" },
+      "main",
+    )).toThrow(/hook-subagent-start failed/);
+
+    removeTempDir(fixture.home);
+  });
+
+  it("raises subagent hook command exceptions when failHard is enabled", async () => {
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-subagent-hook-throw-failhard-home-",
+      "openclaw-main",
+      "[Quaid] subagent throw failhard fixture",
+    );
+    const configPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "config.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    writeJson(configPath, {
+      ...config,
+      retrieval: { ...config.retrieval, failHard: true },
+    });
+    childProcessState.subagentHookStatus = 1;
+    childProcessState.subagentHookError = new Error("hook spawn failed");
+
+    await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const adapterModule = await import("../adaptors/openclaw/adapter.js");
+
+    expect(() => (adapterModule as any).__test.runSubagentHookCommand(
+      "hook-subagent-start",
+      { session_id: "child-session", agent_id: "worker" },
+      "main",
+    )).toThrow(/hook spawn failed/);
+
+    removeTempDir(fixture.home);
+  });
+
+  it("returns false for subagent hook command failures when failHard is disabled", async () => {
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-subagent-hook-failopen-home-",
+      "openclaw-main",
+      "[Quaid] subagent failopen fixture",
+    );
+    childProcessState.subagentHookStatus = 1;
+
+    await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const adapterModule = await import("../adaptors/openclaw/adapter.js");
+
+    expect((adapterModule as any).__test.runSubagentHookCommand(
+      "hook-subagent-start",
+      { session_id: "child-session", agent_id: "worker" },
+      "main",
+    )).toBe(false);
+
+    removeTempDir(fixture.home);
+  });
+
   it("clears stuck before_prompt_build in-flight turns after a hard timeout", async () => {
     vi.useFakeTimers();
     vi.stubEnv("QUAID_BEFORE_PROMPT_BUILD_IN_FLIGHT_TIMEOUT_MS", "25");

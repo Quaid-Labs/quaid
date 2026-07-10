@@ -945,6 +945,11 @@ function queueDeferredNoticeForAgent(agentLabel, message, {
         stderr: String(result.stderr || "").trim().slice(0, 500),
         error: String(result.error?.message || "")
       });
+      if (isFailHardEnabled()) {
+        throw new Error(
+          `deferred notice queue failed status=${String(result.status ?? "unknown")}: ${String(result.stderr || result.error?.message || "").trim()}`
+        );
+      }
       return false;
     }
     return true;
@@ -956,6 +961,9 @@ function queueDeferredNoticeForAgent(agentLabel, message, {
       source,
       error: String(err?.message || err)
     });
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     return false;
   }
 }
@@ -977,6 +985,11 @@ function runSubagentHookCommand(command, payload, agentLabel) {
         stderr: String(result.stderr || "").trim().slice(0, 500),
         error: String(result.error?.message || "")
       });
+      if (isFailHardEnabled()) {
+        throw new Error(
+          `${command} failed status=${String(result.status ?? "unknown")}: ${String(result.stderr || result.error?.message || "").trim()}`
+        );
+      }
       return false;
     }
     writeHookTrace("subagent.hook_command_done", {
@@ -994,6 +1007,9 @@ function runSubagentHookCommand(command, payload, agentLabel) {
       agent_label: agentLabel,
       error: String(err?.message || err)
     });
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     return false;
   }
 }
@@ -8642,6 +8658,8 @@ const __test = {
   parseJsonObjectFromProcessStdout,
   buildDeferredNoticeVisibleReply,
   deliverDeferredNoticesViaChannel,
+  queueDeferredNoticeForAgent,
+  runSubagentHookCommand,
   extractOpenAICodexAccountId: _extractOpenAICodexAccountId,
   extractOpenAICodexText: _extractOpenAICodexText,
   buildOpenAICodexOAuthBody: _buildOpenAICodexOAuthBody,
