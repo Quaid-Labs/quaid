@@ -76,6 +76,11 @@ def test_effective_llm_timeout_invalid_value_raises_when_failhard(caplog):
     assert "Invalid memorydb maintenance LLM timeout 'not-a-number'; using default 42.0s" in caplog.text
 
 
+def test_effective_llm_timeout_honors_positive_requested_value():
+    assert maintenance_ops._effective_llm_timeout(300.0, 60.0) == 300.0
+    assert maintenance_ops._effective_llm_timeout(3.0, 60.0) == 5.0
+
+
 def test_janitor_metrics_elapsed_time_uses_monotonic(monkeypatch):
     monotonic_values = iter([100.0, 101.0, 104.5, 108.0])
     monkeypatch.setattr(maintenance_ops.time, "monotonic", lambda: next(monotonic_values))

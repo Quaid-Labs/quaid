@@ -126,7 +126,7 @@ def _quaid_now() -> datetime:
 
 
 def _effective_llm_timeout(requested_seconds: Optional[float], default_seconds: float) -> float:
-    """Bound per-call timeout by remaining budget when provided."""
+    """Use an explicit per-call timeout when provided, with a small safety floor."""
     if requested_seconds is None:
         return float(default_seconds)
     try:
@@ -143,7 +143,7 @@ def _effective_llm_timeout(requested_seconds: Optional[float], default_seconds: 
         return float(default_seconds)
     if requested <= 0:
         return float(default_seconds)
-    return max(5.0, min(float(default_seconds), requested))
+    return max(5.0, requested)
 
 
 def _janitor_embedding_timeout_seconds() -> float:
