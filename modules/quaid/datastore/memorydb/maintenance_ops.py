@@ -1838,7 +1838,13 @@ JSON array only:"""
         idx = item.get("pair")
         if isinstance(idx, int) and 1 <= idx <= len(pairs):
             if item.get("action") == "merge":
-                results[idx - 1] = {"action": "merge", "merged_text": item.get("merged_text", "")}
+                merged_text = str(item.get("merged_text") or "").strip()
+                if not merged_text:
+                    warning = f"Batch duplicate pair {idx} returned merge without merged_text; skipping"
+                    logger.warning(warning)
+                    metrics.add_warning(warning)
+                    continue
+                results[idx - 1] = {"action": "merge", "merged_text": merged_text}
             elif item.get("action") == "keep_both":
                 results[idx - 1] = None  # not a duplicate
 

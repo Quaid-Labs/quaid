@@ -449,6 +449,26 @@ def test_batch_duplicate_check_includes_temporal_context_in_prompt(monkeypatch):
     assert "different dates or validity periods" in captured["prompt"]
 
 
+def test_batch_duplicate_check_skips_merge_without_merged_text(monkeypatch, caplog):
+    def fake_call_fast_reasoning(_prompt, **_kwargs):
+        return ('[{"pair": 1, "action": "merge"}]', 0.01)
+
+    monkeypatch.setattr(maintenance_ops, "call_fast_reasoning", fake_call_fast_reasoning)
+    metrics = maintenance_ops.JanitorMetrics()
+    pairs = [{
+        "text_a": "Alex keeps a repair log",
+        "text_b": "Alex keeps a repair log",
+        "similarity": 0.99,
+    }]
+
+    with caplog.at_level("WARNING", logger=maintenance_ops.__name__):
+        result = maintenance_ops.batch_duplicate_check(pairs, metrics)
+
+    assert result == [None]
+    assert "merge without merged_text" in caplog.text
+    assert any("merge without merged_text" in item["warning"] for item in metrics.warnings)
+
+
 def test_fix_vec_nodes_insert_error_respects_fail_hard():
     class _ConnRecovering:
         def execute(self, sql, params):
