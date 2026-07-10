@@ -550,6 +550,7 @@ def test_known_project_worker_exit_raises_when_failhard(monkeypatch, caplog):
     monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
     monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: None)
     monkeypatch.setattr(supervisor.project_docs, "read_state", lambda _project: {})
+    monkeypatch.setattr(supervisor.project_docs, "project_is_registered_for_worker", lambda _project: True)
     monkeypatch.setattr(supervisor.project_docs, "utc_now", lambda: "2026-06-18T00:00:00+00:00")
     monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda project, updates: merged.append((project, updates)) or {})
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
@@ -601,6 +602,30 @@ def test_known_project_worker_exit_clean_marker_does_not_raise_failhard(monkeypa
     assert "exited unexpectedly" not in caplog.text
 
 
+def test_known_project_worker_exit_after_project_delete_does_not_raise_failhard(monkeypatch, caplog):
+    from core import project_docs_supervisor as supervisor
+
+    known_workers = {"demo": 1234}
+
+    monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "project_is_registered_for_worker", lambda _project: False)
+    monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "read_state", lambda _project: {})
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "merge_state",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("deleted project should not mark error")),
+    )
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("INFO", logger=supervisor.__name__):
+        assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
+
+    assert known_workers == {}
+    assert "exited after project deletion" in caplog.text
+    assert "exited unexpectedly" not in caplog.text
+
+
 def test_known_project_worker_exit_marker_pid_mismatch_still_raises_failhard(monkeypatch):
     from core import project_docs_supervisor as supervisor
 
@@ -614,6 +639,7 @@ def test_known_project_worker_exit_marker_pid_mismatch_still_raises_failhard(mon
     )
     monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: None)
     monkeypatch.setattr(supervisor.project_docs, "read_state", lambda _project: {})
+    monkeypatch.setattr(supervisor.project_docs, "project_is_registered_for_worker", lambda _project: True)
     monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
 
@@ -634,6 +660,7 @@ def test_known_project_worker_exit_failed_marker_still_raises_failhard(monkeypat
     )
     monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: None)
     monkeypatch.setattr(supervisor.project_docs, "read_state", lambda _project: {})
+    monkeypatch.setattr(supervisor.project_docs, "project_is_registered_for_worker", lambda _project: True)
     monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
 
@@ -653,6 +680,7 @@ def test_known_project_worker_exit_allows_retry_when_failopen(monkeypatch):
     monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
     monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: None)
     monkeypatch.setattr(supervisor.project_docs, "read_state", lambda _project: {})
+    monkeypatch.setattr(supervisor.project_docs, "project_is_registered_for_worker", lambda _project: True)
     monkeypatch.setattr(supervisor.project_docs, "utc_now", lambda: "2026-06-18T00:00:00+00:00")
     monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda project, updates: merged.append((project, updates)) or {})
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)

@@ -529,9 +529,9 @@ def _handle_known_project_worker_exit(project: str, known_workers: Dict[str, int
         known_workers.pop(project, None)
         return True
     message = f"project docs worker for {project} exited unexpectedly pid={known_pid}"
-    _LOGGER.warning(message)
     request = project_docs.read_update_request(project)
     if request:
+        _LOGGER.warning(message)
         status = str(request.get("status") or "").strip().lower()
         if status in {"failed", "completed", "cancelled"}:
             _LOGGER.info(
@@ -569,6 +569,15 @@ def _handle_known_project_worker_exit(project: str, known_workers: Dict[str, int
             )
             known_workers.pop(project, None)
             return True
+        if not project_docs.project_is_registered_for_worker(project):
+            _LOGGER.info(
+                "project docs worker for %s exited after project deletion pid=%s; containing supervisor-level raise",
+                project,
+                known_pid,
+            )
+            known_workers.pop(project, None)
+            return True
+        _LOGGER.warning(message)
         project_docs.merge_state(
             project,
             {
