@@ -2847,7 +2847,7 @@ class TestHookInjectRecallResilience:
                 monkeypatch=monkeypatch,
             )
 
-    def test_hook_inject_passes_explicit_recall_timeout_budget(
+    def test_hook_inject_honors_configured_recall_timeout_budget(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
         from core import extraction_daemon
@@ -2876,10 +2876,10 @@ class TestHookInjectRecallResilience:
                 monkeypatch=monkeypatch,
             )
 
-        assert captured["timeout_ms"] == 30_000
+        assert captured["timeout_ms"] == 3_000
         assert captured["return_meta"] is True
 
-    def test_hook_inject_preserves_operator_recall_timeout_above_floor(
+    def test_hook_inject_preserves_operator_recall_timeout_above_default(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
         from core import extraction_daemon
@@ -2909,6 +2909,40 @@ class TestHookInjectRecallResilience:
             )
 
         assert captured["timeout_ms"] == 45_000
+
+    def test_hook_inject_uses_fallback_recall_timeout_when_config_unavailable(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_quaid_agents_baseline_context", lambda: "")
+        monkeypatch.setattr(
+            "lib.config.get_injection_timeout_ms",
+            lambda default=3000: (_ for _ in ()).throw(RuntimeError("config unavailable")),
+        )
+
+        captured = {}
+
+        def fake_recall_fast(**kwargs):
+            captured.update(kwargs)
+            return [], None
+
+        with patch("core.interface.api.recall_fast", side_effect=fake_recall_fast), \
+             patch("core.interface.api.projects_search_docs", return_value=None):
+            _run_hook_inject(
+                {
+                    "prompt": "What grinder do I use for my espresso setup?",
+                    "session_id": "sess-timeout-budget-config-failure",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        assert captured["timeout_ms"] == 30_000
 
     def test_recall_fast_non_timeout_exception_surfaces_when_fail_hard_enabled(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch

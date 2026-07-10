@@ -48,7 +48,7 @@ _RULES_FILE_PROVENANCE = (
 _COMPACT_IDENTITY_CONTEXT_MAX_CHARS = 9000
 _IDENTITY_CONTEXT_FILES = ("USER.md", "SOUL.md", "ENVIRONMENT.md")
 _TURN_REFRESH_PARALLEL_REPLAY_SECONDS = 5
-_HOOK_INJECT_RECALL_TIMEOUT_FLOOR_MS = 30_000
+_HOOK_INJECT_RECALL_TIMEOUT_FALLBACK_MS = 30_000
 _SAFE_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _CODEX_TOOL_OUTPUT_SECRET_PATTERNS = (
     re.compile(
@@ -79,19 +79,16 @@ def _daemon_start_env() -> dict[str, str]:
 def _hook_inject_recall_timeout_ms() -> int:
     """Recall budget for hook injection.
 
-    The lightweight config default is 3s, which is too short for normal local
-    vector recall when Ollama is warm or lightly contended.  Keep operator
-    overrides above the floor, but enforce a 30s floor so hook injection uses
-    the normal recall budget.  Recall may still use strong DB-local lexical
-    preflight inside that budget when exact stored evidence is already indexed.
+    Honor the configured pre-injection budget.  Use the legacy 30s budget only
+    if lightweight config lookup fails before a concrete setting is available.
     """
     try:
         from lib.config import get_injection_timeout_ms
 
-        configured = int(get_injection_timeout_ms(_HOOK_INJECT_RECALL_TIMEOUT_FLOOR_MS))
+        configured = int(get_injection_timeout_ms(_HOOK_INJECT_RECALL_TIMEOUT_FALLBACK_MS))
     except Exception:
-        configured = _HOOK_INJECT_RECALL_TIMEOUT_FLOOR_MS
-    return max(_HOOK_INJECT_RECALL_TIMEOUT_FLOOR_MS, configured)
+        return _HOOK_INJECT_RECALL_TIMEOUT_FALLBACK_MS
+    return max(1, configured)
 
 
 def _fail_hard_enabled() -> bool:
