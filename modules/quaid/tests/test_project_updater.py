@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+from contextlib import contextmanager
 from datetime import timezone
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -359,6 +360,72 @@ class TestAppendProjectLogs:
         assert first["history_entries_written"] == 1
         assert second["history_entries_written"] == 0
         assert history.count("Replay-safe queue entry") == 1
+
+    def test_project_log_append_holds_history_lock_across_read_and_write(self, setup_env, monkeypatch):
+        from datastore.docsdb import project_updater
+
+        project_log = (setup_env / "projects" / "test-project" / "PROJECT.log").resolve(strict=False)
+        events = []
+        lock_state = {"held": False}
+        real_read_text = Path.read_text
+        real_open = Path.open
+
+        @contextmanager
+        def _tracking_lock(path):
+            assert Path(path).resolve(strict=False) == project_log
+            events.append("lock")
+            lock_state["held"] = True
+            try:
+                yield
+            finally:
+                events.append("unlock")
+                lock_state["held"] = False
+
+        def _read_text(path, *args, **kwargs):
+            if Path(path).resolve(strict=False) == project_log:
+                events.append(("read", lock_state["held"]))
+            return real_read_text(path, *args, **kwargs)
+
+        class _WriteTrackingFile:
+            def __init__(self, fh):
+                self._fh = fh
+
+            def __enter__(self):
+                self._fh.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self._fh.__exit__(*args)
+
+            def write(self, data):
+                events.append(("write", lock_state["held"]))
+                return self._fh.write(data)
+
+            def __getattr__(self, name):
+                return getattr(self._fh, name)
+
+        def _open(path, *args, **kwargs):
+            mode = args[0] if args else kwargs.get("mode", "r")
+            fh = real_open(path, *args, **kwargs)
+            if Path(path).resolve(strict=False) == project_log and "a" in mode:
+                return _WriteTrackingFile(fh)
+            return fh
+
+        monkeypatch.setattr(project_updater, "_project_history_log_lock", _tracking_lock)
+        monkeypatch.setattr(Path, "read_text", _read_text)
+        monkeypatch.setattr(Path, "open", _open)
+
+        metrics = project_updater.append_project_logs(
+            {"test-project": ["Session 5: Lock covered history"]},
+            trigger="Reset",
+            date_str="2026-03-06",
+            dry_run=False,
+            index_history=False,
+            update_project_md=False,
+        )
+
+        assert metrics["history_entries_written"] == 1
+        assert events == ["lock", ("read", True), ("write", True), "unlock"]
 
     def test_can_append_project_log_without_updating_project_md(self, setup_env):
         from datastore.docsdb.project_updater import append_project_logs

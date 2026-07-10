@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+from contextlib import contextmanager
 import logging
 import os
 import re
@@ -40,6 +41,42 @@ from lib.runtime_context import (
 from lib.fail_policy import is_fail_hard_enabled
 
 PROJECT_HISTORY_FILENAME = "PROJECT.log"
+
+
+@contextmanager
+def _project_history_log_lock(log_path: Path):
+    lock_path = log_path.with_name(f".{log_path.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("a+", encoding="utf-8")
+    locked = False
+    try:
+        try:
+            import fcntl  # type: ignore
+
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            locked = True
+        except (ImportError, OSError) as exc:
+            logger.warning("PROJECT.log lock unavailable for %s; proceeding without lock: %s", log_path, exc)
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Failed to acquire PROJECT.log lock: {log_path}") from exc
+        yield
+    finally:
+        release_exc: Optional[OSError] = None
+        if locked:
+            try:
+                import fcntl  # type: ignore
+
+                fcntl.flock(handle, fcntl.LOCK_UN)
+            except OSError as exc:
+                logger.warning("Failed to release PROJECT.log lock for %s: %s", log_path, exc)
+                if is_fail_hard_enabled():
+                    release_exc = exc
+        try:
+            handle.close()
+        finally:
+            if release_exc is not None:
+                raise RuntimeError(f"Failed to release PROJECT.log lock: {log_path}") from release_exc
+
 
 def _workspace() -> Path:
     return get_workspace_dir()
@@ -391,25 +428,26 @@ def append_project_logs(
             return 0
         log_path = project_md_path.with_name(PROJECT_HISTORY_FILENAME)
         lines = [f"- [{record['created_at']}] {record['text']}" for record in normalized]
-        existing_lines: set[str] = set()
-        try:
-            existing_lines = {
-                line.strip()
-                for line in log_path.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            }
-        except FileNotFoundError:
-            existing_lines = set()
-        except OSError as exc:
-            if is_fail_hard_enabled():
-                raise
-            logger.warning("append_project_logs: failed reading existing PROJECT.log %s: %s", log_path, exc)
-        lines = [line for line in lines if line not in existing_lines]
-        if not lines:
-            return 0
-        with log_path.open("a", encoding="utf-8") as fh:
-            fh.write("\n".join(lines) + "\n")
-        return len(lines)
+        with _project_history_log_lock(log_path):
+            existing_lines: set[str] = set()
+            try:
+                existing_lines = {
+                    line.strip()
+                    for line in log_path.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                }
+            except FileNotFoundError:
+                existing_lines = set()
+            except OSError as exc:
+                if is_fail_hard_enabled():
+                    raise
+                logger.warning("append_project_logs: failed reading existing PROJECT.log %s: %s", log_path, exc)
+            lines = [line for line in lines if line not in existing_lines]
+            if not lines:
+                return 0
+            with log_path.open("a", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + "\n")
+            return len(lines)
 
     def _index_written_history_log(project_name: str, project_md_path: Path) -> int:
         log_path = project_md_path.with_name(PROJECT_HISTORY_FILENAME)
