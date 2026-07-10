@@ -7066,6 +7066,7 @@ notify_user(${JSON.stringify(message)})
           : projectPlacementContext;
         writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
       };
+      let identityRefreshAutoInjectContinued = false;
       if (isSystemEnabled("projects")) {
         try {
           const identityContext = await promptFacade.injectProjectContext(undefined, {
@@ -7094,8 +7095,9 @@ notify_user(${JSON.stringify(message)})
           promptInstanceId,
         );
         if (refreshedIdentityContext) {
+          let modelConfigNotice = "";
           if (shouldValidatePromptModelConfigForTurn(isAutoInjectEnabled(getMemoryConfig()), promptAgentLabel)) {
-            const modelConfigNotice = await validatePromptModelConfigForTurn();
+            modelConfigNotice = await validatePromptModelConfigForTurn();
             if (modelConfigNotice) {
               const providerNoticeContext = formatImmediateProviderNoticeContext(modelConfigNotice);
               if (providerNoticeContext) {
@@ -7107,46 +7109,66 @@ notify_user(${JSON.stringify(message)})
             }
           }
           injectFilePlacementReminder(sessionKeyDocs);
-          return emitIdentityOnlyRefresh(refreshedIdentityContext, sessionKeyDocs);
-        }
-        writeHookTrace("hook.docs_gate_check", {
-          session_id: sessionKeyDocs,
-          in_set: projectDocsInjectedSessions.has(sessionKeyDocs),
-          event_session_id: String(event?.sessionId || ""),
-          ctx_session_id: String(ctx?.sessionId || ""),
-          event_session_key: String(event?.sessionKey || event?.targetSessionKey || ""),
-          ctx_session_key: String(ctx?.sessionKey || ""),
-        });
-        if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
-          try {
-            const hookCwd = String(event?.cwd || ctx?.cwd || process.cwd() || "");
-            const projectDocs = await promptFacade.injectProjectContext(undefined, { cwd: hookCwd });
-            projectDocsInjectedSessions.add(sessionKeyDocs);
-            if (projectDocs) {
-              appendSystemContext = projectDocs;
-              writeHookTrace("hook.project_docs_injected", { session_id: sessionKeyDocs, len: projectDocs.length });
-            }
-          } catch (err: unknown) {
-            console.warn(`[quaid] Project docs injection failed: ${(err as Error)?.message || String(err)}`);
+          const identityRefreshQuery = selectAutoInjectQuery(
+            event,
+            promptLastUserMessageQuery,
+            nowMs,
+            promptSessionId,
+          );
+          const shouldRunAutoInjectAfterIdentityRefresh = (
+            !modelConfigNotice
+            && identityRefreshQuery.query.length >= 3
+            && !PROMPT_RELAY_SKIP_RE.test(identityRefreshQuery.query)
+            && !identityRefreshQuery.query.startsWith("Extract memorable facts and journal entries from this conversation:")
+            && !promptFacade.isInternalMaintenancePrompt(identityRefreshQuery.query)
+          );
+          if (!shouldRunAutoInjectAfterIdentityRefresh) {
+            return emitIdentityOnlyRefresh(refreshedIdentityContext, sessionKeyDocs);
           }
-        }
-        if (refreshedIdentityContext) {
           appendSystemContext = appendSystemContext
             ? `${appendSystemContext}\n\n${refreshedIdentityContext}`
             : refreshedIdentityContext;
-          // OC Matrix prompt assembly has dropped both appendSystemContext and
-          // prependContext on live M7 runs. Put refreshes on the highest-priority
-          // system-prepend surface as well so edited identity files are visible
-          // immediately after /new. This appends after transient overrides and
-          // before the placement rules added below in the single string OC consumes.
           prependSystemContext = prependSystemContext
             ? `${prependSystemContext}\n\n${refreshedIdentityContext}`
             : refreshedIdentityContext;
+          prependContextParts.push(refreshedIdentityContext);
+          identityRefreshAutoInjectContinued = true;
+          writeHookTrace("hook.before_prompt_build.identity_refresh_continued", {
+            session_id: promptSessionId,
+            session_key: sessionKeyDocs,
+            instance_id: promptInstanceId,
+            query: identityRefreshQuery.query.slice(0, 80),
+            source: identityRefreshQuery.source,
+            context_len: refreshedIdentityContext.length,
+          });
         }
-        // Prepend mandatory file-placement rules on EVERY turn (not just first).
-        // appendSystemContext (project docs) is gated once per session — expensive.
-        // prependSystemContext (placement rules) is a cheap template — always inject.
-        injectFilePlacementReminder(sessionKeyDocs);
+        if (!identityRefreshAutoInjectContinued) {
+          writeHookTrace("hook.docs_gate_check", {
+            session_id: sessionKeyDocs,
+            in_set: projectDocsInjectedSessions.has(sessionKeyDocs),
+            event_session_id: String(event?.sessionId || ""),
+            ctx_session_id: String(ctx?.sessionId || ""),
+            event_session_key: String(event?.sessionKey || event?.targetSessionKey || ""),
+            ctx_session_key: String(ctx?.sessionKey || ""),
+          });
+          if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
+            try {
+              const hookCwd = String(event?.cwd || ctx?.cwd || process.cwd() || "");
+              const projectDocs = await promptFacade.injectProjectContext(undefined, { cwd: hookCwd });
+              projectDocsInjectedSessions.add(sessionKeyDocs);
+              if (projectDocs) {
+                appendSystemContext = projectDocs;
+                writeHookTrace("hook.project_docs_injected", { session_id: sessionKeyDocs, len: projectDocs.length });
+              }
+            } catch (err: unknown) {
+              console.warn(`[quaid] Project docs injection failed: ${(err as Error)?.message || String(err)}`);
+            }
+          }
+          // Prepend mandatory file-placement rules on EVERY turn (not just first).
+          // appendSystemContext (project docs) is gated once per session — expensive.
+          // prependSystemContext (placement rules) is a cheap template — always inject.
+          injectFilePlacementReminder(sessionKeyDocs);
+        }
       }
 
       // Helper: carry any built docs context through all early returns.

@@ -568,7 +568,7 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
-  it("uses identity-only context on the post-compaction refresh turn", async () => {
+  it("continues auto-injection on the post-compaction refresh turn with a cached user query", async () => {
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
     const fixture = seedDeferredNoticeFixture(
       "quaid-oc-compaction-identity-only-home-",
@@ -599,7 +599,7 @@ describe("openclaw deferred notices", () => {
       ok: true,
       status: 200,
       statusText: "OK",
-      text: async () => "OK",
+      text: async () => JSON.stringify({ output_text: "OK" }),
     } as any));
 
     const plugin = await loadAdapterWithHomes(
@@ -632,7 +632,7 @@ describe("openclaw deferred notices", () => {
     const beforeCompactionHandler = beforeCompactionCall?.[1];
     const sessionId = "session-post-compact-identity-only";
     const sessionKey = "agent:main:matrix:identity-only";
-    const query = "What's the office plant named?";
+    const query = "What grinder do I use for espresso?";
 
     await messageReceivedHandler(
       { text: query, sessionId, sessionKey, timestamp: 1778267431707 },
@@ -644,7 +644,7 @@ describe("openclaw deferred notices", () => {
     );
 
     const memory = {
-      id: "mem-baratza-should-not-inject",
+      id: "mem-baratza-identity-refresh",
       text: "Solomon owns a Baratza Encore grinder and a Flair 58 espresso setup.",
       similarity: 1,
       via: "vector",
@@ -687,24 +687,22 @@ describe("openclaw deferred notices", () => {
       result?.appendSystemContext,
     ].map((value) => String(value || "")).join("\n");
     expect(rendered).toContain("Bartholomew");
+    expect(rendered).toContain("Baratza Encore");
     expect(String(result?.prependSystemContext || "")).toContain("[FILE PLACEMENT]");
     expect(String(result?.prependSystemContext || "")).toContain("misc--openclaw-main");
-    expect(rendered).not.toContain("Baratza Encore");
-    expect(String((result as any)?.prependContext || "")).not.toContain("<injected_memories>");
-    expect(log.mock.calls.some((call) => String(call.join(" ")).includes("Auto-injected"))).toBe(false);
+    expect(String((result as any)?.prependContext || "")).toContain("<injected_memories>");
+    expect(log.mock.calls.some((call) => String(call.join(" ")).includes("Auto-injected 1 memories"))).toBe(true);
 
     const traceRows = readHookTraceEvents(fixture.hiddenHome, "openclaw-main");
     expect(traceRows).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        event: "hook.before_prompt_build.context_emitted",
-        context_mode: "openclaw_identity_refresh",
-        recall_count: 0,
-        docs_count: 0,
+        event: "hook.before_prompt_build.identity_refresh_continued",
+        source: "message_received_cache",
       }),
     ]));
     const traceEvents = traceRows.map((row) => String(row.event || ""));
-    expect(traceEvents).not.toContain("hook.before_prompt_build.query_extracted");
-    expect(traceEvents).not.toContain("hook.before_prompt_build.injection_applied");
+    expect(traceEvents).toContain("hook.before_prompt_build.query_extracted");
+    expect(traceEvents).toContain("hook.before_prompt_build.injection_applied");
 
     fetchMock.mockRestore();
     warn.mockRestore();

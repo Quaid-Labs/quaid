@@ -5802,6 +5802,7 @@ ${refreshedIdentityContext}` : refreshedIdentityContext
 ${projectPlacementContext}` : projectPlacementContext;
         writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
       };
+      let identityRefreshAutoInjectContinued = false;
       if (isSystemEnabled2("projects")) {
         try {
           const identityContext = await promptFacade.injectProjectContext(void 0, {
@@ -5827,8 +5828,9 @@ ${identityContext}` : identityContext;
           promptInstanceId
         );
         if (refreshedIdentityContext) {
+          let modelConfigNotice = "";
           if (shouldValidatePromptModelConfigForTurn(isAutoInjectEnabled(getMemoryConfig2()), promptAgentLabel)) {
-            const modelConfigNotice = await validatePromptModelConfigForTurn();
+            modelConfigNotice = await validatePromptModelConfigForTurn();
             if (modelConfigNotice) {
               const providerNoticeContext = formatImmediateProviderNoticeContext(modelConfigNotice);
               if (providerNoticeContext) {
@@ -5840,38 +5842,57 @@ ${appendSystemContext}` : providerNoticeContext || modelConfigNotice;
             }
           }
           injectFilePlacementReminder(sessionKeyDocs);
-          return emitIdentityOnlyRefresh(refreshedIdentityContext, sessionKeyDocs);
-        }
-        writeHookTrace("hook.docs_gate_check", {
-          session_id: sessionKeyDocs,
-          in_set: projectDocsInjectedSessions.has(sessionKeyDocs),
-          event_session_id: String(event?.sessionId || ""),
-          ctx_session_id: String(ctx?.sessionId || ""),
-          event_session_key: String(event?.sessionKey || event?.targetSessionKey || ""),
-          ctx_session_key: String(ctx?.sessionKey || "")
-        });
-        if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
-          try {
-            const hookCwd = String(event?.cwd || ctx?.cwd || process.cwd() || "");
-            const projectDocs = await promptFacade.injectProjectContext(void 0, { cwd: hookCwd });
-            projectDocsInjectedSessions.add(sessionKeyDocs);
-            if (projectDocs) {
-              appendSystemContext = projectDocs;
-              writeHookTrace("hook.project_docs_injected", { session_id: sessionKeyDocs, len: projectDocs.length });
-            }
-          } catch (err) {
-            console.warn(`[quaid] Project docs injection failed: ${err?.message || String(err)}`);
+          const identityRefreshQuery = selectAutoInjectQuery(
+            event,
+            promptLastUserMessageQuery,
+            nowMs,
+            promptSessionId
+          );
+          const shouldRunAutoInjectAfterIdentityRefresh = !modelConfigNotice && identityRefreshQuery.query.length >= 3 && !PROMPT_RELAY_SKIP_RE.test(identityRefreshQuery.query) && !identityRefreshQuery.query.startsWith("Extract memorable facts and journal entries from this conversation:") && !promptFacade.isInternalMaintenancePrompt(identityRefreshQuery.query);
+          if (!shouldRunAutoInjectAfterIdentityRefresh) {
+            return emitIdentityOnlyRefresh(refreshedIdentityContext, sessionKeyDocs);
           }
-        }
-        if (refreshedIdentityContext) {
           appendSystemContext = appendSystemContext ? `${appendSystemContext}
 
 ${refreshedIdentityContext}` : refreshedIdentityContext;
           prependSystemContext = prependSystemContext ? `${prependSystemContext}
 
 ${refreshedIdentityContext}` : refreshedIdentityContext;
+          prependContextParts.push(refreshedIdentityContext);
+          identityRefreshAutoInjectContinued = true;
+          writeHookTrace("hook.before_prompt_build.identity_refresh_continued", {
+            session_id: promptSessionId,
+            session_key: sessionKeyDocs,
+            instance_id: promptInstanceId,
+            query: identityRefreshQuery.query.slice(0, 80),
+            source: identityRefreshQuery.source,
+            context_len: refreshedIdentityContext.length
+          });
         }
-        injectFilePlacementReminder(sessionKeyDocs);
+        if (!identityRefreshAutoInjectContinued) {
+          writeHookTrace("hook.docs_gate_check", {
+            session_id: sessionKeyDocs,
+            in_set: projectDocsInjectedSessions.has(sessionKeyDocs),
+            event_session_id: String(event?.sessionId || ""),
+            ctx_session_id: String(ctx?.sessionId || ""),
+            event_session_key: String(event?.sessionKey || event?.targetSessionKey || ""),
+            ctx_session_key: String(ctx?.sessionKey || "")
+          });
+          if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
+            try {
+              const hookCwd = String(event?.cwd || ctx?.cwd || process.cwd() || "");
+              const projectDocs = await promptFacade.injectProjectContext(void 0, { cwd: hookCwd });
+              projectDocsInjectedSessions.add(sessionKeyDocs);
+              if (projectDocs) {
+                appendSystemContext = projectDocs;
+                writeHookTrace("hook.project_docs_injected", { session_id: sessionKeyDocs, len: projectDocs.length });
+              }
+            } catch (err) {
+              console.warn(`[quaid] Project docs injection failed: ${err?.message || String(err)}`);
+            }
+          }
+          injectFilePlacementReminder(sessionKeyDocs);
+        }
       }
       const mergePrependContext = (base) => {
         const parts = [
