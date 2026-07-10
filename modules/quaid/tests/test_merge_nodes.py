@@ -657,24 +657,66 @@ class TestMergeEdgeMigrationAdvanced:
         assert log_row["resolution_reason"] == "merged duplicate pantry wording"
         assert log_row["merged_node_id"]
 
-    def test_missing_originals_still_creates_merge(self, tmp_path):
-        """Merge with non-existent original IDs still creates the merged node."""
+    def test_missing_originals_abort_without_orphan_merge(self, tmp_path):
+        """Merge with non-existent original IDs must not create an orphan merge."""
         from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
+        count_before = _count_nodes(graph)
 
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("datastore.memorydb.memory_graph._HAS_CONFIG", False):
+            with pytest.raises(RuntimeError, match="Cannot merge missing original nodes"):
+                _merge_nodes_into(
+                    graph,
+                    "Some fact that should still exist",
+                    ["nonexistent-id-aaa", "nonexistent-id-bbb"],
+                )
+
+        assert _count_nodes(graph) == count_before
+
+    def test_reads_originals_inside_merge_transaction(self, tmp_path):
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
+
+        graph, _ = _make_graph(tmp_path)
+        node_a = _store_and_get(graph, "Quaid keeps merge notes in the drawer", confidence=0.72)
+        node_b = _store_and_get(graph, "Quaid stores merge notes in the drawer", confidence=0.81)
+        executed_sql = []
+        original_get_conn = graph._get_conn
+
+        def _get_node_should_not_supply_merge_inputs(_node_id):
+            raise AssertionError("original merge inputs must be read through the transaction connection")
+
+        @contextmanager
+        def _tracking_conn():
+            with original_get_conn() as conn:
+                class _ProxyConn:
+                    def __getattr__(self, name):
+                        return getattr(conn, name)
+
+                    def execute(self, sql, params=()):
+                        executed_sql.append(str(sql).strip())
+                        return conn.execute(sql, params)
+
+                yield _ProxyConn()
+
+        with patch.object(graph, "get_node", side_effect=_get_node_should_not_supply_merge_inputs), \
+             patch.object(graph, "_get_conn", _tracking_conn), \
+             patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Some fact that should still exist",
-                ["nonexistent-id-aaa", "nonexistent-id-bbb"]
+                graph,
+                "Quaid keeps merge notes in the drawer",
+                [node_a.id, node_b.id],
+                source="dedup_merge",
             )
 
-        # Should still create the merged node (with defaults)
-        assert result is not None
-        assert result.get("id") is not None
-        merged = graph.get_node(result["id"])
-        assert merged is not None
+        with graph._get_conn() as conn:
+            row = conn.execute("SELECT confidence FROM nodes WHERE id = ?", (result["id"],)).fetchone()
+        assert executed_sql[0] == "BEGIN IMMEDIATE"
+        assert executed_sql[1].startswith("SELECT * FROM nodes WHERE id IN")
+        assert row["confidence"] == pytest.approx(0.81)
 
 
 # ===========================================================================

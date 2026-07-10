@@ -450,22 +450,6 @@ def _merge_nodes_into(
     if dry_run:
         return None
 
-    # Read originals to inherit their signals
-    originals = []
-    for oid in original_ids:
-        node = graph.get_node(oid)
-        if node:
-            originals.append(node)
-
-    # Inherit the strongest signals from originals
-    max_confidence = max((n.confidence for n in originals), default=0.9)
-    total_confirms = sum(n.confirmation_count for n in originals)
-    max_storage = max((n.storage_strength for n in originals), default=0.0)
-    # Use the earliest created_at
-    created_dates = [n.created_at for n in originals if n.created_at]
-    earliest_created = min(created_dates) if created_dates else None
-    session_ids = [n.session_id for n in originals if n.session_id]
-
     def _earliest_session_id(values: List[str]) -> Optional[str]:
         best: Optional[str] = None
         best_num: Optional[int] = None
@@ -484,14 +468,39 @@ def _merge_nodes_into(
                 best = text
         return best
 
-    earliest_session = _earliest_session_id(session_ids)
-    # Inherit owner from first original
-    owner = originals[0].owner_id if originals else _default_owner_id()
-    # Inherit category from first original (not hardcoded "fact")
-    # Node uses .type (PascalCase: "Person", "Fact", etc.) → store uses lowercase category
-    category = originals[0].type.lower() if originals else "fact"
-
     with graph._get_conn() as conn:
+        # Acquire the write slot before reading originals so concurrent janitor
+        # processes cannot both compute merge outputs from the same stale rows.
+        conn.execute("BEGIN IMMEDIATE")
+        source_fact_ids: List[str] = []
+        for oid in original_ids:
+            oid_text = str(oid or "").strip()
+            if oid_text and oid_text not in source_fact_ids:
+                source_fact_ids.append(oid_text)
+        if not source_fact_ids:
+            return None
+        placeholders = ",".join("?" for _ in source_fact_ids)
+        original_rows = conn.execute(
+            f"SELECT * FROM nodes WHERE id IN ({placeholders})",
+            source_fact_ids,
+        ).fetchall()
+        original_by_id = {str(row["id"]): graph._row_to_node(row) for row in original_rows}
+        originals = [original_by_id[oid] for oid in source_fact_ids if oid in original_by_id]
+        if len(originals) != len(source_fact_ids):
+            missing = sorted(set(source_fact_ids) - set(original_by_id.keys()))
+            raise RuntimeError(f"Cannot merge missing original nodes: {missing}")
+
+        # Inherit the strongest signals from originals using the transaction snapshot.
+        max_confidence = max((n.confidence for n in originals), default=0.9)
+        total_confirms = sum(n.confirmation_count for n in originals)
+        max_storage = max((n.storage_strength for n in originals), default=0.0)
+        created_dates = [n.created_at for n in originals if n.created_at]
+        earliest_created = min(created_dates) if created_dates else None
+        earliest_session = _earliest_session_id([n.session_id for n in originals if n.session_id])
+        owner = originals[0].owner_id
+        # Node uses .type (PascalCase: "Person", "Fact", etc.) → store uses lowercase category
+        category = originals[0].type.lower()
+
         # Create the merged node and remove originals in one transaction. This
         # prevents concurrent recall from seeing both versions and prevents
         # crash-only partial merges.
@@ -566,9 +575,7 @@ def _merge_nodes_into(
                 )
 
         # Migrate edges: repoint to merged node instead of deleting.
-        source_fact_ids = [oid for oid in original_ids if oid]
         if source_fact_ids:
-            placeholders = ",".join("?" for _ in source_fact_ids)
             migration_rows = conn.execute(
                 f"""
                 SELECT id, source_id, target_id, relation, attributes, weight,
@@ -647,7 +654,7 @@ def _merge_nodes_into(
         )
 
         # Delete originals
-        for oid in original_ids:
+        for oid in source_fact_ids:
             if contradiction_id:
                 conn.execute(
                     """
