@@ -660,30 +660,33 @@ class OpenClawAdapter(QuaidAdapter):
             print(f"[notify] Send failed on channel={self._log_value(channel)}: {err}", file=sys.stderr)
             return False
 
-        try:
-            if _send(effective_channel):
-                return True
-            # Fallback: if override channel fails, retry on the last active channel.
-            if channel_override and channel_override != info.channel:
-                print(
-                    f"[notify] Override channel failed; retrying with last channel={self._log_value(info.channel)}",
-                    file=sys.stderr,
-                )
-                fallback_channel = self._safe_cli_arg_value(info.channel)
-                if not fallback_channel:
-                    return False
-                return _send(fallback_channel)
-            return False
-        except subprocess.TimeoutExpired:
-            print("[notify] Send timed out", file=sys.stderr)
-            if is_fail_hard_enabled():
-                raise
-            return False
-        except Exception as e:
-            print(f"[notify] Error: {e}", file=sys.stderr)
-            if is_fail_hard_enabled():
-                raise
-            return False
+        def _send_or_report(channel: str) -> bool:
+            try:
+                return _send(channel)
+            except subprocess.TimeoutExpired:
+                print("[notify] Send timed out", file=sys.stderr)
+                if is_fail_hard_enabled():
+                    raise
+                return False
+            except Exception as e:
+                print(f"[notify] Error: {e}", file=sys.stderr)
+                if is_fail_hard_enabled():
+                    raise
+                return False
+
+        if _send_or_report(effective_channel):
+            return True
+        # Fallback: if override channel fails, retry on the last active channel.
+        if channel_override and channel_override != info.channel:
+            print(
+                f"[notify] Override channel failed; retrying with last channel={self._log_value(info.channel)}",
+                file=sys.stderr,
+            )
+            fallback_channel = self._safe_cli_arg_value(info.channel)
+            if not fallback_channel:
+                return False
+            return _send_or_report(fallback_channel)
+        return False
 
     def get_last_channel(self, session_key: str = "") -> Optional[ChannelInfo]:
         session_key = session_key or self._MAIN_SESSION_KEY

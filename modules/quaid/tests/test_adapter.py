@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import builtins
 from pathlib import Path
@@ -5494,6 +5495,35 @@ class TestNotifyEdgeCases:
             assert "--channel" in cmd
             idx = cmd.index("--channel")
             assert cmd[idx + 1] == "discord"
+
+    def test_notify_channel_override_timeout_falls_back_to_last_channel(self, monkeypatch):
+        adapter = OpenClawAdapter()
+        mock_info = ChannelInfo(
+            channel="matrix", target="!room:localhost", account_id="default",
+            session_key="agent:main:main",
+        )
+        monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
+        monkeypatch.setattr(adapter, "_resolve_channel_route", lambda _channel: None)
+        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: "openclaw")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False):
+            with patch(
+                "adaptors.openclaw.adapter.subprocess.run",
+                side_effect=[
+                    subprocess.TimeoutExpired(cmd=["openclaw"], timeout=30),
+                    mock_result,
+                ],
+            ) as mock_run:
+                result = adapter.notify("test", channel_override="telegram")
+
+        assert result is True
+        channels = []
+        for call in mock_run.call_args_list:
+            cmd = call.args[0]
+            channels.append(cmd[cmd.index("--channel") + 1])
+        assert channels == ["telegram", "matrix"]
 
     def test_notify_skips_non_routable_webchat_channel(self, monkeypatch, capsys):
         adapter = OpenClawAdapter()
