@@ -1094,6 +1094,60 @@ def test_register_module_routines_replaces_prior_failure_stub(monkeypatch, tmp_p
     assert second.metrics["ok"] == 1
 
 
+def test_register_module_routines_logs_import_failure_when_fail_open(monkeypatch, caplog, tmp_path):
+    registry = LifecycleRegistry()
+    monkeypatch.setattr("core.lifecycle.janitor_lifecycle.is_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(
+        "core.lifecycle.janitor_lifecycle.importlib.import_module",
+        lambda _name: (_ for _ in ()).throw(ImportError("simulated import failure")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="core.lifecycle.janitor_lifecycle"):
+        _register_module_routines(registry, "adaptors.fake.lifecycle", ["workspace"])
+
+    assert "Lifecycle module load failed: adaptors.fake.lifecycle: simulated import failure" in caplog.text
+    result = registry.run("workspace", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path))
+    assert result.errors and "Lifecycle module load failed" in result.errors[0]
+
+
+def test_register_module_routines_logs_missing_registrar_when_fail_open(monkeypatch, caplog, tmp_path):
+    module_name = "adaptors.fake.lifecycle"
+    registry = LifecycleRegistry()
+    monkeypatch.setattr("core.lifecycle.janitor_lifecycle.is_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(
+        "core.lifecycle.janitor_lifecycle.importlib.import_module",
+        lambda _name: ModuleType(module_name),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="core.lifecycle.janitor_lifecycle"):
+        _register_module_routines(registry, module_name, ["workspace"])
+
+    assert "Lifecycle module missing register_lifecycle_routines: adaptors.fake.lifecycle" in caplog.text
+    result = registry.run("workspace", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path))
+    assert result.errors and "Lifecycle module missing register_lifecycle_routines" in result.errors[0]
+
+
+def test_register_module_routines_logs_registration_failure_when_fail_open(monkeypatch, caplog, tmp_path):
+    module_name = "adaptors.fake.lifecycle"
+    registry = LifecycleRegistry()
+    monkeypatch.setattr("core.lifecycle.janitor_lifecycle.is_fail_hard_enabled", lambda: False)
+
+    mod = ModuleType(module_name)
+
+    def _registrar(_scoped, _result_type):
+        raise RuntimeError("registration failed")
+
+    mod.register_lifecycle_routines = _registrar
+    monkeypatch.setattr("core.lifecycle.janitor_lifecycle.importlib.import_module", lambda _name: mod)
+
+    with caplog.at_level(logging.WARNING, logger="core.lifecycle.janitor_lifecycle"):
+        _register_module_routines(registry, module_name, ["workspace"])
+
+    assert "Lifecycle registration failed: adaptors.fake.lifecycle: registration failed" in caplog.text
+    result = registry.run("workspace", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path))
+    assert result.errors and "Lifecycle registration failed" in result.errors[0]
+
+
 def test_register_module_routines_raises_import_failure_when_fail_hard(monkeypatch):
     registry = LifecycleRegistry()
     monkeypatch.setattr("core.lifecycle.janitor_lifecycle.is_fail_hard_enabled", lambda: True)

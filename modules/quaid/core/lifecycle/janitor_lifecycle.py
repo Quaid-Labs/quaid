@@ -573,6 +573,7 @@ def _register_module_routines(
         if is_fail_hard_enabled():
             raise
         msg = f"Lifecycle module load failed: {module_name}: {exc}"
+        logger.warning("%s", msg)
         for routine_name in expected_routines:
             _register_failure(routine_name, msg)
         return
@@ -580,6 +581,7 @@ def _register_module_routines(
     registrar = getattr(module, "register_lifecycle_routines", None)
     if not callable(registrar):
         msg = f"Lifecycle module missing register_lifecycle_routines: {module_name}"
+        logger.warning("%s", msg)
         for routine_name in expected_routines:
             _register_failure(routine_name, msg)
         return
@@ -609,6 +611,7 @@ def _register_module_routines(
         if is_fail_hard_enabled():
             raise
         msg = f"Lifecycle registration failed: {module_name}: {exc}"
+        logger.warning("%s", msg)
         for routine_name in expected_routines:
             if not registry.has(routine_name):
                 _register_failure(routine_name, msg)
