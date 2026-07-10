@@ -1420,16 +1420,20 @@ class DocsRegistry:
                     "source_author_id", "speaker_entity_id", "subject_entity_id",
                     "conversation_id", "visibility_scope", "sensitivity",
                     "participant_entity_ids", "provenance_confidence"}
-        updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+        nullable = {"title", "description", "source_files", "source_channel", "source_conversation_id",
+                    "source_author_id", "speaker_entity_id", "subject_entity_id",
+                    "conversation_id", "visibility_scope", "sensitivity",
+                    "participant_entity_ids", "provenance_confidence"}
+        updates = {k: v for k, v in kwargs.items() if k in allowed and (v is not None or k in nullable)}
         if not updates:
             return False
 
         # Serialize JSON fields
         if "tags" in updates:
             updates["tags"] = json.dumps(updates["tags"])
-        if "source_files" in updates:
+        if "source_files" in updates and updates["source_files"] is not None:
             updates["source_files"] = json.dumps(updates["source_files"])
-        if "participant_entity_ids" in updates:
+        if "participant_entity_ids" in updates and updates["participant_entity_ids"] is not None:
             updates["participant_entity_ids"] = json.dumps(updates["participant_entity_ids"])
         for field in (
             "source_channel",
@@ -1442,7 +1446,7 @@ class DocsRegistry:
             "sensitivity",
         ):
             if field in updates:
-                normalized = str(updates[field]).strip()
+                normalized = str(updates[field] or "").strip()
                 if field == "source_channel":
                     normalized = normalized.lower()
                 updates[field] = normalized or None

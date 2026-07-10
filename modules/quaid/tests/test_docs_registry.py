@@ -1151,6 +1151,22 @@ class TestUpdateMetadata:
         assert entry["source_conversation_id"] == "chat-1"
         assert entry["source_author_id"] == "operator-alias"
 
+    def test_update_metadata_clears_nullable_identity_scope_fields(self, setup_env):
+        r = _get_registry()
+        r.register(
+            "docs/test.md",
+            source_channel="telegram",
+            source_conversation_id="chat-1",
+            visibility_scope="source_shared",
+        )
+
+        assert r.update_metadata("docs/test.md", source_conversation_id=None, visibility_scope=None) is True
+
+        entry = r.get("docs/test.md")
+        assert entry["source_channel"] == "telegram"
+        assert entry["source_conversation_id"] is None
+        assert entry["visibility_scope"] is None
+
 
 class TestUpdateTimestamps:
     def test_update_indexed_at(self, setup_env):
