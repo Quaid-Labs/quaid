@@ -433,6 +433,22 @@ class TestConfigPathResolution:
         finally:
             config._config = old_config
 
+    def test_rag_null_min_similarity_uses_default(self, tmp_path):
+        import config
+
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({"rag": {"min_similarity": None}}), encoding="utf-8")
+
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+
+            assert cfg.rag.min_similarity == 0.3
+        finally:
+            config._config = old_config
+
     def test_load_from_json_file_reads_utf8(self, tmp_path):
         import config
         old_config = config._config

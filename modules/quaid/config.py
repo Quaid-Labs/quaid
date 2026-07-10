@@ -1573,7 +1573,7 @@ def _load_config_inner() -> MemoryConfig:
         max_chunks_per_document=rag_data.get('max_chunks_per_document', 5000),
         max_results=rag_data.get('max_results', 5),
         search_limit=rag_data.get('search_limit', 5),
-        min_similarity=rag_data.get('min_similarity', 0.3)
+        min_similarity=rag_data.get('min_similarity', 0.3) or 0.3
     )
 
     # Parse notifications config
