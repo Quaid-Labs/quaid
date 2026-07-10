@@ -836,6 +836,15 @@ def test_hard_delete_node_clears_alias_node_link_with_caller_connection(tmp_path
     assert row["canonical_name"] == "Douglas Quaid"
 
 
+def test_resolve_alias_treats_canonical_name_as_literal_text(tmp_path):
+    graph, _db_file = _make_graph(tmp_path)
+    graph.add_alias("codename", r"agent\1", owner_id="quaid")
+
+    result = graph.resolve_alias("Use codename today", owner_id="quaid")
+
+    assert result == r"Use agent\1 today"
+
+
 def test_get_fact_history_handles_long_supersession_chain(tmp_path):
     """Long-running fact histories should not depend on Python recursion depth."""
     import datastore.memorydb.memory_graph as mg

@@ -3604,7 +3604,7 @@ class MemoryGraph:
         for row in aliases:
             # Word-boundary replacement (case-insensitive)
             pattern = r'\b' + re.escape(row['alias']) + r'\b'
-            result = re.sub(pattern, row['canonical_name'], result, flags=re.IGNORECASE)
+            result = re.sub(pattern, lambda _match: row['canonical_name'], result, flags=re.IGNORECASE)
         return result
 
     def get_aliases(self, owner_id: str = None) -> list:
