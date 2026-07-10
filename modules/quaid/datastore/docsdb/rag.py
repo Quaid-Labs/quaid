@@ -1273,11 +1273,11 @@ class DocsRAG:
             if is_fail_hard_enabled():
                 raise RuntimeError("Failed to query docs index staleness") from exc
             logger.warning(
-                "Failed to query docs index staleness; skipping reindex for %d file(s): %s",
+                "Failed to query docs index staleness; scheduling reindex for %d file(s): %s",
                 len(requested_files),
                 exc,
             )
-            return {file_path: False for file_path in requested_files}
+            return {file_path: True for file_path in requested_files}
 
         result: Dict[str, bool] = {}
         for file_path in requested_files:

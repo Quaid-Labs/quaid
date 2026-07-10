@@ -700,7 +700,7 @@ class TestNeedsReindex:
             str(second): True,
         }
 
-    def test_needs_reindex_many_skips_reindex_on_lookup_failure_when_fail_open(self, tmp_path, caplog):
+    def test_needs_reindex_many_schedules_reindex_on_lookup_failure_when_fail_open(self, tmp_path, caplog):
         rag = _make_rag(tmp_path)
         first = tmp_path / "first.md"
         second = tmp_path / "second.md"
@@ -723,8 +723,8 @@ class TestNeedsReindex:
             result = rag.needs_reindex_many([str(first), str(second)])
 
         assert result == {
-            str(first): False,
-            str(second): False,
+            str(first): True,
+            str(second): True,
         }
         assert "Failed to query docs index staleness" in caplog.text
 
