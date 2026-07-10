@@ -4554,6 +4554,68 @@ class TestStoreDedup:
         assert result["dedup_telemetry"]["vec_query_count"] == 1
         assert result["dedup_telemetry"]["fts_query_count"] == 0
 
+    def test_load_dedup_candidates_vec_rebuild_uses_executemany(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Rows:
+            def __init__(self, rows):
+                self._rows = list(rows)
+
+            def fetchone(self):
+                return self._rows[0] if self._rows else None
+
+            def fetchall(self):
+                return list(self._rows)
+
+        class _Conn:
+            def __init__(self):
+                self.insert_execute_count = 0
+                self.executemany_calls = []
+
+            def execute(self, sql, params=()):
+                del params
+                normalized = " ".join(str(sql).split())
+                if normalized.startswith("SELECT 1 FROM vec_nodes LIMIT 0"):
+                    raise sqlite3.OperationalError("no such table: vec_nodes")
+                if normalized.startswith("SELECT embedding FROM nodes WHERE embedding IS NOT NULL"):
+                    return _Rows([{"embedding": b"packed"}])
+                if "n.id NOT IN (SELECT node_id FROM vec_nodes)" in normalized:
+                    return _Rows([
+                        {"id": "node-a", "embedding": b"packed-a"},
+                        {"id": "node-b", "embedding": b"packed-b"},
+                    ])
+                if normalized.startswith("INSERT OR REPLACE INTO vec_nodes"):
+                    self.insert_execute_count += 1
+                    return _Rows([])
+                if normalized.startswith("SELECT 1 FROM nodes n"):
+                    return _Rows([])
+                return _Rows([])
+
+            def executemany(self, sql, seq_of_params):
+                self.executemany_calls.append((str(sql), list(seq_of_params)))
+                return _Rows([])
+
+        conn = _Conn()
+        graph = SimpleNamespace(_ensure_vec_table=MagicMock())
+
+        rows, telemetry = mg._load_dedup_candidates_vec(
+            graph=graph,
+            conn=conn,
+            query_embedding=[0.1, 0.2],
+            owner_id=None,
+            rowid_min=None,
+            rowid_max=None,
+        )
+
+        assert rows == []
+        assert telemetry["vec_query_count"] == 0
+        assert conn.insert_execute_count == 0
+        assert len(conn.executemany_calls) == 1
+        assert conn.executemany_calls[0][1] == [
+            ("node-a", b"packed-a"),
+            ("node-b", b"packed-b"),
+        ]
+
     def test_vec_dedup_falls_back_to_fts_when_fail_hard_disabled(self, tmp_path):
         from datastore.memorydb.memory_graph import store
 

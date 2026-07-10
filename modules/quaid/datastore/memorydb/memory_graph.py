@@ -22974,10 +22974,10 @@ def _load_dedup_candidates_vec(
                   AND n.id NOT IN (SELECT node_id FROM vec_nodes)
             """
         ).fetchall()
-        for row in missing:
-            conn.execute(
+        if missing:
+            conn.executemany(
                 "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
-                (row["id"], row["embedding"]),
+                [(row["id"], row["embedding"]) for row in missing],
             )
 
     rowid_clause = ""
