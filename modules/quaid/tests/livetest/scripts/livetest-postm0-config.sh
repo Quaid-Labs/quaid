@@ -19,7 +19,8 @@
 #   capture.chunk_tokens: 1500
 #   claude-code only: models.fastReasoning: claude-haiku-4-5-20251001
 #   claude-code only: models.deepReasoning: claude-sonnet-4-6
-#   openclaw/codex only: models.deepReasoning: gpt-5.4
+#   openclaw only: models.deepReasoning: claude-sonnet-4-6
+#   codex only: models.deepReasoning: gpt-5.4
 #
 # Per-platform is the correct layer: platform config supersedes global, and
 # per-instance can override platform later (e.g. M4 idle-timeout flip on one
@@ -82,11 +83,12 @@ overrides = {
     'livetest': {'enableExtractionBufferLog': True},
     'capture': {'chunk_tokens': 1500},
 }
-if platform == 'claude-code':
+if platform in {'claude-code', 'openclaw'}:
     models = overrides.setdefault('models', {})
-    models['fastReasoning'] = 'claude-haiku-4-5-20251001'
     models['deepReasoning'] = 'claude-sonnet-4-6'
-elif platform in {'openclaw', 'codex'}:
+    if platform == 'claude-code':
+        models['fastReasoning'] = 'claude-haiku-4-5-20251001'
+elif platform == 'codex':
     overrides.setdefault('models', {})['deepReasoning'] = 'gpt-5.4'
 def merge(base, over):
     out = json.loads(json.dumps(base))
