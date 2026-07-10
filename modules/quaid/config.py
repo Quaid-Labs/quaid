@@ -124,9 +124,15 @@ def _platform_from_instance_name(instance_name: str) -> str:
 
 
 def _adapter_type_from_instance_config(root: Path) -> str:
+    config_path = root / "config.json"
     try:
-        payload = json.loads((root / "config.json").read_text(encoding="utf-8"))
-    except Exception:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return ""
+    except Exception as exc:
+        logger.warning("[config] could not read adapter type from %s: %s", config_path, exc)
+        if _is_fail_hard_enabled_for_config_load():
+            raise
         return ""
     adapter = payload.get("adapter") if isinstance(payload, dict) else None
     if not isinstance(adapter, dict):

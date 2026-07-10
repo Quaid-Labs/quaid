@@ -280,6 +280,49 @@ class TestConfigPathResolution:
         assert "shared/config/claude/config.json" not in str(paths[1])
         assert paths[2] == tmp_path / "shared" / "config" / "global" / "config.json"
 
+    def test_config_paths_missing_instance_config_uses_name_without_warning(self, tmp_path, caplog):
+        import config
+
+        root = tmp_path / "instances" / "codex-main"
+        root.mkdir(parents=True)
+
+        with patch.object(config, "_workspace_root", lambda: root), \
+             patch.object(config, "_quaid_home", lambda: tmp_path), \
+             caplog.at_level("WARNING", logger="config"):
+            paths = config._config_paths()
+
+        assert paths[1] == tmp_path / "shared" / "config" / "codex" / "config.json"
+        assert "could not read adapter type" not in caplog.text
+
+    def test_config_paths_bad_instance_config_warns_when_fail_open(self, tmp_path, caplog):
+        import config
+
+        root = tmp_path / "instances" / "legacy-main"
+        root.mkdir(parents=True)
+        (root / "config.json").write_text("{not-json", encoding="utf-8")
+
+        with patch.object(config, "_workspace_root", lambda: root), \
+             patch.object(config, "_quaid_home", lambda: tmp_path), \
+             patch.object(config, "_is_fail_hard_enabled_for_config_load", lambda: False), \
+             caplog.at_level("WARNING", logger="config"):
+            paths = config._config_paths()
+
+        assert paths[1] == tmp_path / "shared" / "config" / "legacy" / "config.json"
+        assert "could not read adapter type" in caplog.text
+
+    def test_config_paths_bad_instance_config_raises_when_failhard(self, tmp_path):
+        import config
+
+        root = tmp_path / "instances" / "claude-main"
+        root.mkdir(parents=True)
+        (root / "config.json").write_text("{not-json", encoding="utf-8")
+
+        with patch.object(config, "_workspace_root", lambda: root), \
+             patch.object(config, "_quaid_home", lambda: tmp_path), \
+             patch.object(config, "_is_fail_hard_enabled_for_config_load", lambda: True):
+            with pytest.raises(json.JSONDecodeError):
+                config._config_paths()
+
     def test_claude_code_platform_models_override_global_for_short_instance(self, tmp_path):
         import config
 
