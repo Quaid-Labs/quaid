@@ -4427,7 +4427,16 @@ def hook_subagent_stop(args):
             logs_dir.mkdir(parents=True, exist_ok=True)
             suffix = "".join(src.suffixes) or ".jsonl"
             dest = logs_dir / f"{child_session_id}{suffix}"
-            shutil.copyfile(src, dest)
+            tmp_dest = dest.with_name(f".{dest.name}.tmp.{os.getpid()}.{time.time_ns()}")
+            try:
+                shutil.copyfile(src, tmp_dest)
+                os.replace(tmp_dest, dest)
+            except BaseException:
+                try:
+                    tmp_dest.unlink()
+                except OSError:
+                    pass
+                raise
             return str(dest)
         except Exception as e:
             print(f"[quaid][subagent-stop] preserve warning: {e}", file=sys.stderr)

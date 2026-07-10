@@ -4643,3 +4643,54 @@ class TestSubagentHooks:
         assert recorded["child_id"] == "child-1"
         assert recorded["transcript_path"] == str(preserved)
         assert "completed child-1 under parent-1" in err
+
+    def test_hook_subagent_stop_preserve_replace_failure_keeps_existing_transcript(self, tmp_path, monkeypatch):
+        from core.interface import hooks
+
+        source = tmp_path / "child.jsonl"
+        source.write_text('{"role":"user","content":"new"}\n', encoding="utf-8")
+        logs_dir = tmp_path / "instances" / "pytest-runner" / "logs"
+        preserved = logs_dir / "quaid" / "sessions" / "child-1.jsonl"
+        preserved.parent.mkdir(parents=True)
+        preserved.write_text('{"role":"user","content":"old"}\n', encoding="utf-8")
+        adapter = _adapter_mock()
+        adapter.logs_dir.return_value = logs_dir
+        monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+        real_replace = os.replace
+
+        def fail_replace(src, dst):
+            src_path = Path(src)
+            dst_path = Path(dst)
+            if dst_path == preserved:
+                assert src_path.parent == preserved.parent
+                assert src_path.name.startswith(".child-1.jsonl.tmp.")
+                raise OSError("replace failed")
+            real_replace(src, dst)
+
+        monkeypatch.setattr(hooks.os, "replace", fail_replace)
+
+        recorded = {}
+
+        def fake_mark_complete(parent_session_id, child_id, transcript_path=None):
+            recorded["parent_session_id"] = parent_session_id
+            recorded["child_id"] = child_id
+            recorded["transcript_path"] = transcript_path
+
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry.mark_complete = fake_mark_complete
+        monkeypatch.setitem(sys.modules, "core.subagent_registry", fake_registry)
+
+        err = _run_hook_subagent_stop(
+            {
+                "session_id": "parent-1",
+                "agent_id": "child-1",
+                "agent_transcript_path": str(source),
+            },
+            monkeypatch=monkeypatch,
+        )
+
+        assert preserved.read_text(encoding="utf-8") == '{"role":"user","content":"old"}\n'
+        assert not list(preserved.parent.glob(".child-1.jsonl.tmp.*"))
+        assert recorded["transcript_path"] == str(source)
+        assert "preserve warning: replace failed" in err
+        assert "completed child-1 under parent-1" in err
