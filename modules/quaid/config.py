@@ -1320,7 +1320,7 @@ def _load_config_inner() -> MemoryConfig:
             _cfg_get(reranker_data, 'enabled', _cfg_get(retrieval_data, 'reranker_enabled', True)),
             True,
         ),
-        reranker_top_k=int(_cfg_get(reranker_data, 'top_k', _cfg_get(retrieval_data, 'reranker_top_k', 20))),
+        reranker_top_k=max(1, int(_cfg_get(reranker_data, 'top_k', _cfg_get(retrieval_data, 'reranker_top_k', 20)))),
         reranker_instruction=str(
             _cfg_get(
                 reranker_data,
@@ -1328,7 +1328,7 @@ def _load_config_inner() -> MemoryConfig:
                 _cfg_get(retrieval_data, 'reranker_instruction', reranker_instruction_default),
             )
         ),
-        reranker_timeout_ms=int(retrieval_data.get('reranker_timeout_ms', retrieval_data.get('rerankerTimeoutMs', 15000))),
+        reranker_timeout_ms=max(1, int(retrieval_data.get('reranker_timeout_ms', retrieval_data.get('rerankerTimeoutMs', 15000)))),
         rrf_k=retrieval_data.get('rrf_k', 60),
         store_plan_rrf_fusion=_config_bool(retrieval_data.get('store_plan_rrf_fusion', retrieval_data.get('storePlanRrfFusion', True)), True),
         reranker_blend=retrieval_data.get('reranker_blend', 0.5),
@@ -1344,17 +1344,17 @@ def _load_config_inner() -> MemoryConfig:
         fail_hard=retrieval_data.get('fail_hard', retrieval_data.get('failHard', True)),
         auto_inject=retrieval_data.get('auto_inject', retrieval_data.get('autoInject', True)),
         use_hyde=retrieval_data.get('use_hyde', retrieval_data.get('useHyde', True)),
-        hyde_timeout_ms=int(retrieval_data.get('hyde_timeout_ms', retrieval_data.get('hydeTimeoutMs', 15000))),
+        hyde_timeout_ms=max(1, int(retrieval_data.get('hyde_timeout_ms', retrieval_data.get('hydeTimeoutMs', 15000)))),
         hyde_max_retries=max(0, int(retrieval_data.get('hyde_max_retries', retrieval_data.get('hydeMaxRetries', 1)))),
-        lexical_anchor_timeout_ms=int(retrieval_data.get('lexical_anchor_timeout_ms', retrieval_data.get('lexicalAnchorTimeoutMs', 8000))),
+        lexical_anchor_timeout_ms=max(1, int(retrieval_data.get('lexical_anchor_timeout_ms', retrieval_data.get('lexicalAnchorTimeoutMs', 8000)))),
         lexical_anchor_max_retries=max(0, int(retrieval_data.get('lexical_anchor_max_retries', retrieval_data.get('lexicalAnchorMaxRetries', 1)))),
-        injection_timeout_ms=int(retrieval_data.get('injection_timeout_ms', retrieval_data.get('injectionTimeoutMs', 3000))),
-        injection_fanout_max=int(retrieval_data.get('injection_fanout_max', retrieval_data.get('injectionFanoutMax', 5))),
-        injection_fanout_llm_ms=int(retrieval_data.get('injection_fanout_llm_ms', retrieval_data.get('injectionFanoutLlmMs', 1500))),
+        injection_timeout_ms=max(1, int(retrieval_data.get('injection_timeout_ms', retrieval_data.get('injectionTimeoutMs', 3000)))),
+        injection_fanout_max=max(0, int(retrieval_data.get('injection_fanout_max', retrieval_data.get('injectionFanoutMax', 5)))),
+        injection_fanout_llm_ms=max(1, int(retrieval_data.get('injection_fanout_llm_ms', retrieval_data.get('injectionFanoutLlmMs', 1500)))),
         auto_inject_graph_depth=max(0, int(raw_auto_inject_graph_depth)),
         domains=parsed_domains,
         traversal=traversal,
-        tool_hint_timeout_ms=int(_cfg_get(retrieval_data, 'tool_hint_timeout_ms', 1500)),
+        tool_hint_timeout_ms=max(1, int(_cfg_get(retrieval_data, 'tool_hint_timeout_ms', 1500))),
     )
     
     logging_cfg = LoggingConfig(

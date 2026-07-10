@@ -1620,6 +1620,37 @@ class TestConfigPathResolution:
         finally:
             config._config = old_config
 
+    def test_retrieval_numeric_bounds_clamp_nonpositive_values(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({
+                "retrieval": {
+                    "rerankerTopK": 0,
+                    "rerankerTimeoutMs": 0,
+                    "hydeTimeoutMs": -1,
+                    "lexicalAnchorTimeoutMs": 0,
+                    "injectionTimeoutMs": -1,
+                    "injectionFanoutMax": -2,
+                    "injectionFanoutLlmMs": 0,
+                    "toolHintTimeoutMs": -1,
+                },
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.retrieval.reranker_top_k == 1
+                assert cfg.retrieval.reranker_timeout_ms == 1
+                assert cfg.retrieval.hyde_timeout_ms == 1
+                assert cfg.retrieval.lexical_anchor_timeout_ms == 1
+                assert cfg.retrieval.injection_timeout_ms == 1
+                assert cfg.retrieval.injection_fanout_max == 0
+                assert cfg.retrieval.injection_fanout_llm_ms == 1
+                assert cfg.retrieval.tool_hint_timeout_ms == 1
+        finally:
+            config._config = old_config
+
     def test_retrieval_top_level_reranker_aliases_are_loaded(self, tmp_path, capsys):
         import config
         old_config = config._config
