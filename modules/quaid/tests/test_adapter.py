@@ -3081,6 +3081,48 @@ class TestCodexAdapter:
         with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
             adapter.notify("bad clock")
 
+    def test_pending_context_skips_malformed_entry_timestamp(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-malformed-entry-clock")
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:01:00Z")
+        adapter = CodexAdapter(home=tmp_path)
+        pending_path = adapter.data_dir() / "codex-pending-notifications.jsonl"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text(
+            "\n".join(
+                [
+                    json.dumps({"message": "bad-entry", "ts": "not-a-date"}),
+                    json.dumps({"message": "good-entry", "ts": "2026-03-11T05:00:00Z"}),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        context = adapter.get_pending_context(max_age_seconds=300)
+
+        assert "good-entry" in context
+        assert "bad-entry" not in context
+
+    def test_pending_context_notify_and_drain_use_shared_lock(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-lock")
+        adapter = CodexAdapter(home=tmp_path)
+        events = []
+
+        class _Lock:
+            def __enter__(self):
+                events.append("enter")
+
+            def __exit__(self, exc_type, exc, tb):
+                events.append("exit")
+
+        monkeypatch.setattr(adapter, "_pending_notifications_lock", lambda: _Lock())
+
+        assert adapter.notify("lock-note") is True
+        context = adapter.get_pending_context()
+
+        assert "lock-note" in context
+        assert events == ["enter", "exit", "enter", "exit"]
+
     def test_notify_raises_queue_failure_when_failhard_enabled(self, tmp_path, monkeypatch):
         monkeypatch.setenv("QUAID_INSTANCE", "codex-notify-failhard")
         adapter = CodexAdapter(home=tmp_path)

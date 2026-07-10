@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections import deque
+from contextlib import contextmanager
 from datetime import datetime, timezone
+import fcntl
 import json
 import logging
 import os
@@ -11,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -198,6 +201,23 @@ class CodexAdapter(QuaidAdapter):
     def _pending_notifications_path(self) -> Path:
         return self.data_dir() / "codex-pending-notifications.jsonl"
 
+    def _pending_notifications_lock_path(self) -> Path:
+        return self.data_dir() / "codex-pending-notifications.lock"
+
+    @contextmanager
+    def _pending_notifications_lock(self):
+        lock_path = self._pending_notifications_lock_path()
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = lock_path.open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            finally:
+                lock_file.close()
+
     def notify(
         self,
         message: str,
@@ -219,8 +239,9 @@ class CodexAdapter(QuaidAdapter):
             source = pending_notice_source(message)
             if source:
                 entry_payload["source"] = source
-            with open(pending, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(entry_payload) + "\n")
+            with self._pending_notifications_lock():
+                with open(pending, "a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(entry_payload) + "\n")
             _trace_m15(
                 "adapter.codex.notify.write",
                 path=str(pending),
@@ -248,41 +269,58 @@ class CodexAdapter(QuaidAdapter):
             total_lines = 0
             expired = 0
             malformed = 0
-            with open(pending, "r", encoding="utf-8") as handle:
-                for line in handle:
-                    total_lines += 1
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
-                        malformed += 1
-                        continue
-                    ts = str(entry.get("ts") or "").strip()
-                    if ts and max_age_seconds > 0:
-                        entry_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                        if (now - entry_dt).total_seconds() > max_age_seconds:
-                            expired += 1
+            with self._pending_notifications_lock():
+                if not pending.is_file():
+                    _trace_m15("adapter.codex.pending.missing", path=str(pending))
+                    return ""
+                with open(pending, "r", encoding="utf-8") as handle:
+                    for line in handle:
+                        total_lines += 1
+                        line = line.strip()
+                        if not line:
                             continue
-                    message = str(entry.get("message") or "").strip()
-                    if message:
-                        messages.append(message)
-                        source = str(entry.get("source") or "").strip().lower() or pending_notice_source(message)
-                        if should_persist_pending_notice(source):
-                            sticky_entries[(source, message)] = {
-                                "message": message,
-                                "ts": ts or _now_iso(),
-                                "source": source,
-                            }
-            if sticky_entries:
-                with open(pending, "w", encoding="utf-8") as handle:
-                    for entry in sticky_entries.values():
-                        handle.write(json.dumps(entry) + "\n")
-                unlinked = False
-            else:
-                pending.unlink(missing_ok=True)
-                unlinked = True
+                        try:
+                            entry = json.loads(line)
+                        except json.JSONDecodeError:
+                            malformed += 1
+                            continue
+                        ts = str(entry.get("ts") or "").strip()
+                        if ts and max_age_seconds > 0:
+                            try:
+                                entry_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                            except (TypeError, ValueError):
+                                malformed += 1
+                                continue
+                            if (now - entry_dt).total_seconds() > max_age_seconds:
+                                expired += 1
+                                continue
+                        message = str(entry.get("message") or "").strip()
+                        if message:
+                            messages.append(message)
+                            source = str(entry.get("source") or "").strip().lower() or pending_notice_source(message)
+                            if should_persist_pending_notice(source):
+                                sticky_entries[(source, message)] = {
+                                    "message": message,
+                                    "ts": ts or _now_iso(),
+                                    "source": source,
+                                }
+                if sticky_entries:
+                    tmp_path = pending.with_name(f".{pending.name}.tmp.{os.getpid()}.{time.time_ns()}")
+                    try:
+                        with open(tmp_path, "w", encoding="utf-8") as handle:
+                            for entry in sticky_entries.values():
+                                handle.write(json.dumps(entry) + "\n")
+                        os.replace(tmp_path, pending)
+                    except BaseException:
+                        try:
+                            tmp_path.unlink()
+                        except OSError:
+                            pass
+                        raise
+                    unlinked = False
+                else:
+                    pending.unlink(missing_ok=True)
+                    unlinked = True
             _trace_m15(
                 "adapter.codex.pending.drain",
                 path=str(pending),
