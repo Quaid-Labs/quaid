@@ -2832,12 +2832,24 @@ def backfill_edges(
                     result["errors"] += 1
                     print(f"  [edge_backfill] error creating edge: {e}")
                     continue
+                edge_id = str(edge_result.get("edge_id") or "").strip()
+                if not edge_id:
+                    fact_had_errors = True
+                    result["errors"] += 1
+                    logger.warning(
+                        "edge_backfill create_edge returned no edge_id for fact %s: %s",
+                        fact.get("id"),
+                        edge_result,
+                    )
+                    if is_fail_hard_enabled():
+                        raise RuntimeError("edge_backfill create_edge returned no edge_id")
+                    continue
                 try:
-                    _link_edge_to_backfilled_fact(graph, str(edge_result.get("edge_id") or ""), str(fact["id"]))
+                    _link_edge_to_backfilled_fact(graph, edge_id, str(fact["id"]))
                 except Exception as exc:
                     logger.warning(
                         "edge_backfill failed to link edge %s to fact %s: %s",
-                        edge_result.get("edge_id"),
+                        edge_id,
                         fact.get("id"),
                         exc,
                     )

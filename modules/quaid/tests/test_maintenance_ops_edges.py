@@ -572,6 +572,63 @@ def test_edge_backfill_checked_logs_unreadable_marker(caplog):
     assert "edge_backfill check marker was unreadable" in caplog.text
 
 
+def test_backfill_edges_missing_edge_id_does_not_mark_fact_checked(caplog):
+    stored_attrs = {}
+
+    class _DummyResult:
+        def __init__(self, rows=None):
+            self._rows = rows or []
+
+        def fetchall(self):
+            return self._rows
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            if "SELECT n.id" in sql:
+                return _DummyResult(
+                    [
+                        {
+                            "id": "fact-1",
+                            "name": "Maya lives with her partner David.",
+                            "owner_id": "default",
+                            "attributes": "{}",
+                        }
+                    ]
+                )
+            if "UPDATE nodes SET attributes" in sql:
+                attrs_json, _updated_at, fact_id = params
+                stored_attrs[fact_id] = maintenance_ops.json.loads(attrs_json)
+                return _DummyResult()
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    edge = {
+        "fact_id": "fact-1",
+        "subject": "Maya",
+        "relation": "partner_of",
+        "object": "David",
+    }
+    with patch.object(maintenance_ops, "batch_extract_edges", return_value=[[edge]]), \
+         patch.object(maintenance_ops, "create_edge", return_value={"status": "created"}), \
+         patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False), \
+         caplog.at_level("WARNING", logger=maintenance_ops.__name__):
+        out = maintenance_ops.backfill_edges(
+            graph=_Graph(),
+            metrics=maintenance_ops.JanitorMetrics(),
+            dry_run=False,
+            max_facts=10,
+            owner_id="default",
+        )
+
+    assert out == {"found": 1, "edges_created": 0, "errors": 1}
+    assert stored_attrs == {}
+    assert "returned no edge_id" in caplog.text
+
+
 def test_backfill_edges_link_failure_still_marks_fact_checked_when_fail_open():
     stored_attrs = {}
 
