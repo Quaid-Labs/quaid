@@ -281,7 +281,7 @@ get "extraction via timeout rolling_flush, not session_end" on every lane —
 which masks real lifecycle behavior and turns clean PASSes into PWN-note.
 
 ```bash
-# Before M4 on platform $P (openclaw | claude_code | codex):
+# Before M4 on platform $P (openclaw | claude-code | codex):
 ssh admin@$VM_IP "python3 << PYEOF
 import json, os
 p = os.path.expanduser(f'~/.quaid/shared/config/${P}/config.json')
