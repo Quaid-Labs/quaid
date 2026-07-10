@@ -1001,6 +1001,56 @@ def test_review_decayed_memories_uses_quaid_now_for_queue_review(monkeypatch):
     assert flat_params.count("2026-03-11T00:00:00") == 2
 
 
+def test_find_stale_memories_includes_old_never_accessed_nodes(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2026-07-08T09:10:11")
+    monkeypatch.setattr(maintenance_ops, "CONFIDENCE_DECAY_DAYS", 30)
+    metrics = maintenance_ops.JanitorMetrics()
+
+    class _Conn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params=()):
+            self.calls.append((str(sql), tuple(params or ())))
+            return _DummyResult(rows=[{"id": "n1"}])
+
+    class _Graph:
+        def __init__(self):
+            self.conn = _Conn()
+
+        @contextmanager
+        def _get_conn(self):
+            yield self.conn
+
+        def _row_to_node(self, _row):
+            return SimpleNamespace(
+                id="n1",
+                name="old never-accessed fact",
+                type="fact",
+                confidence=0.5,
+                accessed_at=None,
+                access_count=0,
+                storage_strength=0.0,
+                extraction_confidence=0.8,
+                verified=False,
+                owner_id="operator",
+                created_at="2026-05-01T00:00:00",
+                speaker=None,
+            )
+
+    graph = _Graph()
+
+    stale = maintenance_ops.find_stale_memories_optimized(graph, metrics)
+
+    sql, params = graph.conn.calls[0]
+    assert "accessed_at IS NULL" in sql
+    assert "COALESCE(created_at, '') < ?" in sql
+    assert "ORDER BY COALESCE(accessed_at, created_at, '') ASC" in sql
+    assert params == ("2026-06-08T09:10:11", "2026-06-08T09:10:11")
+    assert stale[0]["id"] == "n1"
+    assert stale[0]["last_accessed"] is None
+
+
 @pytest.mark.parametrize(
     ("action", "expected_key"),
     [

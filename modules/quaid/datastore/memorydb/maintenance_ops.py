@@ -3315,12 +3315,15 @@ def find_stale_memories_optimized(graph: MemoryGraph, metrics: JanitorMetrics) -
     with graph._get_conn() as conn:
         rows = conn.execute("""
             SELECT * FROM nodes
-            WHERE accessed_at < ?
+            WHERE (
+                accessed_at < ?
+                OR (accessed_at IS NULL AND COALESCE(created_at, '') < ?)
+            )
             AND confidence > 0.0
             AND pinned = 0  -- Never decay pinned memories
             AND status IN ('approved', 'active')  -- Don't decay pending/unreviewed
-            ORDER BY accessed_at ASC
-        """, (cutoff,)).fetchall()
+            ORDER BY COALESCE(accessed_at, created_at, '') ASC
+        """, (cutoff, cutoff)).fetchall()
     
     for row in rows:
         node = graph._row_to_node(row)
