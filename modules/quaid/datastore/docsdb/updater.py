@@ -2184,7 +2184,7 @@ def detect_drift_from_git(since_hours: int = 24) -> List[DriftReport]:
                 try:
                     if doc_commit_time > 0:
                         commit_hash = _run_git_command(
-                            ["git", "log", "-1", "--format=%H", f"--until={doc_commit_time}", "--", src_path],
+                            ["git", "log", "-1", "--format=%H", f"--until=@{doc_commit_time}", "--", src_path],
                             deadline,
                         ).stdout.strip()
                         if commit_hash:
