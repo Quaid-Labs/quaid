@@ -304,9 +304,10 @@ def cleanup_old_registries(max_age_hours: float = 48.0) -> int:
     try:
         for p in _registry_dir().glob("*.json"):
             try:
-                if p.stat().st_mtime < cutoff:
-                    p.unlink()
-                    removed += 1
+                with _lock_registry(p.stem):
+                    if p.stat().st_mtime < cutoff:
+                        p.unlink()
+                        removed += 1
             except OSError as exc:
                 if _fail_hard_enabled():
                     raise

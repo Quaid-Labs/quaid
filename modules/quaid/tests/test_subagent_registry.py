@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -416,6 +417,31 @@ class TestCleanupOldRegistries:
         assert removed == 1
         assert not _registry_file(tmp_path, "parent-old").exists()
         assert _registry_file(tmp_path, "parent-new").exists()
+
+    def test_cleanup_rechecks_age_after_registry_lock(self, tmp_path, monkeypatch):
+        import core.subagent_registry as registry
+
+        registry.register("parent-old", "child-A")
+        p = _registry_file(tmp_path, "parent-old")
+        old_time = time.time() - (72 * 3600)
+        os.utime(p, (old_time, old_time))
+        real_lock = registry._lock_registry
+        locked = []
+
+        @contextmanager
+        def refresh_during_lock(parent_session_id):
+            with real_lock(parent_session_id):
+                locked.append(parent_session_id)
+                os.utime(p, None)
+                yield
+
+        monkeypatch.setattr(registry, "_lock_registry", refresh_during_lock)
+
+        removed = registry.cleanup_old_registries(max_age_hours=48.0)
+
+        assert locked == ["parent-old"]
+        assert removed == 0
+        assert p.exists()
 
     def test_zero_age_removes_all(self, tmp_path):
         """max_age_hours=0 removes everything."""
