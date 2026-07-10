@@ -456,6 +456,35 @@ class TestConfigPathResolution:
         finally:
             config._config = old_config
 
+    def test_load_from_json_file_invalid_utf8_raises_when_failhard(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_bytes(b"\xff\xfe")
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch.object(config, "_is_fail_hard_enabled_for_config_load", return_value=True):
+                with pytest.raises(UnicodeDecodeError):
+                    load_config()
+        finally:
+            config._config = old_config
+
+    def test_load_from_json_file_invalid_utf8_defaults_when_failopen(self, tmp_path, capsys):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_bytes(b"\xff\xfe")
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch.object(config, "_is_fail_hard_enabled_for_config_load", return_value=False):
+                cfg = load_config()
+                assert cfg.prompt_set == "default"
+            assert "Failed to read" in capsys.readouterr().err
+        finally:
+            config._config = old_config
+
     def test_loads_prompt_set_from_config(self, tmp_path):
         import config
         old_config = config._config
@@ -1143,8 +1172,7 @@ class TestConfigPathResolution:
         finally:
             config._config = old_config
 
-    def test_invalid_json_uses_defaults(self, tmp_path):
-        """Invalid JSON in config file falls back to defaults."""
+    def test_invalid_json_raises_when_failhard(self, tmp_path):
         import config
         old_config = config._config
         config._config = None
@@ -1152,7 +1180,24 @@ class TestConfigPathResolution:
             config_file = tmp_path / "config.json"
             config_file.write_text("not valid json {{{")
 
-            with patch.object(config, "_config_paths", lambda: [config_file]):
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch.object(config, "_is_fail_hard_enabled_for_config_load", return_value=True):
+                with pytest.raises(json.JSONDecodeError):
+                    load_config()
+        finally:
+            config._config = old_config
+
+    def test_invalid_json_uses_defaults_when_failopen(self, tmp_path):
+        """Invalid JSON in config file falls back to defaults when failHard is off."""
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text("not valid json {{{")
+
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch.object(config, "_is_fail_hard_enabled_for_config_load", return_value=False):
                 cfg = load_config()
                 assert isinstance(cfg, MemoryConfig)
                 # Defaults should be used

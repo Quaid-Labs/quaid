@@ -70,6 +70,15 @@ def _config_load_chatter_enabled() -> bool:
     return _truthy_env("QUAID_CONFIG_VERBOSE") and not _truthy_env("QUAID_QUIET")
 
 
+def _is_fail_hard_enabled_for_config_load() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except Exception:
+        return True
+
+
 def _config_bool(value: Any, default: bool) -> bool:
     if value is None:
         return bool(default)
@@ -1034,8 +1043,12 @@ def _load_config_inner() -> MemoryConfig:
                     raw_config = _deep_merge_dicts(raw_config, parsed)
                     loaded_paths.append(config_path)
             except json.JSONDecodeError as e:
+                if _is_fail_hard_enabled_for_config_load():
+                    raise
                 print(f"[config] Failed to parse {config_path}: {e}", file=sys.stderr)
-            except Exception as e:
+            except (OSError, UnicodeDecodeError) as e:
+                if _is_fail_hard_enabled_for_config_load():
+                    raise
                 print(f"[config] Failed to read {config_path}: {e}", file=sys.stderr)
 
     if loaded_paths and _config_load_chatter_enabled():
