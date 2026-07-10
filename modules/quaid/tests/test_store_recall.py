@@ -7068,13 +7068,18 @@ class TestSourceChunkStorage:
             "_get_conn",
             side_effect=_flaky_get_conn_factory(),
         ), patch.object(mg, "_is_fail_hard_mode", return_value=False), caplog.at_level("WARNING"):
-            assert graph.retry_missing_embeddings(limit=5) == 1
+            assert graph.retry_missing_embeddings(limit=5) == 0
 
         with graph._get_conn() as conn:
             assert conn.execute(
                 "SELECT embedding FROM nodes WHERE id = ?",
                 (node_id,),
             ).fetchone()["embedding"] is not None
+            if mg._lib_has_vec():
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM vec_nodes WHERE node_id = ?",
+                    (node_id,),
+                ).fetchone()[0] == 0
         assert "Failed to index retried embedding for node" in caplog.text
 
     def test_update_node_vec_sync_failure_respects_failhard(self, tmp_path):

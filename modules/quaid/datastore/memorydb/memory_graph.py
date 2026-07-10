@@ -1444,6 +1444,7 @@ class MemoryGraph:
                     exc_info=True,
                 )
                 # vec_nodes may not exist yet; primary rows remain repaired.
+                continue
             updated += 1
         return updated
 
