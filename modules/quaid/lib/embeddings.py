@@ -336,7 +336,9 @@ def pack_embedding(embedding: List[float]) -> bytes:
     return struct.pack(f'{len(embedding)}f', *embedding)
 
 
-def unpack_embedding(blob: bytes) -> List[float]:
+def unpack_embedding(blob: Optional[bytes]) -> List[float]:
     """Unpack embedding from binary blob."""
+    if not blob:
+        return []
     count = len(blob) // 4  # 4 bytes per float
     return list(struct.unpack(f'{count}f', blob))

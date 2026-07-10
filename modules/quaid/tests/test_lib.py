@@ -115,6 +115,10 @@ class TestPackUnpackEmbedding:
         result = unpack_embedding(b"")
         assert result == []
 
+    def test_unpack_null_blob(self):
+        result = unpack_embedding(None)
+        assert result == []
+
     def test_large_vector_round_trip(self):
         """128-dim vector survives pack/unpack."""
         original = [float(i) / 100.0 for i in range(128)]
