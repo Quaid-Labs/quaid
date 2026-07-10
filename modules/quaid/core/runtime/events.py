@@ -537,6 +537,25 @@ def _write_json(path: Path, payload: Any) -> None:
             ) from exc
 
 
+def _replace_bytes(path: Path, payload: bytes) -> None:
+    _ensure_parent(path)
+    tmp_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile("wb", delete=False, dir=str(path.parent)) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(payload)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
+
+
 def _append_jsonl(path: Path, payload: Any) -> None:
     _ensure_parent(path)
     with _file_lock(_lock_path(path)):
@@ -546,7 +565,7 @@ def _append_jsonl(path: Path, payload: Any) -> None:
                 newline = keep.find(b"\n")
                 if newline >= 0:
                     keep = keep[newline + 1 :]
-                path.write_bytes(keep)
+                _replace_bytes(path, keep)
         except Exception as exc:
             logger.warning("Failed trimming history file %s; appending new entry anyway: %s", path, exc)
             if _is_fail_hard_enabled():

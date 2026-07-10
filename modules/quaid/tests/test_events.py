@@ -1,5 +1,6 @@
 import json
 import inspect
+import os
 import sys
 import types
 from pathlib import Path
@@ -4391,14 +4392,14 @@ def test_emit_event_appends_when_history_trim_fails_without_fail_hard(monkeypatc
     )
     history_path.write_text(seed, encoding="utf-8")
 
-    real_write_bytes = Path.write_bytes
+    real_replace = os.replace
 
-    def fail_trim_write(path, data):
-        if path == history_path:
+    def fail_trim_replace(src, dst):
+        if Path(dst) == history_path:
             raise OSError("trim blocked")
-        return real_write_bytes(path, data)
+        return real_replace(src, dst)
 
-    monkeypatch.setattr(Path, "write_bytes", fail_trim_write)
+    monkeypatch.setattr(events.os, "replace", fail_trim_replace)
 
     with caplog.at_level("WARNING", logger="core.runtime.events"):
         emit_event(name="session.reset", payload={"reason": "trim-failed"}, source="pytest")
@@ -4407,6 +4408,7 @@ def test_emit_event_appends_when_history_trim_fails_without_fail_hard(monkeypatc
     lines = [line for line in raw.splitlines() if line.strip()]
     assert len(raw.encode("utf-8")) > len(seed.encode("utf-8"))
     assert "appending new entry anyway" in caplog.text
+    assert not list(history_path.parent.glob("tmp*"))
     last = json.loads(lines[-1])
     assert last.get("op") == "emit"
     assert last.get("event", {}).get("payload", {}).get("reason") == "trim-failed"
