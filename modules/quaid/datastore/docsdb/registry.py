@@ -2041,39 +2041,58 @@ class DocsRegistry:
         project_name = _validate_project_name(project_name)
         # Guard: project must exist (in config or registry)
         cfg = self._get_config()
-        has_config = project_name in cfg.projects.definitions
+        defn = cfg.projects.definitions.get(project_name)
+        has_config = defn is not None
         has_docs = len(self.list_docs(project=project_name)) > 0
         if not has_config and not has_docs:
             raise ValueError(f"Project '{project_name}' does not exist.")
 
-        # Archived project content must stop participating in docs recall.
-        rag_chunk_deleted = self._remove_project_rag_chunks(project_name, cfg, states=("active",))
-
-        # 1. Bulk archive registry entries
-        with get_connection(self.db_path) as conn:
-            cursor = conn.execute(
-                "UPDATE doc_registry SET state = 'archived' WHERE project = ? AND state = 'active'",
-                (project_name,),
-            )
-            archived = cursor.rowcount
-
-        # 2. Move directory to projects/archive/
-        cfg = self._get_config()
-        defn = cfg.projects.definitions.get(project_name)
         dir_moved = False
-        if defn:
-            src_dir = self._resolve_path(defn.home_dir)
-            archive_dir = _visible_home() / "projects" / "archive"
-            if src_dir.exists():
-                _validate_inside_workspace(src_dir, "archive source")
-                _validate_inside_workspace(archive_dir, "archive directory")
-                archive_dir.mkdir(parents=True, exist_ok=True)
-                dest = archive_dir / project_name
-                src_dir.rename(dest)
-                dir_moved = True
+        src_dir: Optional[Path] = None
+        dest: Optional[Path] = None
+        archived = 0
+        rag_chunk_deleted = 0
+        try:
+            # Move directory before mutating DB state. If this fails, registry
+            # rows stay active instead of pointing at an archive that never happened.
+            if defn:
+                src_dir = self._resolve_path(defn.home_dir)
+                archive_dir = _visible_home() / "projects" / "archive"
+                if src_dir.exists():
+                    _validate_inside_workspace(src_dir, "archive source")
+                    _validate_inside_workspace(archive_dir, "archive directory")
+                    archive_dir.mkdir(parents=True, exist_ok=True)
+                    dest = archive_dir / project_name
+                    src_dir.rename(dest)
+                    dir_moved = True
 
-        # 3. Remove from DB
-        self.delete_project_definition(project_name)
+            # Archived project content must stop participating in docs recall.
+            rag_chunk_deleted = self._remove_project_rag_chunks(project_name, cfg, states=("active",))
+
+            # Archive registry rows and project definition atomically.
+            with get_connection(self.db_path) as conn:
+                cursor = conn.execute(
+                    "UPDATE doc_registry SET state = 'archived' WHERE project = ? AND state = 'active'",
+                    (project_name,),
+                )
+                archived = cursor.rowcount
+                self._ensure_project_definitions_table(conn)
+                conn.execute(
+                    "UPDATE project_definitions SET state = 'deleted', updated_at = ? WHERE name = ?",
+                    (_now_iso(), project_name),
+                )
+        except Exception:
+            if dir_moved and src_dir is not None and dest is not None and dest.exists() and not src_dir.exists():
+                try:
+                    dest.rename(src_dir)
+                except OSError as rollback_exc:
+                    logger.error(
+                        "Failed rolling back project directory archive %s -> %s after archive error: %s",
+                        dest,
+                        src_dir,
+                        rollback_exc,
+                    )
+            raise
 
         # Reload config
         if _reload_config_after_project_change("archive_project"):

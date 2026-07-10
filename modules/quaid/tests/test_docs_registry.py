@@ -1106,6 +1106,36 @@ class TestArchiveProject:
 
         assert len(r.list_docs(project="test-project", state="active")) == 1
 
+    def test_archive_project_rolls_back_directory_when_db_update_fails(self, setup_env, monkeypatch):
+        """archive_project does not leave filesystem moved when DB archive fails."""
+        r = _get_registry()
+        r.register("projects/test-project/PROJECT.md", project="test-project")
+
+        src_dir = setup_env.parents[1] / "projects" / "test-project"
+        archive_dir = setup_env.parents[1] / "projects" / "archive" / "test-project"
+        assert src_dir.exists()
+
+        def _fail_project_definition_table(_conn):
+            raise sqlite3.OperationalError("forced archive definition failure")
+
+        monkeypatch.setattr(r, "_ensure_project_definitions_table", _fail_project_definition_table)
+
+        with pytest.raises(sqlite3.OperationalError, match="forced archive definition failure"):
+            r.archive_project("test-project")
+
+        assert src_dir.exists()
+        assert not archive_dir.exists()
+        assert len(r.list_docs(project="test-project", state="active")) == 1
+        assert len(r.list_docs(project="test-project", state="archived")) == 0
+        from lib.database import get_connection
+        with get_connection(r.db_path) as conn:
+            row = conn.execute(
+                "SELECT state FROM project_definitions WHERE name = ?",
+                ("test-project",),
+            ).fetchone()
+        assert row is not None
+        assert row["state"] == "active"
+
 
 class TestDeleteProject:
     def test_deletes_entries(self, setup_env):
