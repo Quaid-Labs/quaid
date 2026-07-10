@@ -3517,6 +3517,19 @@ def _migrate_legacy_rules_file(rules_dir: Path, *, label: str) -> None:
         print(f"[quaid][{label}] failed to migrate {legacy_file}: {exc}", file=sys.stderr)
 
 
+def _write_rules_context_file_atomic(rules_file: Path, content: str) -> None:
+    tmp_path = rules_file.with_name(f".{rules_file.name}.tmp.{os.getpid()}.{time.time_ns()}")
+    try:
+        tmp_path.write_text(content, encoding="utf-8")
+        os.replace(tmp_path, rules_file)
+    except BaseException:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def _clear_rules_context_files(hook_input: dict, *, label: str) -> None:
     rules_dir = _resolve_rules_context_dir(hook_input)
     if not rules_dir.exists():
@@ -3557,7 +3570,7 @@ def _write_rules_context_sections(hook_input: dict, sections: List[str], *, labe
         except OSError:
             existing = ""
         if content != existing:
-            rules_file.write_text(content, encoding="utf-8")
+            _write_rules_context_file_atomic(rules_file, content)
             changed += 1
 
     removed = 0

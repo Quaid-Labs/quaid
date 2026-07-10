@@ -4197,6 +4197,40 @@ class TestHookSessionInitRegistryAugmentation:
         assert "migrated" in err
         assert "removed" in err
 
+    def test_split_rules_replace_failure_preserves_existing_file(self, tmp_path, monkeypatch):
+        from core.interface import hooks
+
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        monkeypatch.setenv("QUAID_RULES_DIR", str(rules_dir))
+        target = rules_dir / "quaid-user.md"
+        target.write_text("old rules body", encoding="utf-8")
+        real_replace = os.replace
+        replace_attempts = []
+
+        def fail_replace(src, dst):
+            src_path = Path(src)
+            dst_path = Path(dst)
+            if dst_path == target:
+                replace_attempts.append(src_path)
+                assert src_path.parent == rules_dir
+                assert src_path.name.startswith(".quaid-user.md.tmp.")
+                raise OSError("replace failed")
+            real_replace(src, dst)
+
+        monkeypatch.setattr(hooks.os, "replace", fail_replace)
+
+        with pytest.raises(OSError, match="replace failed"):
+            hooks._write_rules_context_sections(
+                {"cwd": str(tmp_path)},
+                ["--- USER.md ---\nnew rules body"],
+                label="pytest",
+            )
+
+        assert replace_attempts
+        assert target.read_text(encoding="utf-8") == "old rules body"
+        assert not list(rules_dir.glob(".quaid-user.md.tmp.*"))
+
     def test_tools_md_content_in_output(self, tmp_path, monkeypatch):
         """TOOLS.md content from a project directory is present in the output file."""
         projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
