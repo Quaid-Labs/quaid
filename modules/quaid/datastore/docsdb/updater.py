@@ -197,6 +197,9 @@ _DOCS_INDEX_TIMEOUT_THREADS_LOCK = threading.Lock()
 
 
 def _prune_docs_index_timeout_threads_locked() -> None:
+    # A permanently hung index thread blocks future index attempts in this
+    # process. That is deliberate for CLI safety: repeated starts can pile up
+    # SQLite writers that the caller cannot cancel.
     _DOCS_INDEX_TIMEOUT_THREADS[:] = [
         thread for thread in _DOCS_INDEX_TIMEOUT_THREADS if thread.is_alive()
     ]

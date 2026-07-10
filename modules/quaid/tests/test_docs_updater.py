@@ -203,6 +203,47 @@ def test_index_doc_timeout_refuses_new_index_while_prior_thread_alive():
             thread.join(timeout=2)
 
 
+def test_index_doc_timeout_prunes_finished_thread_before_next_index():
+    from datastore.docsdb import updater
+
+    release = threading.Event()
+    started = []
+
+    class InitiallyHangingRag:
+        def index_document(self, file_path):
+            started.append(file_path)
+            release.wait(10)
+            return 1
+
+    class SucceedingRag:
+        def index_document(self, file_path):
+            started.append(file_path)
+            return 2
+
+    with updater._DOCS_INDEX_TIMEOUT_THREADS_LOCK:
+        updater._DOCS_INDEX_TIMEOUT_THREADS.clear()
+
+    try:
+        with pytest.raises(TimeoutError, match="docs index timed out"):
+            updater._index_doc_with_timeout(InitiallyHangingRag(), "first.md", 1.0)
+
+        release.set()
+        with updater._DOCS_INDEX_TIMEOUT_THREADS_LOCK:
+            threads = list(updater._DOCS_INDEX_TIMEOUT_THREADS)
+        for thread in threads:
+            thread.join(timeout=2)
+
+        assert updater._index_doc_with_timeout(SucceedingRag(), "second.md", 1.0) == 2
+        assert started == ["first.md", "second.md"]
+    finally:
+        release.set()
+        with updater._DOCS_INDEX_TIMEOUT_THREADS_LOCK:
+            threads = list(updater._DOCS_INDEX_TIMEOUT_THREADS)
+            updater._DOCS_INDEX_TIMEOUT_THREADS.clear()
+        for thread in threads:
+            thread.join(timeout=2)
+
+
 def test_resolve_path_rejects_workspace_escape(tmp_path):
     with _adapter_patch(tmp_path):
         from datastore.docsdb import updater
