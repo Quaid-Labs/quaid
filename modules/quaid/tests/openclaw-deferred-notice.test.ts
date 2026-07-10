@@ -1372,6 +1372,136 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
+  it("does not queue embedded fallback session_end after message_received preserved the same turn", async () => {
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-embedded-fallback-message-received-home-",
+      "openclaw-main",
+      "[Quaid] embedded fallback message_received fixture",
+    );
+    const configPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "config.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    writeJson(configPath, {
+      ...config,
+      systems: { memory: true, projects: false },
+      retrieval: { ...config.retrieval, autoInject: true },
+    });
+    const deviceId = "device-needs-scope-upgrade-message-received";
+    const devicesDir = path.join(path.dirname(fixture.openClawConfigPath), "devices");
+    writeJson(path.join(devicesDir, "pending.json"), {
+      "scope-request-message-received": {
+        requestId: "scope-request-message-received",
+        deviceId,
+        scopes: ["operator.write", "operator.pairing"],
+      },
+    });
+    writeJson(path.join(devicesDir, "paired.json"), {
+      [deviceId]: {
+        deviceId,
+        scopes: ["operator.read"],
+        approvedScopes: ["operator.read"],
+      },
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => "OK",
+    } as any));
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const adapterModule = await import("../adaptors/openclaw/adapter.js");
+    const testApi = (adapterModule as any).__test;
+    testApi.clearAutoInjectTurnCaches();
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforeAgentStartCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_agent_start" && call?.[2]?.name === "memory-injection"
+    );
+    const messageReceivedCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "message_received" && call?.[2]?.name === "message-received-command-memory-extraction"
+    );
+    expect(beforeAgentStartCall).toBeTruthy();
+    expect(messageReceivedCall).toBeTruthy();
+
+    const statement = "Ready for the next check.";
+    const sessionId = "session-embedded-fallback-message-received";
+    const sessionKey = "agent:main:matrix:room-embedded-fallback-message-received";
+    const memory = {
+      id: "mem-embedded-next-check",
+      text: "The next check should continue without an embedded lifecycle signal.",
+      similarity: 1,
+      via: "vector",
+      category: "fact",
+    };
+    testApi.rememberCompletedAutoInjectTurn(testApi.autoInjectTurnKey("main", statement, sessionKey), {
+      allMemories: [memory],
+      recallDiagnostics: { mode: "test" },
+      injection: {
+        toInject: [memory],
+        prependContext: [
+          "<injected_memories>",
+          "- fact | The next check should continue without an embedded lifecycle signal.",
+          "</injected_memories>",
+        ].join("\n"),
+      },
+    }, Date.now());
+
+    const ctx = { sessionId, sessionKey, agentId: "main", trigger: "user" };
+    await messageReceivedCall?.[1](
+      { text: statement, sessionId, sessionKey, timestamp: Date.now() },
+      ctx,
+    );
+
+    await beforeAgentStartCall?.[1](
+      {
+        prependContext: "",
+        prompt: statement,
+        messages: [{ role: "user", content: statement }],
+        sessionId,
+        sessionKey,
+      },
+      ctx,
+    );
+
+    const preservedTranscript = path.join(
+      fixture.hiddenHome,
+      "instances",
+      "openclaw-main",
+      "logs",
+      "quaid",
+      "sessions",
+      `${sessionId}.jsonl`,
+    );
+    expect(fs.readFileSync(preservedTranscript, "utf8")).toContain(statement);
+    expect(readExtractionSignals(fixture.hiddenHome, "openclaw-main")).toHaveLength(0);
+
+    const traceRows = readHookTraceEvents(fixture.hiddenHome, "openclaw-main");
+    expect(traceRows.map((row) => String(row.event || ""))).toContain(
+      "hook.before_agent_start.embedded_fallback_session_end_skipped",
+    );
+    expect(traceRows).toContainEqual(expect.objectContaining({
+      event: "hook.before_agent_start.embedded_fallback_session_end_skipped",
+      reason: "message_received_preserved_turn",
+    }));
+
+    fetchMock.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
   it("allows recall after embedded fallback consumes an identity-only refresh", async () => {
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
     const fixture = seedDeferredNoticeFixture(

@@ -5279,6 +5279,19 @@ ${sessionScope}` : "";
       }
       const resolvedAgentLabel = resolveHookAgentLabel(sessionContext, sessionContext) || agentLabel;
       sessionIdToAgentId.set(sessionId, resolvedAgentLabel);
+      const cachedUserText = String(lastUserMessageQuery?.text || "").trim();
+      const { userText: fallbackUserText } = embeddedPromptBuildFallbackSelection(event, ctx);
+      const cachedAgeMs = Date.now() - Number(lastUserMessageQuery?.seenAtMs || 0);
+      if (cachedUserText && fallbackUserText && cachedUserText === fallbackUserText && cachedAgeMs >= 0 && cachedAgeMs <= 1e4 && lastUserMessageQueryMatchesSession(lastUserMessageQuery, sessionId)) {
+        embeddedFallbackLifecycleSignalSizes.set(sessionId, transcriptSize);
+        writeHookTrace("hook.before_agent_start.embedded_fallback_session_end_skipped", {
+          session_id: sessionId,
+          reason: "message_received_preserved_turn",
+          transcript_size: transcriptSize,
+          cache_age_ms: cachedAgeMs
+        });
+        return;
+      }
       if (!sessionNeedsLifecycleFlush(sessionId, preservedPath, resolvedAgentLabel)) {
         writeHookTrace("hook.before_agent_start.embedded_fallback_session_end_skipped", {
           session_id: sessionId,
