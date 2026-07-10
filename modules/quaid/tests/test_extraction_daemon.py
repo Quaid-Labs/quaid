@@ -10093,17 +10093,37 @@ class TestSignalRoundTrip:
 
         assert extract_calls == ["codex-main-session"]
 
-    def test_read_pending_signals_ignores_corrupt_json(self, monkeypatch, tmp_path):
+    def test_read_pending_signals_removes_corrupt_json_when_fail_open(
+        self, monkeypatch, tmp_path, caplog
+    ):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
 
         sig_dir = extraction_daemon._signal_dir()
         (sig_dir / "00000_corrupt.json").write_text("not-json{{{{", encoding="utf-8")
 
-        signals = extraction_daemon.read_pending_signals()
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            signals = extraction_daemon.read_pending_signals()
+
         assert signals == []
         # Corrupt file should have been removed
         assert not (sig_dir / "00000_corrupt.json").exists()
+        assert "removing invalid pending signal JSON" in caplog.text
+
+    def test_read_pending_signals_raises_corrupt_json_when_fail_hard(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+        sig_dir = extraction_daemon._signal_dir()
+        corrupt = sig_dir / "00000_corrupt.json"
+        corrupt.write_text("not-json{{{{", encoding="utf-8")
+
+        with pytest.raises(json.JSONDecodeError):
+            extraction_daemon.read_pending_signals()
+
+        assert corrupt.exists()
 
     def test_read_pending_signals_preserves_transient_read_failure(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -10159,6 +10179,65 @@ class TestSignalRoundTrip:
 
         remaining = extraction_daemon.read_pending_signals()
         assert remaining == []
+
+    def test_mark_signal_processed_logs_unlink_failure_when_fail_open(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+        extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id="sess-del-fail-open",
+            transcript_path="/fake.jsonl",
+        )
+        signal = extraction_daemon.read_pending_signals()[0]
+        signal_path = Path(signal["_signal_path"])
+        real_unlink = Path.unlink
+
+        def fail_signal_unlink(self, *args, **kwargs):
+            if self == signal_path:
+                raise OSError("unlink denied")
+            return real_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", fail_signal_unlink)
+
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            extraction_daemon.mark_signal_processed(signal)
+
+        assert signal_path.exists()
+        assert "failed removing processed signal" in caplog.text
+        assert "unlink denied" in caplog.text
+
+    def test_mark_signal_processed_raises_unlink_failure_when_fail_hard(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+        extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id="sess-del-failhard",
+            transcript_path="/fake.jsonl",
+        )
+        signal = extraction_daemon.read_pending_signals()[0]
+        signal_path = Path(signal["_signal_path"])
+        real_unlink = Path.unlink
+
+        def fail_signal_unlink(self, *args, **kwargs):
+            if self == signal_path:
+                raise OSError("unlink denied")
+            return real_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", fail_signal_unlink)
+
+        with pytest.raises(RuntimeError, match="failed removing processed signal") as excinfo:
+            extraction_daemon.mark_signal_processed(signal)
+
+        assert isinstance(excinfo.value.__cause__, OSError)
+        assert signal_path.exists()
 
     def test_mark_signal_processed_outside_signal_dir_is_refused(self, monkeypatch, tmp_path):
         """mark_signal_processed must refuse to delete paths outside the signal dir."""

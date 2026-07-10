@@ -1147,13 +1147,17 @@ def read_pending_signals() -> List[Dict[str, Any]]:
                 data["type"] = data.get("signal_type")
             data["_signal_path"] = str(f)
             signals.append(data)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            if _fail_hard_enabled():
+                logger.critical("invalid pending signal JSON %s while failHard is enabled", f)
+                raise
             # Remove structurally corrupt signal files; atomic signal writes make
             # ordinary read failures transient and retryable.
+            logger.warning("removing invalid pending signal JSON %s: %s", f, exc)
             try:
                 f.unlink()
-            except OSError:
-                pass
+            except OSError as unlink_exc:
+                logger.warning("failed removing invalid pending signal JSON %s: %s", f, unlink_exc)
         except OSError as exc:
             logger.warning("failed reading pending signal %s; preserving for retry: %s", f, exc)
     signals.sort(key=_pending_signal_sort_key)
@@ -1205,8 +1209,10 @@ def mark_signal_processed(signal_data: Dict[str, Any]) -> None:
         return
     try:
         sig.unlink()
-    except OSError:
-        pass
+    except OSError as exc:
+        if _fail_hard_enabled():
+            raise RuntimeError(f"failed removing processed signal {sig}") from exc
+        logger.warning("failed removing processed signal %s; preserving for retry: %s", sig, exc)
 
 
 def _preserve_missing_transcript_signal_for_retry(
