@@ -1606,8 +1606,7 @@ class DocsRegistry:
         name = _validate_project_name(name)
 
         # Guard: don't overwrite an existing project
-        cfg = self._get_config()
-        if name in cfg.projects.definitions:
+        if self.get_project_definition(name) is not None:
             raise ValueError(
                 f"Project '{name}' already exists. Use `quaid project rename` or `quaid project delete` first."
             )
@@ -1672,10 +1671,9 @@ class DocsRegistry:
         Returns list of newly registered file paths.
         """
         project_name = _validate_project_name(project_name)
-        cfg = self._get_config()
-        defn = cfg.projects.definitions.get(project_name)
+        defn = self.get_project_definition(project_name)
         if not defn:
-            print(f"Project '{project_name}' not found in config")
+            print(f"Project '{project_name}' not found in project definitions")
             return []
 
         home_abs = self._resolve_path(defn.home_dir)
@@ -1826,26 +1824,26 @@ class DocsRegistry:
         old_name = _validate_project_name(old_name)
         new_name = _validate_project_name(new_name)
 
-        # Guard: old project must exist (in config or registry)
-        cfg = self._get_config()
-        has_config = old_name in cfg.projects.definitions
+        # Guard: old project must exist (in project definitions or registry)
+        db_defn = self.get_project_definition(old_name)
+        has_definition = db_defn is not None
         has_docs = len(self.list_docs(project=old_name)) > 0
-        if not has_config and not has_docs:
+        if not has_definition and not has_docs:
             raise ValueError(f"Project '{old_name}' does not exist.")
 
         # Guard: don't merge into an existing project
         existing_docs = self.list_docs(project=new_name)
+        existing_definition = self.get_project_definition(new_name)
         if existing_docs:
             raise ValueError(
                 f"Cannot rename to '{new_name}': project already has {len(existing_docs)} registered docs. "
                 "Use move-file to migrate docs individually."
             )
+        if existing_definition:
+            raise ValueError(f"Cannot rename to '{new_name}': project already exists.")
 
-        cfg = self._get_config()
-        defn = cfg.projects.definitions.get(old_name)
-        old_prefix = defn.home_dir.rstrip("/") if defn else None
+        old_prefix = str(db_defn.home_dir or "").rstrip("/") if db_defn else None
         new_prefix = f"projects/{new_name}"
-        db_defn = self.get_project_definition(old_name)
         if db_defn:
             db_defn.home_dir = f"projects/{new_name}/"
             if db_defn.source_roots:
@@ -1862,8 +1860,8 @@ class DocsRegistry:
         dir_moved = False
         old_dir: Optional[Path] = None
         new_dir: Optional[Path] = None
-        if defn:
-            old_dir = self._resolve_path(defn.home_dir)
+        if old_prefix:
+            old_dir = self._resolve_path(old_prefix)
             new_dir = _visible_home() / "projects" / new_name
             _validate_inside_workspace(new_dir, "target directory")
             if old_dir.exists() and not new_dir.exists():
@@ -2182,8 +2180,7 @@ class DocsRegistry:
         """
         to_project = _validate_project_name(to_project)
         # Guard: target project must exist
-        cfg = self._get_config()
-        if to_project not in cfg.projects.definitions:
+        if self.get_project_definition(to_project) is None:
             raise ValueError(f"Target project '{to_project}' does not exist.")
 
         # Guard: file must be registered
@@ -2381,9 +2378,8 @@ class DocsRegistry:
 
         Returns list of dicts with: name, label, description, doc_count, home_dir.
         """
-        cfg = self._get_config()
         projects = []
-        for name, defn in cfg.projects.definitions.items():
+        for name, defn in sorted(self.get_all_project_definitions().items()):
             if not _docs_project_visible_to_current_instance(name):
                 continue
             docs = self.list_docs(project=name)

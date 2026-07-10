@@ -765,7 +765,10 @@ class TestAutoDiscover:
         from datastore.docsdb import registry as registry_mod
 
         r = _get_registry()
-        r._get_config().projects.definitions["test-project"].patterns = ["../*.md"]
+        defn = r.get_project_definition("test-project")
+        assert defn is not None
+        defn.patterns = ["../*.md"]
+        r.save_project_definition("test-project", defn, link_current_instance=False)
         monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
 
         with pytest.raises(ValueError, match="parent path segments"):
@@ -1961,6 +1964,51 @@ class TestProjectDefinitionsTable:
         defn = r.get_project_definition("db-test-proj")
         assert defn is not None
         assert defn.label == "DB Test"
+
+    def test_project_operations_use_db_project_definitions(self, setup_env):
+        """Project operations should honor DB-only project definitions."""
+        from config import ProjectDefinition
+
+        r = _get_registry()
+        visible_home = setup_env.parents[1]
+        project_dir = visible_home / "projects" / "db-only-proj"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "PROJECT.md").write_text("# Project: DB Only\n", encoding="utf-8")
+        (project_dir / "notes.md").write_text("# Notes\n", encoding="utf-8")
+        r.save_project_definition(
+            "db-only-proj",
+            ProjectDefinition(
+                label="DB Only",
+                home_dir="projects/db-only-proj/",
+                patterns=["*.md"],
+                description="DB-only project",
+            ),
+        )
+        assert "db-only-proj" not in r._get_config().projects.definitions
+
+        projects = {project["name"]: project for project in r.list_projects()}
+        assert projects["db-only-proj"]["home_dir"] == "projects/db-only-proj/"
+
+        with pytest.raises(ValueError, match="already exists"):
+            r.create_project("db-only-proj")
+
+        discovered = r.auto_discover("db-only-proj")
+        assert "projects/db-only-proj/notes.md" in discovered
+
+        (setup_env / "docs").mkdir(exist_ok=True)
+        (setup_env / "docs" / "moving.md").write_text("# Moving\n", encoding="utf-8")
+        r.register("docs/moving.md", project="default")
+        move_result = r.move_file("docs/moving.md", "db-only-proj")
+        assert move_result["moved"] is True
+        assert r.get("docs/moving.md")["project"] == "db-only-proj"
+
+        rename_result = r.rename_project("db-only-proj", "db-renamed-proj")
+        assert rename_result["renamed"] >= 2
+        assert r.get_project_definition("db-only-proj") is None
+        renamed = r.get_project_definition("db-renamed-proj")
+        assert renamed is not None
+        assert renamed.home_dir == "projects/db-renamed-proj/"
+        assert (visible_home / "projects" / "db-renamed-proj" / "notes.md").exists()
 
     def test_get_project_definition_returns_none_for_missing(self, setup_env):
         """get_project_definition returns None for non-existent project."""
