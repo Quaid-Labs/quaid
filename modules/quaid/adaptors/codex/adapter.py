@@ -711,9 +711,10 @@ class CodexAdapter(QuaidAdapter):
         for cursor_file in cursor_files:
             try:
                 data = json.loads(cursor_file.read_text(encoding="utf-8"))
-            except Exception:
+            except Exception as exc:
                 if is_fail_hard_enabled():
                     raise
+                logger.warning("_get_session_path_from_cursor: failed reading cursor file %s: %s", cursor_file, exc)
                 continue
             if str(data.get("session_id") or "").strip() != session_id:
                 continue

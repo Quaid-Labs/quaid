@@ -3821,6 +3821,41 @@ class TestCodexAdapter:
 
         assert "Failed reading Codex session cursor for thread-1" in caplog.text
 
+    def test_get_session_path_from_cursor_logs_corrupt_cursor_file_when_fail_open(
+        self,
+        tmp_path,
+        monkeypatch,
+        caplog,
+    ):
+        from adaptors.codex import adapter as codex_adapter
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+        monkeypatch.setattr(codex_adapter, "is_fail_hard_enabled", lambda: False)
+        fake_daemon = SimpleNamespace(read_cursor=lambda _session_id: {})
+        monkeypatch.setitem(sys.modules, "core.extraction_daemon", fake_daemon)
+
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "thread-1"}}) + "\n",
+            encoding="utf-8",
+        )
+        adapter = CodexAdapter()
+        cursor_dir = tmp_path / "data" / "session-cursors"
+        cursor_dir.mkdir(parents=True)
+        (cursor_dir / "bad.json").write_text("{bad-json", encoding="utf-8")
+        (cursor_dir / "good.json").write_text(
+            json.dumps({"session_id": "thread-1", "transcript_path": str(transcript)}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(adapter, "data_dir", lambda: tmp_path / "data")
+
+        with caplog.at_level("WARNING", logger="adaptors.codex.adapter"):
+            assert adapter._get_session_path_from_cursor("thread-1") == transcript
+
+        assert "_get_session_path_from_cursor: failed reading cursor file" in caplog.text
+        assert "bad.json" in caplog.text
+
     def test_check_session_transition_accepts_thread_id_payload(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.delenv("QUAID_INSTANCE", raising=False)
