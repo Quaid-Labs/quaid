@@ -104,6 +104,78 @@ def test_global_project_cleanup_paths_normalize_mixed_case_input(project_registr
     assert lookup("mixed-cleanup") is None
 
 
+def test_global_project_registry_corrupt_file_warns_when_fail_open(project_registry_env, monkeypatch, caplog):
+    from lib import project_registry
+
+    registry_file = project_registry_env["quaid_home"] / "project-registry.json"
+    registry_file.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(project_registry, "is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level(logging.WARNING, logger="lib.project_registry"):
+        data = project_registry._load()
+
+    assert data == {"projects": {}, "deleted_projects": {}}
+    assert "Failed to load project registry" in caplog.text
+
+
+def test_global_project_registry_corrupt_file_raises_when_failhard(project_registry_env, monkeypatch):
+    from lib import project_registry
+
+    registry_file = project_registry_env["quaid_home"] / "project-registry.json"
+    registry_file.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(project_registry, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Failed to load project registry") as excinfo:
+        project_registry._load()
+
+    assert isinstance(excinfo.value.__cause__, json.JSONDecodeError)
+
+
+def test_create_project_symlink_adapter_failure_falls_back_when_fail_open(
+    project_registry_env,
+    monkeypatch,
+    caplog,
+):
+    from lib import adapter as adapter_mod
+    from lib import project_registry
+
+    canonical = project_registry_env["visible_home"] / "canonical" / "demo"
+    canonical.mkdir(parents=True)
+
+    def _broken_adapter():
+        raise RuntimeError("adapter unavailable")
+
+    monkeypatch.setattr(adapter_mod, "get_adapter", _broken_adapter)
+    monkeypatch.setattr(project_registry, "is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level(logging.WARNING, logger="lib.project_registry"):
+        project_registry._create_project_symlink("demo", str(canonical))
+
+    link_path = project_registry_env["visible_home"] / "projects" / "demo"
+    assert link_path.is_symlink()
+    assert link_path.resolve() == canonical.resolve()
+    assert "Failed to resolve adapter projects dir" in caplog.text
+
+
+def test_create_project_symlink_adapter_failure_raises_when_failhard(project_registry_env, monkeypatch):
+    from lib import adapter as adapter_mod
+    from lib import project_registry
+
+    canonical = project_registry_env["visible_home"] / "canonical" / "demo"
+    canonical.mkdir(parents=True)
+
+    def _broken_adapter():
+        raise RuntimeError("adapter unavailable")
+
+    monkeypatch.setattr(adapter_mod, "get_adapter", _broken_adapter)
+    monkeypatch.setattr(project_registry, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="adapter unavailable"):
+        project_registry._create_project_symlink("demo", str(canonical))
+
+    assert not (project_registry_env["visible_home"] / "projects" / "demo").exists()
+
+
 def test_global_project_registry_timestamps_honor_quaid_now(project_registry_env, monkeypatch):
     from lib.project_registry import link, lookup, mark_deleted, register, rename, unlink
 

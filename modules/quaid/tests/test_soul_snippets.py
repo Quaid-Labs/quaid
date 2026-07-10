@@ -225,6 +225,34 @@ def test_core_markdown_config_failure_raises_when_failhard(monkeypatch):
     assert "config broken" in str(excinfo.value.__cause__)
 
 
+def test_distillation_state_corrupt_file_warns_when_fail_open(monkeypatch, caplog):
+    import datastore.insightdb.soul_snippets as soul_snippets
+
+    state_path = soul_snippets._get_journal_dir() / ".distillation-state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(soul_snippets, "is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level(logging.WARNING, logger="datastore.insightdb.soul_snippets"):
+        assert soul_snippets._get_distillation_state() == {}
+
+    assert "Distillation state unreadable" in caplog.text
+
+
+def test_distillation_state_corrupt_file_raises_when_failhard(monkeypatch):
+    import datastore.insightdb.soul_snippets as soul_snippets
+
+    state_path = soul_snippets._get_journal_dir() / ".distillation-state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(soul_snippets, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Distillation state unreadable") as excinfo:
+        soul_snippets._get_distillation_state()
+
+    assert isinstance(excinfo.value.__cause__, json.JSONDecodeError)
+
+
 def test_apply_decisions_logs_readability_failure_during_cap_check(monkeypatch, caplog):
     import datastore.insightdb.soul_snippets as soul_snippets
 
@@ -1413,7 +1441,8 @@ class TestDistillationStateEdgeCases:
             (journal_dir / ".distillation-state.json").write_text("NOT VALID JSON{{{")
             from datastore.insightdb.soul_snippets import _get_distillation_state
             caplog.set_level("WARNING")
-            state = _get_distillation_state()
+            with patch("datastore.insightdb.soul_snippets.is_fail_hard_enabled", return_value=False):
+                state = _get_distillation_state()
         assert state == {}
         assert "Distillation state unreadable" in caplog.text
 

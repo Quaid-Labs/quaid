@@ -956,6 +956,8 @@ def _get_distillation_state() -> Dict[str, Any]:
                 state_path,
                 exc,
             )
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Distillation state unreadable: {state_path}") from exc
     return {}
 
 

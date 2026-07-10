@@ -18,7 +18,7 @@ class _Registry:
     def __init__(self):
         self.handlers = {}
 
-    def register(self, name, handler):
+    def register(self, name, handler, **_kwargs):
         self.handlers[name] = handler
 
 

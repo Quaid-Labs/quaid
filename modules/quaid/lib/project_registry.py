@@ -26,12 +26,16 @@ Operations:
 """
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from lib.fail_policy import is_fail_hard_enabled
 from lib.project_registry_lock import registry_lock, registry_path
+
+logger = logging.getLogger(__name__)
 
 
 def _registry_path() -> Path:
@@ -63,7 +67,10 @@ def _load() -> Dict[str, Any]:
                 deleted[name] = value
         data["deleted_projects"] = deleted
         return data
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Failed to load project registry %s; using empty registry: %s", p, exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Failed to load project registry: {p}") from exc
         return {"projects": {}, "deleted_projects": {}}
 
 
@@ -220,7 +227,10 @@ def _create_project_symlink(name: str, canonical_path: str) -> None:
     try:
         from lib.adapter import get_adapter
         projects_dir = get_adapter().projects_dir()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to resolve adapter projects dir; falling back to env-derived path: %s", exc)
+        if is_fail_hard_enabled():
+            raise
         home = os.environ.get("QUAID_HOME", "").strip()
         visible = os.environ.get("QUAID_VISIBLE_HOME", "").strip()
         if visible:

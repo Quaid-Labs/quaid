@@ -991,7 +991,7 @@ class TestRunSoulSnippetsReview:
         handlers = {}
 
         class _Registry:
-            def register(self, name, handler):
+            def register(self, name, handler, **_kwargs):
                 handlers[name] = handler
 
         def _result_factory():
@@ -1021,7 +1021,7 @@ class TestRunSoulSnippetsReview:
         handlers = {}
 
         class _Registry:
-            def register(self, name, handler):
+            def register(self, name, handler, **_kwargs):
                 handlers[name] = handler
 
         def _result_factory():
@@ -1051,7 +1051,7 @@ class TestRunSoulSnippetsReview:
         seen = {}
 
         class _Registry:
-            def register(self, name, handler):
+            def register(self, name, handler, **_kwargs):
                 handlers[name] = handler
 
         def _result_factory():
@@ -1074,7 +1074,7 @@ class TestRunSoulSnippetsReview:
         seen = {}
 
         class _Registry:
-            def register(self, name, handler):
+            def register(self, name, handler, **_kwargs):
                 handlers[name] = handler
 
         def _result_factory():
