@@ -2135,13 +2135,12 @@ JSON array only:"""
                         print(f"    Would MERGE: {merged_text[:50]}... — {reason[:40]}")
                     else:
                         id_a, id_b = c["node_a_id"], c["node_b_id"]
-                        # Record resolution BEFORE deleting (CASCADE would remove the row)
-                        resolve_contradiction(c["id"], "merge", reason)
                         merge_result = _merge_nodes_into(
                             graph, merged_text,
                             [id_a, id_b],
                             source="contradiction_merge",
                         )
+                        resolve_contradiction(c["id"], "merge", reason)
 
                         # Create resolution summary artifact
                         summary_text = (

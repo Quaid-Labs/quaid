@@ -655,6 +655,57 @@ def test_contradiction_resolution_summary_failure_logs(monkeypatch, caplog):
     assert "Failed creating contradiction resolution summary node: summary write failed" in caplog.text
 
 
+def test_contradiction_merge_failure_leaves_contradiction_pending(monkeypatch):
+    monkeypatch.setattr(maintenance_ops, "CONTRADICTION_ENABLED", True)
+    metrics = maintenance_ops.JanitorMetrics()
+    pending = [{
+        "id": "c1",
+        "node_a_id": "na",
+        "node_b_id": "nb",
+        "text_a": "A",
+        "text_b": "B",
+        "conf_a": 0.9,
+        "conf_b": 0.8,
+        "created_a": "2026-01-01",
+        "created_b": "2026-01-02",
+        "source_a": "user",
+        "source_b": "user",
+        "speaker_a": "alice",
+        "speaker_b": "alice",
+        "access_a": 1,
+        "access_b": 1,
+        "explanation": "conflict",
+    }]
+    llm_batches = [{
+        "batch_num": 1,
+        "batch": pending,
+        "prompt_tag": "",
+        "response_duration": (json.dumps([{
+            "pair": 1,
+            "action": "MERGE",
+            "merged_text": "merged fact text",
+            "reason": "latest",
+        }]), 0.0),
+    }]
+    class _Conn:
+        def execute(self, sql, params=()):
+            if "SELECT COUNT(*) FROM contradictions" in sql:
+                return _DummyResult(rows=[(1,)])
+            return _DummyResult(rowcount=1)
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    with patch.object(maintenance_ops, "get_pending_contradictions", return_value=pending), \
+         patch.object(maintenance_ops, "_run_llm_batches_parallel", return_value=llm_batches), \
+         patch.object(maintenance_ops, "_merge_nodes_into", side_effect=RuntimeError("merge failed")), \
+         patch.object(maintenance_ops, "resolve_contradiction", side_effect=AssertionError("resolved too early")):
+        with pytest.raises(RuntimeError, match="merge failed"):
+            maintenance_ops.resolve_contradictions_with_opus(_Graph(), metrics, dry_run=False, max_items=1)
+
+
 def test_quaid_now_rejects_malformed_override_when_failhard_enabled(monkeypatch):
     monkeypatch.setenv("QUAID_NOW", "not-a-date")
 
