@@ -648,9 +648,15 @@ def test_process_signal_releases_source_lock_before_post_publish_session_logs(
     extraction_daemon.write_cursor(session_id, 0, str(transcript_path), source_key=source_key)
 
     class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / "instances" / "daemon-inst"
+
         def parse_session_jsonl(self, path):
             _ = path
             return "User: The post-publish lock codeword is amber-fern."
+
+        def notify(self, *_args, **_kwargs):
+            return True
 
     monkeypatch.setattr(
         extract_mod,
@@ -3092,6 +3098,40 @@ def test_is_daemon_process_raises_when_verification_fails_fail_hard(
 
     with pytest.raises(RuntimeError, match="ps unavailable"):
         extraction_daemon._is_daemon_process(4242)
+
+
+def test_daemon_pid_match_returns_false_when_ownership_check_fails_fail_open(
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_matching_daemon_pids",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("ps unavailable")),
+    )
+    monkeypatch.setattr(extraction_daemon, "_quaid_home", lambda: Path("/tmp/quaid"))
+    monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "pytest-runner")
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="quaid.daemon"):
+        assert extraction_daemon._daemon_pid_matches_current_instance(4242) is False
+
+    assert "failed to verify daemon PID 4242 ownership" in caplog.text
+    assert "ps unavailable" in caplog.text
+
+
+def test_daemon_pid_match_raises_when_ownership_check_fails_fail_hard(monkeypatch):
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_matching_daemon_pids",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("ps unavailable")),
+    )
+    monkeypatch.setattr(extraction_daemon, "_quaid_home", lambda: Path("/tmp/quaid"))
+    monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "pytest-runner")
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="ps unavailable"):
+        extraction_daemon._daemon_pid_matches_current_instance(4242)
 
 
 def test_config_reload_watcher_reloads_when_config_mtime_changes(monkeypatch, tmp_path):
@@ -6688,6 +6728,130 @@ def test_process_signal_does_not_reextract_tail_after_nonrolling_semantic_stage(
     assert publish_kwargs[0]["snippet_journal_write_mode"] == "request"
 
 
+def test_process_signal_notification_failure_raises_when_fail_hard(monkeypatch, tmp_path):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+    from core import ingest_runtime
+    from core.runtime import notify as notify_mod
+
+    session_id = "sess-notify-failhard"
+    transcript_path = tmp_path / f"{session_id}.jsonl"
+    transcript_path.write_text(
+        (
+            '{"role":"user","content":"My Palermo notebook codeword is cobalt-nora."}\n'
+            '{"role":"assistant","content":"Understood."}\n'
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    signal_path = extraction_daemon._signal_dir() / "notify-signal.json"
+    signal_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda: 10)
+    monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_max_lines", lambda: 100)
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {})
+    monkeypatch.setattr(extraction_daemon, "_collapse_staged_semantic_duplicates", lambda existing, incoming: (
+        list(existing or []) + list(incoming or []),
+        extraction_daemon._semantic_stage_metrics_defaults(),
+    ))
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+    def fake_buffer_transcript_tail(_path, _from_line, state, **_kwargs):
+        staged = dict(state or {})
+        staged.update({
+            "session_id": session_id,
+            "semantic_buffer": "User: My Palermo notebook codeword is cobalt-nora.",
+            "semantic_buffer_tokens": 12,
+            "buffered_line_offset": 2,
+            "processed_line_offset": 0,
+            "raw_facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+            "transcript_path": str(transcript_path),
+        })
+        return staged, {
+            "raw_lines_added": 2,
+            "semantic_chars_added": len(staged["semantic_buffer"]),
+            "semantic_tokens_added": 12,
+            "buffered_line_offset": 2,
+        }
+
+    monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", fake_buffer_transcript_tail)
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path
+
+        def parse_session_jsonl(self, path):
+            return "User: My Palermo notebook codeword is cobalt-nora.\nAssistant: Understood."
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    published_payloads = []
+
+    def fake_extract_from_transcript(*_args, **_kwargs):
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [{
+                "text": "Solomon Steadman's Palermo notebook codeword is cobalt-nora",
+                "speaker": "user",
+                "privacy": "shared",
+                "category": "fact",
+                "keywords": "palermo notebook codeword",
+            }],
+            "facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        }
+
+    def fake_apply_extracted_payloads(payload, **_kwargs):
+        published_payloads.append(payload)
+        return {
+            "facts_stored": len(payload.get("raw_facts", [])),
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [{"status": "stored"} for _ in payload.get("raw_facts", [])],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        }
+
+    set_adapter(_Adapter())
+    try:
+        monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+        monkeypatch.setattr(extract_mod, "apply_extracted_payloads", fake_apply_extracted_payloads)
+        monkeypatch.setattr(
+            notify_mod,
+            "notify_memory_extraction",
+            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("notify config broken")),
+        )
+
+        with pytest.raises(RuntimeError, match="post-extraction notification failed") as excinfo:
+            extraction_daemon.process_signal({
+                "session_id": session_id,
+                "type": "reset",
+                "transcript_path": str(transcript_path),
+                "_signal_path": str(signal_path),
+            })
+    finally:
+        reset_adapter()
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "notify config broken" in str(excinfo.value.__cause__)
+    assert len(published_payloads) == 1
+    assert not signal_path.exists()
+
+
 def test_summarize_fact_result_buckets_groups_duplicate_and_skip_reasons():
     summary = extraction_daemon._summarize_fact_result_buckets([
         {"status": "duplicate", "reason": "Already stored"},
@@ -6850,6 +7014,9 @@ def test_process_signal_extracts_plain_session_rebased_after_reset_backup(monkey
 
         def is_subagent_session(self, session_id, transcript_path=None):
             return False
+
+        def notify(self, *_args, **_kwargs):
+            return True
 
     set_adapter(_Adapter())
     try:

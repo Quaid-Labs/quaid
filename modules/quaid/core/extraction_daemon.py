@@ -914,6 +914,8 @@ def _daemon_pid_matches_current_instance(pid: int) -> bool:
             _instance_id(),
             exc,
         )
+        if _fail_hard_enabled():
+            raise
         return False
 
 
@@ -8348,6 +8350,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             )
         except Exception as e:
             logger.warning("[%s] session %s: notification failed: %s", label, session_id, e)
+            if _fail_hard_enabled():
+                raise RuntimeError("post-extraction notification failed") from e
 
         if (
             signal_type == "timeout"
