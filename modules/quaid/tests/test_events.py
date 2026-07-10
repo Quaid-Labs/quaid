@@ -4374,6 +4374,44 @@ def test_emit_event_trims_history_file_before_append(monkeypatch, tmp_path):
     assert last.get("event", {}).get("payload", {}).get("reason") == "trim-check"
 
 
+def test_emit_event_appends_when_history_trim_fails_without_fail_hard(monkeypatch, tmp_path, caplog):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(events, "MAX_HISTORY_JSONL_BYTES", 120)
+    monkeypatch.setattr(events, "HISTORY_TRIM_TARGET_BYTES", 60)
+
+    history_path = get_runtime_root(iroot) / "events" / "history.jsonl"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    seed = "".join(
+        json.dumps({"ts": f"t{i}", "op": "seed", "event": {"id": i}}) + "\n"
+        for i in range(80)
+    )
+    history_path.write_text(seed, encoding="utf-8")
+
+    real_write_bytes = Path.write_bytes
+
+    def fail_trim_write(path, data):
+        if path == history_path:
+            raise OSError("trim blocked")
+        return real_write_bytes(path, data)
+
+    monkeypatch.setattr(Path, "write_bytes", fail_trim_write)
+
+    with caplog.at_level("WARNING", logger="core.runtime.events"):
+        emit_event(name="session.reset", payload={"reason": "trim-failed"}, source="pytest")
+
+    raw = history_path.read_text(encoding="utf-8")
+    lines = [line for line in raw.splitlines() if line.strip()]
+    assert len(raw.encode("utf-8")) > len(seed.encode("utf-8"))
+    assert "appending new entry anyway" in caplog.text
+    last = json.loads(lines[-1])
+    assert last.get("op") == "emit"
+    assert last.get("event", {}).get("payload", {}).get("reason") == "trim-failed"
+
+
 def test_process_events_handler_error_raises_in_fail_hard(monkeypatch, tmp_path):
     set_adapter(TestAdapter(tmp_path))
 

@@ -548,12 +548,11 @@ def _append_jsonl(path: Path, payload: Any) -> None:
                     keep = keep[newline + 1 :]
                 path.write_bytes(keep)
         except Exception as exc:
-            logger.warning("Failed trimming history file %s: %s", path, exc)
+            logger.warning("Failed trimming history file %s; appending new entry anyway: %s", path, exc)
             if _is_fail_hard_enabled():
                 raise RuntimeError(
                     f"Failed trimming event history while fail-hard mode is enabled: {path}"
                 ) from exc
-            return
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
