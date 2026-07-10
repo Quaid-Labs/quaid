@@ -3053,6 +3053,38 @@ class TestCodexAdapter:
         assert "invalid-model-m6-probe" in second
         assert pending_path.is_file()
 
+    def test_pending_context_relays_when_sticky_rewrite_fails_failopen(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-rewrite-soft")
+        adapter = CodexAdapter(home=tmp_path)
+        pending_path = adapter.data_dir() / "codex-pending-notifications.jsonl"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text(
+            json.dumps(
+                {
+                    "message": "[Quaid error] [provider] rewrite-failure-notice",
+                    "source": "provider",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("adaptors.codex.adapter.is_fail_hard_enabled", lambda: False)
+
+        def fail_replace(*_args, **_kwargs):
+            raise OSError("replace failed")
+
+        monkeypatch.setattr("adaptors.codex.adapter.os.replace", fail_replace)
+
+        context = adapter.get_pending_context()
+        captured = capsys.readouterr()
+
+        assert "rewrite-failure-notice" in context
+        assert "Failed to clean up Codex notifications: replace failed" in captured.err
+        assert pending_path.is_file()
+        assert not list(pending_path.parent.glob(f".{pending_path.name}.tmp.*"))
+
     def test_pending_context_honors_quaid_now_for_timestamps_and_ttl(self, tmp_path, monkeypatch):
         monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-clock")
         monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:00:00Z")

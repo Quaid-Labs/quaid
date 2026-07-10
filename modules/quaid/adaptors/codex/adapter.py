@@ -270,6 +270,7 @@ class CodexAdapter(QuaidAdapter):
             total_lines = 0
             expired = 0
             malformed = 0
+            unlinked = False
             with self._pending_notifications_lock():
                 if not pending.is_file():
                     _trace_m15("adapter.codex.pending.missing", path=str(pending))
@@ -312,16 +313,34 @@ class CodexAdapter(QuaidAdapter):
                             for entry in sticky_entries.values():
                                 handle.write(json.dumps(entry) + "\n")
                         os.replace(tmp_path, pending)
+                    except Exception as exc:
+                        try:
+                            tmp_path.unlink()
+                        except OSError:
+                            pass
+                        if is_fail_hard_enabled():
+                            raise
+                        _trace_m15("adapter.codex.pending.cleanup_error", path=str(pending), error=str(exc))
+                        print(f"[notify] Failed to clean up Codex notifications: {exc}", file=sys.stderr)
                     except BaseException:
                         try:
                             tmp_path.unlink()
                         except OSError:
                             pass
                         raise
-                    unlinked = False
+                    else:
+                        unlinked = False
                 else:
-                    pending.unlink(missing_ok=True)
-                    unlinked = True
+                    try:
+                        pending.unlink(missing_ok=True)
+                    except OSError as exc:
+                        if is_fail_hard_enabled():
+                            raise
+                        _trace_m15("adapter.codex.pending.cleanup_error", path=str(pending), error=str(exc))
+                        print(f"[notify] Failed to clean up Codex notifications: {exc}", file=sys.stderr)
+                        unlinked = False
+                    else:
+                        unlinked = True
             _trace_m15(
                 "adapter.codex.pending.drain",
                 path=str(pending),
