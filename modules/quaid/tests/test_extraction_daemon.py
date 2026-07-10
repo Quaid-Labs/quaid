@@ -9496,6 +9496,31 @@ class TestSignalRoundTrip:
         assert not lock_path.exists()
         assert events.index("lock") < events.index(("unlink", True)) < events.index(("unlock", True))
 
+    def test_write_rolling_metric_holds_flock_through_append(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(extraction_daemon, "_instance_root", lambda: tmp_path)
+        real_flock = extraction_daemon.fcntl.flock
+        lock_held = {"value": False}
+        events = []
+
+        def tracking_flock(fd, op):
+            if op & extraction_daemon.fcntl.LOCK_EX:
+                lock_held["value"] = True
+                events.append("lock")
+            elif op == extraction_daemon.fcntl.LOCK_UN:
+                events.append(("unlock", lock_held["value"]))
+                lock_held["value"] = False
+            return real_flock(fd, op)
+
+        monkeypatch.setattr(extraction_daemon.fcntl, "flock", tracking_flock)
+
+        extraction_daemon.write_rolling_metric("rolling_flush", "sess-lock", payload="x" * 64)
+
+        metric_path = tmp_path / "logs" / "daemon" / "rolling-extraction.jsonl"
+        rows = metric_path.read_text(encoding="utf-8").splitlines()
+        assert len(rows) == 1
+        assert json.loads(rows[0])["session_id"] == "sess-lock"
+        assert events == ["lock", ("unlock", True)]
+
     def test_processing_lock_active_reaps_old_unlocked_empty_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")

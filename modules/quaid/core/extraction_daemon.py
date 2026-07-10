@@ -4248,7 +4248,11 @@ def write_rolling_metric(event: str, session_id: str, **data: Any) -> None:
     payload.update(data)
     try:
         with _rolling_metrics_path().open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload) + "\n")
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                fh.write(json.dumps(payload) + "\n")
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
     except OSError as exc:
         logger.warning("rolling metric write failed for %s: %s", session_id, exc)
 
