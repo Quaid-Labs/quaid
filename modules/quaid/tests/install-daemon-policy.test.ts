@@ -13,18 +13,28 @@ function makeTempDir(prefix: string): string {
 }
 
 function buildClaudeWrapperForTest(setupText: string, target: string): string {
+  return loadClaudeShimHelpersForTest(setupText).buildClaudeCliWrapper(target);
+}
+
+function loadClaudeShimHelpersForTest(setupText: string): {
+  buildClaudeCliWrapper: (targetPath: string) => string;
+  ensureCliShim: (targetPath: string, shimName: string, options?: { wrapperScript?: string }) => string;
+} {
   const start = setupText.indexOf("function _shellQuote");
-  const end = setupText.indexOf("function ensureCliShim");
+  const end = setupText.indexOf("function ensureQuaidCliShim");
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
   const snippet = setupText.slice(start, end);
-  const fn = new Function(
+  return new Function(
     "fs",
     "path",
     "process",
-    `${snippet}\nreturn buildClaudeCliWrapper;`,
-  )(fs, path, process) as (targetPath: string) => string;
-  return fn(target);
+    "os",
+    `${snippet}\nreturn { buildClaudeCliWrapper, ensureCliShim };`,
+  )(fs, path, process, os) as {
+    buildClaudeCliWrapper: (targetPath: string) => string;
+    ensureCliShim: (targetPath: string, shimName: string, options?: { wrapperScript?: string }) => string;
+  };
 }
 
 describe("install daemon policy", () => {
@@ -599,15 +609,22 @@ describe("install daemon policy", () => {
 
     expect(setupText).toContain("function ensureClaudeCliShim()");
     expect(setupText).toContain("function buildClaudeCliWrapper(target)");
+    expect(setupText).toContain("function isQuaidClaudeCliWrapper(candidate)");
+    expect(setupText).toContain("return target && !isQuaidClaudeCliWrapper(target) ? target : \"\"");
     expect(setupText).toContain("resolveHostBinary(\"claude\"");
     expect(setupText).toContain("if (path.resolve(candidateShimPath) === resolvedTargetPath)");
     expect(setupText).toContain("wrapperScript: buildClaudeCliWrapper(target)");
+    expect(setupText).toContain("path.basename(realTarget) === \"cli.js\"");
+    expect(setupText).toContain("const wrapperScript = typeof options.wrapperScript === \"string\"");
     expect(setupText).toContain(".credentials.json.quaid-run.");
-    expect(setupText).toContain("trap 'if [ -n");
+    expect(setupText).toContain("_quaid_cc_restore() {");
+    expect(setupText).toContain("trap '_quaid_cc_restore' EXIT");
     expect(setupText).toContain("$_quaid_cc_backup");
     expect(setupText).toContain("restored valid Claude credentials after CLI cleared the access token");
     expect(setupText).toContain("_quaid_cc_status=$?");
     expect(setupText).not.toContain("exec ${_shellQuote(process.execPath)} ${_shellQuote(realTarget)}");
+    expect(setupText).not.toContain("path.basename(realTarget) !== \"cli.js\"");
+    expect(setupText).not.toContain("selfTargetCollision && typeof options.wrapperScript");
     expect(setupText).toContain("Updated Claude Code CLI shim:");
     expect(setupText).toContain("Could not update Claude Code CLI shim automatically.");
   });
@@ -666,6 +683,106 @@ describe("install daemon policy", () => {
       expect(restored.claudeAiOauth.expiresAt).toBe(expiresAt);
       expect(fs.readdirSync(claudeDir).some((name) => name.includes(".quaid-run."))).toBe(false);
     } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("Claude Code shim restores credentials for a non-JS Claude binary target", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+    const tmp = makeTempDir("quaid-claude-native-shim-");
+    try {
+      const realCli = path.join(tmp, "claude.exe");
+      fs.writeFileSync(
+        realCli,
+        [
+          "#!/bin/sh",
+          "cat > \"$HOME/.claude/.credentials.json\" <<'JSON'",
+          "{\"claudeAiOauth\":{\"accessToken\":\"\",\"refreshToken\":\"placeholder-not-used-accesstoken-valid-48h\",\"expiresAt\":0}}",
+          "JSON",
+          "exit 9",
+          "",
+        ].join("\n"),
+        { encoding: "utf8", mode: 0o755 },
+      );
+      fs.chmodSync(realCli, 0o755);
+      const wrapperPath = path.join(tmp, "claude");
+      fs.writeFileSync(wrapperPath, buildClaudeWrapperForTest(setupText, realCli), {
+        encoding: "utf8",
+        mode: 0o755,
+      });
+      fs.chmodSync(wrapperPath, 0o755);
+
+      const home = path.join(tmp, "home");
+      const claudeDir = path.join(home, ".claude");
+      fs.mkdirSync(claudeDir, { recursive: true });
+      const credsPath = path.join(claudeDir, ".credentials.json");
+      const expiresAt = Date.now() + 48 * 60 * 60 * 1000;
+      fs.writeFileSync(
+        credsPath,
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "valid-access-token",
+            refreshToken: "placeholder-not-used-accesstoken-valid-48h",
+            expiresAt,
+          },
+        }) + "\n",
+        "utf8",
+      );
+
+      const result = spawnSync(wrapperPath, ["--fake"], {
+        env: { ...process.env, HOME: home },
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(9);
+      expect(result.stderr).toContain("restored valid Claude credentials");
+      const restored = JSON.parse(fs.readFileSync(credsPath, "utf8"));
+      expect(restored.claudeAiOauth.accessToken).toBe("valid-access-token");
+      expect(restored.claudeAiOauth.expiresAt).toBe(expiresAt);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("Claude Code install writes credential wrapper for non-collision shim topology", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+    const helpers = loadClaudeShimHelpersForTest(setupText);
+    const tmp = makeTempDir("quaid-claude-wrapper-install-");
+    const oldHome = process.env.HOME;
+    const oldPath = process.env.PATH;
+    try {
+      const home = path.join(tmp, "home");
+      const shimDir = path.join(home, "bin");
+      const targetDir = path.join(tmp, "system-bin");
+      fs.mkdirSync(shimDir, { recursive: true });
+      fs.mkdirSync(targetDir, { recursive: true });
+      const realCli = path.join(targetDir, "claude.exe");
+      fs.writeFileSync(realCli, "#!/bin/sh\nexit 0\n", { encoding: "utf8", mode: 0o755 });
+      fs.chmodSync(realCli, 0o755);
+      process.env.HOME = home;
+      process.env.PATH = shimDir;
+
+      const wrapperScript = helpers.buildClaudeCliWrapper(realCli);
+      const shimPath = helpers.ensureCliShim(realCli, "claude", { wrapperScript });
+
+      expect(shimPath).toBe(path.join(shimDir, "claude"));
+      expect(fs.lstatSync(shimPath).isSymbolicLink()).toBe(false);
+      const shimText = fs.readFileSync(shimPath, "utf8");
+      expect(shimText).toContain("_quaid_cc_restore() {");
+      expect(shimText).toContain("claude.exe");
+    } finally {
+      if (oldHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = oldHome;
+      }
+      if (oldPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = oldPath;
+      }
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });

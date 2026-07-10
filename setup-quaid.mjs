@@ -5530,6 +5530,36 @@ function resolveHostBinary(cmd, extraCandidates = []) {
   return "";
 }
 
+function isQuaidClaudeCliWrapper(candidate) {
+  try {
+    if (!candidate || !fs.existsSync(candidate) || fs.lstatSync(candidate).isSymbolicLink()) {
+      return false;
+    }
+    const text = fs.readFileSync(candidate, "utf8").slice(0, 4096);
+    return text.includes("_quaid_cc_restore()") && text.includes("[quaid][claude-shim]");
+  } catch {
+    return false;
+  }
+}
+
+function resolveClaudeHostBinary() {
+  const candidates = [
+    "/usr/local/bin/claude",
+    "/opt/homebrew/bin/claude",
+    path.join(os.homedir(), ".npm-global", "bin", "claude"),
+    path.join(os.homedir(), ".local", "bin", "claude"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (candidate && fs.existsSync(candidate) && !isQuaidClaudeCliWrapper(candidate)) {
+        return candidate;
+      }
+    } catch {}
+  }
+  const target = resolveHostBinary("claude", candidates);
+  return target && !isQuaidClaudeCliWrapper(target) ? target : "";
+}
+
 function resolvePython3Binary() {
   for (const candidate of ["/opt/homebrew/bin/python3", "/usr/local/bin/python3"]) {
     try {
@@ -5554,60 +5584,17 @@ function _shellQuote(value) {
 function buildClaudeCliWrapper(target) {
   try {
     const realTarget = fs.realpathSync(target);
-    if (!realTarget || path.basename(realTarget) !== "cli.js" || !fs.existsSync(realTarget)) {
+    if (!realTarget || !fs.existsSync(realTarget)) {
       return "";
     }
+    const targetCommand = path.basename(realTarget) === "cli.js"
+      ? `${_shellQuote(process.execPath)} ${_shellQuote(realTarget)}`
+      : _shellQuote(realTarget);
     return [
       "#!/bin/sh",
       "_quaid_cc_creds=\"$HOME/.claude/.credentials.json\"",
       "_quaid_cc_backup=\"\"",
-      "trap 'if [ -n \"$_quaid_cc_backup\" ]; then rm -f \"$_quaid_cc_backup\"; fi' EXIT",
-      "if command -v python3 >/dev/null 2>&1 && [ -f \"$_quaid_cc_creds\" ]; then",
-      "  _quaid_cc_backup=$(mktemp \"$HOME/.claude/.credentials.json.quaid-run.XXXXXX\" 2>/dev/null || true)",
-      "  if [ -n \"$_quaid_cc_backup\" ]; then",
-      "    python3 - snapshot \"$_quaid_cc_creds\" \"$_quaid_cc_backup\" <<'PYEOF' >/dev/null 2>&1 || true",
-      "import datetime, json, os, pathlib, shutil, sys",
-      "",
-      "def _expires_at(raw):",
-      "    if raw in (None, ''):",
-      "        return None",
-      "    if isinstance(raw, (int, float)):",
-      "        return datetime.datetime.fromtimestamp(float(raw) / 1000.0, tz=datetime.timezone.utc)",
-      "    text = str(raw).strip()",
-      "    if text.isdigit():",
-      "        return datetime.datetime.fromtimestamp(int(text) / 1000.0, tz=datetime.timezone.utc)",
-      "    parsed = datetime.datetime.fromisoformat(text.replace('Z', '+00:00'))",
-      "    if parsed.tzinfo is None:",
-      "        parsed = parsed.replace(tzinfo=datetime.timezone.utc)",
-      "    return parsed",
-      "",
-      "def _valid(path):",
-      "    try:",
-      "        data = json.loads(path.read_text(encoding='utf-8'))",
-      "        oauth = data.get('claudeAiOauth') if isinstance(data, dict) else None",
-      "        if not isinstance(oauth, dict):",
-      "            return False",
-      "        if not str(oauth.get('accessToken') or '').strip():",
-      "            return False",
-      "        expires = _expires_at(oauth.get('expiresAt'))",
-      "        return bool(expires and expires > datetime.datetime.now(datetime.timezone.utc))",
-      "    except Exception:",
-      "        return False",
-      "",
-      "mode, src, dst = sys.argv[1], pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])",
-      "if mode == 'snapshot' and _valid(src):",
-      "    shutil.copy2(src, dst)",
-      "    os.chmod(dst, 0o600)",
-      "else:",
-      "    try:",
-      "        dst.unlink()",
-      "    except FileNotFoundError:",
-      "        pass",
-      "PYEOF",
-      "  fi",
-      "fi",
-      `${_shellQuote(process.execPath)} ${_shellQuote(realTarget)} \"$@\"`,
-      "_quaid_cc_status=$?",
+      "_quaid_cc_restore() {",
       "if command -v python3 >/dev/null 2>&1 && [ -n \"$_quaid_cc_backup\" ] && [ -f \"$_quaid_cc_backup\" ]; then",
       "  python3 - restore \"$_quaid_cc_creds\" \"$_quaid_cc_backup\" <<'PYEOF' >&2 || true",
       "import datetime, json, os, pathlib, sys",
@@ -5655,7 +5642,57 @@ function buildClaudeCliWrapper(target) {
       "    print('[quaid][claude-shim] restored valid Claude credentials after CLI cleared the access token')",
       "PYEOF",
       "  rm -f \"$_quaid_cc_backup\"",
+      "  _quaid_cc_backup=\"\"",
       "fi",
+      "}",
+      "trap '_quaid_cc_restore' EXIT",
+      "if command -v python3 >/dev/null 2>&1 && [ -f \"$_quaid_cc_creds\" ]; then",
+      "  _quaid_cc_backup=$(mktemp \"$HOME/.claude/.credentials.json.quaid-run.XXXXXX\" 2>/dev/null || true)",
+      "  if [ -n \"$_quaid_cc_backup\" ]; then",
+      "    python3 - snapshot \"$_quaid_cc_creds\" \"$_quaid_cc_backup\" <<'PYEOF' >/dev/null 2>&1 || true",
+      "import datetime, json, os, pathlib, shutil, sys",
+      "",
+      "def _expires_at(raw):",
+      "    if raw in (None, ''):",
+      "        return None",
+      "    if isinstance(raw, (int, float)):",
+      "        return datetime.datetime.fromtimestamp(float(raw) / 1000.0, tz=datetime.timezone.utc)",
+      "    text = str(raw).strip()",
+      "    if text.isdigit():",
+      "        return datetime.datetime.fromtimestamp(int(text) / 1000.0, tz=datetime.timezone.utc)",
+      "    parsed = datetime.datetime.fromisoformat(text.replace('Z', '+00:00'))",
+      "    if parsed.tzinfo is None:",
+      "        parsed = parsed.replace(tzinfo=datetime.timezone.utc)",
+      "    return parsed",
+      "",
+      "def _valid(path):",
+      "    try:",
+      "        data = json.loads(path.read_text(encoding='utf-8'))",
+      "        oauth = data.get('claudeAiOauth') if isinstance(data, dict) else None",
+      "        if not isinstance(oauth, dict):",
+      "            return False",
+      "        if not str(oauth.get('accessToken') or '').strip():",
+      "            return False",
+      "        expires = _expires_at(oauth.get('expiresAt'))",
+      "        return bool(expires and expires > datetime.datetime.now(datetime.timezone.utc))",
+      "    except Exception:",
+      "        return False",
+      "",
+      "mode, src, dst = sys.argv[1], pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])",
+      "if mode == 'snapshot' and _valid(src):",
+      "    shutil.copy2(src, dst)",
+      "    os.chmod(dst, 0o600)",
+      "else:",
+      "    try:",
+      "        dst.unlink()",
+      "    except FileNotFoundError:",
+      "        pass",
+      "PYEOF",
+      "  fi",
+      "fi",
+      `${targetCommand} "$@"`,
+      "_quaid_cc_status=$?",
+      "_quaid_cc_restore",
       "exit $_quaid_cc_status",
       "",
     ].join("\n");
@@ -5679,7 +5716,6 @@ function ensureCliShim(target, shimName, options = {}) {
     ]));
 
     let shimDir = "";
-    let selfTargetCollision = false;
     const resolvedTargetPath = path.resolve(String(target));
     for (const candidate of preferredDirs) {
       if (!candidate) continue;
@@ -5694,7 +5730,6 @@ function ensureCliShim(target, shimName, options = {}) {
       }
       const candidateShimPath = path.join(normalized, shimName);
       if (path.resolve(candidateShimPath) === resolvedTargetPath) {
-        selfTargetCollision = true;
         continue;
       }
       try {
@@ -5714,7 +5749,7 @@ function ensureCliShim(target, shimName, options = {}) {
 
     const shimPath = path.join(shimDir, shimName);
     fs.rmSync(shimPath, { force: true });
-    const wrapperScript = selfTargetCollision && typeof options.wrapperScript === "string"
+    const wrapperScript = typeof options.wrapperScript === "string"
       ? String(options.wrapperScript)
       : "";
     if (wrapperScript) {
@@ -5757,12 +5792,7 @@ function ensureQuaidCliShim(pluginDirPath) {
 }
 
 function ensureClaudeCliShim() {
-  const target = resolveHostBinary("claude", [
-    "/usr/local/bin/claude",
-    "/opt/homebrew/bin/claude",
-    path.join(os.homedir(), ".npm-global", "bin", "claude"),
-    path.join(os.homedir(), ".local", "bin", "claude"),
-  ]);
+  const target = resolveClaudeHostBinary();
   return target ? ensureCliShim(target, "claude", { wrapperScript: buildClaudeCliWrapper(target) }) : "";
 }
 
