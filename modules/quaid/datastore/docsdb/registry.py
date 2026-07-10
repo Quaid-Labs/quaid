@@ -2359,12 +2359,22 @@ class DocsRegistry:
                 if not abs_path.exists():
                     entry = {"id": row["id"], "file_path": row["file_path"], "project": row["project"]}
                     if not dry_run:
+                        savepoint_active = False
                         try:
+                            conn.execute("SAVEPOINT docs_registry_gc_row")
+                            savepoint_active = True
                             deleted = self._remove_rag_chunks_for_registry_path(conn, row["file_path"])
                             conn.execute("DELETE FROM doc_registry WHERE id = ?", (row["id"],))
+                            conn.execute("RELEASE SAVEPOINT docs_registry_gc_row")
+                            savepoint_active = False
                             entry["rag_chunks_deleted"] = deleted
                             rag_chunks_deleted += deleted
                         except Exception as exc:
+                            if savepoint_active:
+                                try:
+                                    conn.execute("ROLLBACK TO SAVEPOINT docs_registry_gc_row")
+                                finally:
+                                    conn.execute("RELEASE SAVEPOINT docs_registry_gc_row")
                             if _fail_hard_enabled():
                                 raise RuntimeError(f"Failed to clean docs RAG chunks for {row['file_path']!r}") from exc
                             logger.warning(
