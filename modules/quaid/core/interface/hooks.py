@@ -4335,9 +4335,9 @@ def hook_subagent_start(args):
         "keys": sorted(hook_input.keys()) if isinstance(hook_input, dict) else [],
     })
 
-    parent_session_id = hook_input.get("session_id", "").strip()
-    child_id = hook_input.get("agent_id", "").strip()
-    child_type = hook_input.get("agent_type", "").strip()
+    parent_session_id = str(hook_input.get("session_id") or "").strip()
+    child_id = str(hook_input.get("agent_id") or "").strip()
+    child_type = str(hook_input.get("agent_type") or "").strip()
 
     if not parent_session_id or not child_id:
         _write_hook_trace("hook.subagent.start.skipped", {
@@ -4395,9 +4395,9 @@ def hook_subagent_stop(args):
         "keys": sorted(hook_input.keys()) if isinstance(hook_input, dict) else [],
     })
 
-    parent_session_id = hook_input.get("session_id", "").strip()
-    child_id = hook_input.get("agent_id", "").strip()
-    transcript_path = hook_input.get("agent_transcript_path", "").strip()
+    parent_session_id = str(hook_input.get("session_id") or "").strip()
+    child_id = str(hook_input.get("agent_id") or "").strip()
+    transcript_path = str(hook_input.get("agent_transcript_path") or "").strip()
 
     if not parent_session_id or not child_id:
         _write_hook_trace("hook.subagent.stop.skipped", {
@@ -4414,6 +4414,13 @@ def hook_subagent_stop(args):
     def _preserve_subagent_transcript(child_session_id: str, source_path: str) -> str:
         if not child_session_id or not source_path:
             return source_path
+        safe_child_session_id = _safe_session_id_for_path(child_session_id)
+        if not safe_child_session_id:
+            print(
+                f"[quaid][subagent-stop] preserve warning: invalid agent_id for transcript path: {child_session_id!r}",
+                file=sys.stderr,
+            )
+            return source_path
         src = Path(source_path).expanduser()
         if not src.is_file():
             deleted_matches = sorted(src.parent.glob(f"{src.name}.deleted.*"))
@@ -4426,7 +4433,7 @@ def hook_subagent_stop(args):
             logs_dir = get_adapter().logs_dir() / "quaid" / "sessions"
             logs_dir.mkdir(parents=True, exist_ok=True)
             suffix = "".join(src.suffixes) or ".jsonl"
-            dest = logs_dir / f"{child_session_id}{suffix}"
+            dest = logs_dir / f"{safe_child_session_id}{suffix}"
             tmp_dest = dest.with_name(f".{dest.name}.tmp.{os.getpid()}.{time.time_ns()}")
             try:
                 shutil.copyfile(src, tmp_dest)

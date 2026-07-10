@@ -4644,6 +4644,63 @@ class TestSubagentHooks:
         assert recorded["transcript_path"] == str(preserved)
         assert "completed child-1 under parent-1" in err
 
+    def test_hook_subagent_stop_rejects_agent_id_for_preserved_transcript_path(self, tmp_path, monkeypatch):
+        source = tmp_path / "child.jsonl"
+        source.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+        logs_dir = tmp_path / "instances" / "pytest-runner" / "logs"
+        adapter = _adapter_mock()
+        adapter.logs_dir.return_value = logs_dir
+        monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+
+        recorded = {}
+
+        def fake_mark_complete(parent_session_id, child_id, transcript_path=None):
+            recorded["parent_session_id"] = parent_session_id
+            recorded["child_id"] = child_id
+            recorded["transcript_path"] = transcript_path
+
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry.mark_complete = fake_mark_complete
+        monkeypatch.setitem(sys.modules, "core.subagent_registry", fake_registry)
+
+        err = _run_hook_subagent_stop(
+            {
+                "session_id": "parent-1",
+                "agent_id": "../../escaped",
+                "agent_transcript_path": str(source),
+            },
+            monkeypatch=monkeypatch,
+        )
+
+        assert not (logs_dir / "quaid" / "escaped.jsonl").exists()
+        assert not (logs_dir / "escaped.jsonl").exists()
+        assert recorded["child_id"] == "../../escaped"
+        assert recorded["transcript_path"] == str(source)
+        assert "invalid agent_id for transcript path" in err
+
+    def test_hook_subagent_hooks_tolerate_null_ids(self, monkeypatch):
+        monkeypatch.setattr("core.interface.hooks._ensure_hook_instance_ready", lambda _hook_input: None)
+
+        start_err = _run_hook_subagent_start(
+            {
+                "session_id": None,
+                "agent_id": None,
+                "agent_type": None,
+            },
+            monkeypatch=monkeypatch,
+        )
+        stop_err = _run_hook_subagent_stop(
+            {
+                "session_id": None,
+                "agent_id": None,
+                "agent_transcript_path": None,
+            },
+            monkeypatch=monkeypatch,
+        )
+
+        assert "registered" not in start_err
+        assert "completed" not in stop_err
+
     def test_hook_subagent_stop_preserve_replace_failure_keeps_existing_transcript(self, tmp_path, monkeypatch):
         from core.interface import hooks
 
