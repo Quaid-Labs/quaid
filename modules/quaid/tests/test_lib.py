@@ -284,6 +284,94 @@ class TestGetConnection:
 
         assert attempts["wal"] == 3
 
+    def test_connection_setup_raises_when_wal_mode_not_activated_under_failhard(
+        self, tmp_path, monkeypatch
+    ):
+        from lib import database
+
+        db_path = tmp_path / "test.db"
+        real_connect = database.sqlite3.connect
+
+        class DeleteJournalConnection:
+            def __init__(self, conn):
+                object.__setattr__(self, "_conn", conn)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+            def __setattr__(self, name, value):
+                setattr(self._conn, name, value)
+
+            def execute(self, sql, *args, **kwargs):
+                if str(sql).strip().upper() == "PRAGMA JOURNAL_MODE=WAL":
+                    return SimpleNamespace(fetchone=lambda: ("delete",))
+                return self._conn.execute(sql, *args, **kwargs)
+
+        monkeypatch.setattr(database.sqlite3, "connect", lambda *args, **kwargs: DeleteJournalConnection(real_connect(*args, **kwargs)))
+        monkeypatch.setattr(database, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="SQLite WAL mode not activated"):
+            with database.get_connection(db_path):
+                pass
+
+    def test_connection_setup_warns_when_wal_mode_not_activated_fail_open(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        from lib import database
+
+        db_path = tmp_path / "test.db"
+        real_connect = database.sqlite3.connect
+
+        class DeleteJournalConnection:
+            def __init__(self, conn):
+                object.__setattr__(self, "_conn", conn)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+            def __setattr__(self, name, value):
+                setattr(self._conn, name, value)
+
+            def execute(self, sql, *args, **kwargs):
+                if str(sql).strip().upper() == "PRAGMA JOURNAL_MODE=WAL":
+                    return SimpleNamespace(fetchone=lambda: ("delete",))
+                return self._conn.execute(sql, *args, **kwargs)
+
+        monkeypatch.setattr(database.sqlite3, "connect", lambda *args, **kwargs: DeleteJournalConnection(real_connect(*args, **kwargs)))
+        monkeypatch.setattr(database, "_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level("WARNING", logger="lib.database"):
+            with database.get_connection(db_path) as conn:
+                conn.execute("CREATE TABLE degraded_wal (id INTEGER PRIMARY KEY)")
+
+        assert "SQLite WAL mode not activated" in caplog.text
+
+    def test_refresh_read_visibility_raises_checkpoint_failure_when_failhard(self, monkeypatch):
+        from lib import database
+
+        class BrokenConn:
+            def execute(self, _sql):
+                raise sqlite3.OperationalError("checkpoint failed")
+
+        monkeypatch.setattr(database, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(sqlite3.OperationalError, match="checkpoint failed"):
+            database.refresh_read_visibility(BrokenConn())
+
+    def test_refresh_read_visibility_logs_checkpoint_failure_when_fail_open(self, monkeypatch, caplog):
+        from lib import database
+
+        class BrokenConn:
+            def execute(self, _sql):
+                raise sqlite3.OperationalError("checkpoint failed")
+
+        monkeypatch.setattr(database, "_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level("DEBUG", logger="lib.database"):
+            database.refresh_read_visibility(BrokenConn())
+
+        assert "wal checkpoint pre-read refresh skipped: checkpoint failed" in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # lib/config.py — path helpers

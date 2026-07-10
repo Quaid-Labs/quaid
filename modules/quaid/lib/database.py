@@ -76,6 +76,16 @@ def _is_transient_sqlite_setup_error(exc: BaseException) -> bool:
     return any(marker in text for marker in _TRANSIENT_SQLITE_SETUP_ERRORS)
 
 
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except Exception as exc:
+        logger.warning("Failed to resolve fail-hard policy for database setup; defaulting to enabled: %s", exc)
+        return True
+
+
 def _open_configured_connection(path: Path) -> sqlite3.Connection:
     """Open a SQLite connection and absorb transient setup contention with retries.
 
@@ -95,7 +105,13 @@ def _open_configured_connection(path: Path) -> sqlite3.Connection:
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("PRAGMA busy_timeout = 30000")  # 30s wait for concurrent access
             # Force WAL mode on every connection open to avoid check-then-set races.
-            conn.execute("PRAGMA journal_mode=WAL")
+            journal_row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+            journal_mode = str(journal_row[0] if journal_row else "").strip().lower()
+            if journal_mode != "wal":
+                message = f"SQLite WAL mode not activated for {path}; actual journal_mode={journal_mode or 'unknown'}"
+                if _fail_hard_enabled():
+                    raise RuntimeError(message)
+                logger.warning(message)
             conn.execute("PRAGMA synchronous = NORMAL")   # Safe with WAL, faster than FULL
             conn.execute("PRAGMA cache_size = -64000")     # 64MB page cache
             conn.execute("PRAGMA temp_store = MEMORY")     # Temp tables in memory
@@ -136,6 +152,8 @@ def refresh_read_visibility(conn: sqlite3.Connection) -> None:
     try:
         conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
     except Exception as exc:
+        if _fail_hard_enabled():
+            raise
         logger.debug("wal checkpoint pre-read refresh skipped: %s", exc)
 
 
