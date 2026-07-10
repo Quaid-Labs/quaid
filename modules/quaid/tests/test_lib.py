@@ -504,6 +504,18 @@ class TestLibConfigPaths:
             assert get_db_path() == fake_home / "quaid" / "memory.db"
             assert get_archive_db_path() == fake_home / "quaid" / "memory_archive.db"
 
+    def test_config_db_paths_treat_missing_values_as_defaults(self, tmp_path):
+        from lib.config import get_archive_db_path, get_db_path
+
+        cfg = SimpleNamespace(database=SimpleNamespace(path=None, archive_path=None))
+        with patch.dict(os.environ, {"MEMORY_DB_PATH": "", "MEMORY_ARCHIVE_DB_PATH": ""}, clear=False), \
+             patch("lib.config._get_cfg", return_value=cfg), \
+             patch("lib.config._workspace_root", return_value=tmp_path / "workspace"):
+            assert get_db_path() == tmp_path / "workspace" / "data" / "memory.db"
+            assert get_archive_db_path() == tmp_path / "workspace" / "data" / "memory_archive.db"
+            assert get_db_path().name != "None"
+            assert get_archive_db_path().name != "None"
+
 
 # ---------------------------------------------------------------------------
 # lib/tokens.py — estimate_tokens

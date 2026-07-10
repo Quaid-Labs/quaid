@@ -330,7 +330,8 @@ def get_db_path() -> Path:
     if env_path is not None:
         return env_path
     cfg = _get_cfg()
-    p = Path(str(cfg.database.path)).expanduser()
+    raw = str(getattr(getattr(cfg, "database", None), "path", "") or "").strip() or "data/memory.db"
+    p = Path(raw).expanduser()
     return p if p.is_absolute() else _workspace_root() / p
 
 
@@ -380,7 +381,11 @@ def get_archive_db_path() -> Path:
     if env_path is not None:
         return env_path
     cfg = _get_cfg()
-    p = Path(str(cfg.database.archive_path)).expanduser()
+    raw = (
+        str(getattr(getattr(cfg, "database", None), "archive_path", "") or "").strip()
+        or "data/memory_archive.db"
+    )
+    p = Path(raw).expanduser()
     return p if p.is_absolute() else _workspace_root() / p
 
 
