@@ -8707,6 +8707,72 @@ def test_get_idle_timeout_minutes_uses_legacy_alias_when_modern_key_absent(monke
     assert extraction_daemon._get_idle_timeout_minutes(default=30) == 45
 
 
+def test_get_idle_timeout_minutes_warns_and_defaults_on_malformed_config(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    import config as config_mod
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(config_mod, "_config_paths", lambda: [config_path])
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="quaid.daemon"):
+        assert extraction_daemon._get_idle_timeout_minutes(default=30) == 30
+
+    assert "idle timeout config read failed" in caplog.text
+
+
+def test_get_idle_timeout_minutes_raises_malformed_config_when_fail_hard(
+    monkeypatch,
+    tmp_path,
+):
+    import config as config_mod
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(config_mod, "_config_paths", lambda: [config_path])
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(json.JSONDecodeError):
+        extraction_daemon._get_idle_timeout_minutes(default=30)
+
+
+def test_get_compact_on_timeout_warns_and_defaults_on_malformed_config(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    import config as config_mod
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(config_mod, "_config_paths", lambda: [config_path])
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="quaid.daemon"):
+        assert extraction_daemon._get_compact_on_timeout(default=False) is False
+
+    assert "timeout compaction config read failed" in caplog.text
+
+
+def test_get_compact_on_timeout_raises_malformed_config_when_fail_hard(
+    monkeypatch,
+    tmp_path,
+):
+    import config as config_mod
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(config_mod, "_config_paths", lambda: [config_path])
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(json.JSONDecodeError):
+        extraction_daemon._get_compact_on_timeout(default=False)
+
+
 def test_check_idle_sessions_timeout_signal_carries_compaction_metadata(monkeypatch, tmp_path):
     transcript_path = tmp_path / "session.jsonl"
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")

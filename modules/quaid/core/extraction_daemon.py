@@ -8596,22 +8596,34 @@ def _get_idle_timeout_minutes(default: int = 30) -> int:
     try:
         import json as _json
         from config import _config_paths
-        raw: int = default
-        for _cp in reversed(list(_config_paths())):
-            if _cp.exists():
-                try:
-                    _data = _json.loads(_cp.read_text(encoding="utf-8"))
-                    _capture = _data.get("capture", {})
-                    if "inactivity_timeout_minutes" in _capture:
-                        _v = _capture.get("inactivity_timeout_minutes")
-                    else:
-                        _v = _capture.get("inactivityTimeoutMinutes")
-                    if _v is not None:
-                        raw = _v
-                except Exception:
-                    pass
+        config_paths = list(_config_paths())
+    except Exception as exc:
+        logger.warning("idle timeout config path lookup failed; using default %s: %s", default, exc)
+        if _fail_hard_enabled():
+            raise
+        return default
+    raw: int = default
+    for _cp in reversed(config_paths):
+        if _cp.exists():
+            try:
+                _data = _json.loads(_cp.read_text(encoding="utf-8"))
+                _capture = _data.get("capture", {})
+                if "inactivity_timeout_minutes" in _capture:
+                    _v = _capture.get("inactivity_timeout_minutes")
+                else:
+                    _v = _capture.get("inactivityTimeoutMinutes")
+                if _v is not None:
+                    raw = _v
+            except Exception as exc:
+                logger.warning("idle timeout config read failed for %s; ignoring file: %s", _cp, exc)
+                if _fail_hard_enabled():
+                    raise
+    try:
         return max(0, int(raw))
-    except Exception:
+    except Exception as exc:
+        logger.warning("idle timeout config value %r is invalid; using default %s: %s", raw, default, exc)
+        if _fail_hard_enabled():
+            raise
         return default
 
 
@@ -8620,25 +8632,31 @@ def _get_compact_on_timeout(default: bool = True) -> bool:
     try:
         import json as _json
         from config import _config_paths
-        raw: bool = default
-        for _cp in reversed(list(_config_paths())):
-            if _cp.exists():
-                try:
-                    _data = _json.loads(_cp.read_text(encoding="utf-8"))
-                    _capture = _data.get("capture", {})
-                    if "compact_on_timeout" in _capture:
-                        raw = bool(_capture.get("compact_on_timeout"))
-                    elif "compactOnTimeout" in _capture:
-                        raw = bool(_capture.get("compactOnTimeout"))
-                    elif "auto_compaction_on_timeout" in _capture:
-                        raw = bool(_capture.get("auto_compaction_on_timeout"))
-                    elif "autoCompactionOnTimeout" in _capture:
-                        raw = bool(_capture.get("autoCompactionOnTimeout"))
-                except Exception:
-                    pass
-        return bool(raw)
-    except Exception:
+        config_paths = list(_config_paths())
+    except Exception as exc:
+        logger.warning("timeout compaction config path lookup failed; using default %s: %s", default, exc)
+        if _fail_hard_enabled():
+            raise
         return default
+    raw: bool = default
+    for _cp in reversed(config_paths):
+        if _cp.exists():
+            try:
+                _data = _json.loads(_cp.read_text(encoding="utf-8"))
+                _capture = _data.get("capture", {})
+                if "compact_on_timeout" in _capture:
+                    raw = bool(_capture.get("compact_on_timeout"))
+                elif "compactOnTimeout" in _capture:
+                    raw = bool(_capture.get("compactOnTimeout"))
+                elif "auto_compaction_on_timeout" in _capture:
+                    raw = bool(_capture.get("auto_compaction_on_timeout"))
+                elif "autoCompactionOnTimeout" in _capture:
+                    raw = bool(_capture.get("autoCompactionOnTimeout"))
+            except Exception as exc:
+                logger.warning("timeout compaction config read failed for %s; ignoring file: %s", _cp, exc)
+                if _fail_hard_enabled():
+                    raise
+    return bool(raw)
 
 
 def _adapter_supports_compaction_control() -> bool:
