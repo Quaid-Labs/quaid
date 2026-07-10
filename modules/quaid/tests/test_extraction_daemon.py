@@ -3691,6 +3691,56 @@ def test_check_idle_sessions_writes_timeout_signal_for_idle_unextracted_session(
     ]
 
 
+def test_check_idle_sessions_defers_timeout_when_host_activity_is_newer_than_transcript(
+    monkeypatch,
+    tmp_path,
+):
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_text('{"role":"user","content":"pre-write handshake"}\n', encoding="utf-8")
+
+    instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+    cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
+    cursor_dir.mkdir(parents=True, exist_ok=True)
+    (cursor_dir / "sess-host-active.json").write_text(
+        json.dumps(
+            {
+                "session_id": "sess-host-active",
+                "line_offset": 0,
+                "transcript_path": str(transcript_path),
+                "transcript_size_bytes": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    now = 1_700_000_000.0
+    stale_mtime = now - (5 * 60)
+    os.utime(transcript_path, (stale_mtime, stale_mtime))
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def get_session_activity_timestamp_ms(self, session_id, transcript_path_arg=None):
+            assert session_id == "sess-host-active"
+            assert Path(transcript_path_arg) == transcript_path
+            return (now - 10) * 1000.0
+
+    captured = []
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+    monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - (2 * 60 * 60))
+    monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _Adapter())
+    monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda _adapter: None)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda *args, **kwargs: captured.append((args, kwargs)),
+    )
+
+    extraction_daemon.check_idle_sessions(timeout_minutes=1)
+
+    assert captured == []
+
+
 def test_ensure_discovered_session_cursors_repairs_broken_existing_cursor(monkeypatch, tmp_path):
     instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))

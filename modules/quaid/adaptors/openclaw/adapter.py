@@ -832,6 +832,42 @@ class OpenClawAdapter(QuaidAdapter):
             return self._path_is_under(transcript_path, main_dir) and self._path_matches_session_id(transcript_path, sid)
         return False
 
+    def get_session_activity_timestamp_ms(self, session_id: str, transcript_path: Optional[Path] = None) -> float:
+        """Return the newest OpenClaw session-index activity timestamp for a transcript.
+
+        The gateway can update sessions.json before the transcript JSONL write is
+        durable. Timeout extraction should treat that index update as activity so
+        it does not extract a stale pre-write transcript.
+        """
+        sid = str(session_id or "").strip()
+        if not sid:
+            return 0.0
+        sessions_path = self._find_sessions_json()
+        if not sessions_path:
+            return 0.0
+        try:
+            fallback_mtime_ms = sessions_path.stat().st_mtime * 1000.0
+        except OSError:
+            fallback_mtime_ms = 0.0
+        transcript_resolved: Optional[Path] = None
+        if transcript_path is not None:
+            try:
+                transcript_resolved = Path(transcript_path).expanduser().resolve()
+            except (OSError, RuntimeError):
+                transcript_resolved = Path(transcript_path).expanduser()
+
+        best = 0.0
+        for _session_key, row in self._iter_sessions_index(sessions_path):
+            row_sid = str(row.get("sessionId") or "").strip()
+            if row_sid != sid:
+                continue
+            if transcript_resolved is not None:
+                row_path = self._session_path_from_index_row(sessions_path.parent, row, sid)
+                if row_path is not None and not self._same_path(row_path, transcript_resolved):
+                    continue
+            best = max(best, self._score_session_row(row, fallback_mtime_ms))
+        return best
+
     def auth_token_path(self) -> Optional[Path]:
         return self.quaid_home() / "adaptors" / "openclaw" / ".auth-token"
 

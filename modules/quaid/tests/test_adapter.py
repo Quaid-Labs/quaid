@@ -1524,6 +1524,29 @@ class TestOpenClawAdapter:
         assert adapter.get_sessions_dir() == sessions_dir
         assert adapter.owns_session_path(worker_transcript, session_id="worker-session") is True
 
+    def test_session_activity_timestamp_reads_matching_session_index_row(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+        sessions_dir.mkdir(parents=True)
+        worker_transcript = sessions_dir / "worker-session.jsonl"
+        worker_transcript.write_text('{"role":"user","content":"lantern seed"}\n', encoding="utf-8")
+        (sessions_dir / "sessions.json").write_text(json.dumps({
+            "agent:m5test:matrix:channel:!room": {
+                "sessionId": "worker-session",
+                "sessionFile": str(worker_transcript),
+                "updatedAt": 1_700_000_123_456,
+            },
+            "agent:m5test:matrix:channel:!other": {
+                "sessionId": "other-session",
+                "updatedAt": 1_700_000_999_999,
+            },
+        }), encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-m5test")
+
+        adapter = OpenClawAdapter()
+
+        assert adapter.get_session_activity_timestamp_ms("worker-session", worker_transcript) == 1_700_000_123_456
+
     def test_owns_session_path_rejects_index_path_outside_sessions_dir(self, tmp_path, monkeypatch):
         sessions_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
         sessions_dir.mkdir(parents=True)

@@ -30,6 +30,7 @@ import hashlib
 import json
 import logging
 import logging.handlers
+import math
 import os
 import re
 import signal
@@ -8784,6 +8785,38 @@ def _adapter_supports_compaction_control() -> bool:
         return False
 
 
+def _adapter_session_activity_timestamp_seconds(
+    adapter,
+    session_id: str,
+    transcript_path: str,
+) -> Optional[float]:
+    """Return host-reported session activity time when the adapter exposes it."""
+    if adapter is None:
+        return None
+    activity_fn = getattr(adapter, "get_session_activity_timestamp_ms", None)
+    if not callable(activity_fn):
+        return None
+    try:
+        try:
+            raw = activity_fn(str(session_id or ""), Path(str(transcript_path or "")))
+        except TypeError:
+            raw = activity_fn(str(session_id or ""))
+        value = float(raw or 0.0)
+    except Exception as exc:
+        logger.warning(
+            "session %s host activity lookup failed for %s: %s",
+            session_id,
+            transcript_path,
+            exc,
+        )
+        if _fail_hard_enabled():
+            raise
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return value / 1000.0 if value > 10_000_000_000 else value
+
+
 # ---------------------------------------------------------------------------
 # Idle session detection (timeout extraction)
 # ---------------------------------------------------------------------------
@@ -8966,6 +8999,23 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             mtime = os.path.getmtime(transcript_path)
         except OSError:
             continue
+        host_activity_ts = _adapter_session_activity_timestamp_seconds(
+            adapter,
+            str(session_id),
+            str(transcript_path),
+        )
+        effective_mtime = mtime
+        if host_activity_ts is not None and host_activity_ts > mtime:
+            effective_mtime = host_activity_ts
+            logger.info(
+                "session %s host activity is newer than transcript mtime; "
+                "using host activity for timeout eligibility "
+                "(activity_age=%.1fs transcript_age=%.1fs transcript=%s)",
+                session_id,
+                max(0.0, now - host_activity_ts),
+                max(0.0, now - mtime),
+                transcript_path,
+            )
 
         cursor_rows.append({
             "session_id": session_id,
@@ -8974,7 +9024,8 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             "cursor_size_bytes": int(data.get("transcript_size_bytes", 0) or 0),
             "has_cursor_size_bytes": "transcript_size_bytes" in data,
             "current_size_bytes": current_size_bytes,
-            "mtime": mtime,
+            "mtime": effective_mtime,
+            "transcript_mtime": mtime,
             "cursor_data": data,
         })
 
