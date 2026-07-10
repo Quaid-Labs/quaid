@@ -6639,7 +6639,10 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 except (json.JSONDecodeError, OSError):
                     pass
         except Exception as _fifo_err:
-            logger.debug("[%s] FIFO rolling-pending check failed: %s", label, _fifo_err)
+            logger.warning("[%s] FIFO rolling-pending check failed: %s", label, _fifo_err)
+            if _fail_hard_enabled():
+                _release_session_processing_lock(lock_owner_key, lock_fd)
+                raise
 
     # Consume duplicate signals for this session now that we hold the lock.
     # Signals with the same or lower priority are redundant — this extraction
