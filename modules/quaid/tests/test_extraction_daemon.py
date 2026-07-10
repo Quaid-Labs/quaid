@@ -3509,6 +3509,41 @@ def test_start_daemon_locks_pid_sidecar_file(monkeypatch, tmp_path):
     assert pid_path not in opened_paths
 
 
+def test_start_daemon_lock_open_failure_raises_when_fail_hard(monkeypatch, tmp_path):
+    pid_path = tmp_path / "extraction-daemon.pid"
+
+    def fail_open(*_args, **_kwargs):
+        raise OSError("lock unavailable")
+
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-livetest")
+    monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
+    monkeypatch.setattr(extraction_daemon.os, "open", fail_open)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "read_pid",
+        lambda: (_ for _ in ()).throw(AssertionError("fallback should not run")),
+    )
+
+    with pytest.raises(OSError, match="lock unavailable"):
+        extraction_daemon.start_daemon()
+
+
+def test_start_daemon_lock_open_failure_preserves_fail_open_fallback(monkeypatch, tmp_path):
+    pid_path = tmp_path / "extraction-daemon.pid"
+
+    def fail_open(*_args, **_kwargs):
+        raise OSError("lock unavailable")
+
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-livetest")
+    monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
+    monkeypatch.setattr(extraction_daemon.os, "open", fail_open)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: 4242)
+
+    assert extraction_daemon.start_daemon() == 4242
+
+
 def test_start_daemon_exports_quaid_home_to_worker_env(monkeypatch, tmp_path):
     pid_path = tmp_path / "extraction-daemon.pid"
     captured = {}

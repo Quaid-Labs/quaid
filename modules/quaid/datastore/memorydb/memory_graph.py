@@ -24852,6 +24852,8 @@ def _llm_dedup_check_many(new_text: str, existing_texts: List[str]) -> Optional[
             response, _duration = call_fast_reasoning(prompt, max_tokens=1500, timeout=120.0)
         except Exception as _llm_exc:
             logger.warning("_llm_dedup_check_many LLM error (single pair), skipping dedup: %s", _llm_exc)
+            if _is_fail_hard_mode():
+                raise
             return None
         if not response:
             return None
@@ -24892,6 +24894,8 @@ def _llm_dedup_check_many(new_text: str, existing_texts: List[str]) -> Optional[
         response, _duration = call_fast_reasoning(prompt, max_tokens=max_tokens, timeout=120.0)
     except Exception as _llm_exc:
         logger.warning("_llm_dedup_check_many LLM error (multi pair), skipping dedup: %s", _llm_exc)
+        if _is_fail_hard_mode():
+            raise
         return None
     if not response:
         return None

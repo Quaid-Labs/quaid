@@ -373,6 +373,29 @@ def test_generate_keywords_for_relation_llm_failure_returns_none_when_fail_open(
     assert "LLM generation failed for mentors" in capsys.readouterr().err
 
 
+def test_llm_dedup_check_many_single_pair_failure_raises_when_fail_hard():
+    import datastore.memorydb.memory_graph as mg
+
+    with patch.object(mg, "_HAS_LLM_CLIENTS", True), \
+         patch.object(mg, "call_fast_reasoning", side_effect=RuntimeError("dedup llm down")), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="dedup llm down"):
+            mg._llm_dedup_check_many("Maya owns a brass lamp", ["Maya owns a lamp"])
+
+
+def test_llm_dedup_check_many_multi_pair_failure_raises_when_fail_hard():
+    import datastore.memorydb.memory_graph as mg
+
+    with patch.object(mg, "_HAS_LLM_CLIENTS", True), \
+         patch.object(mg, "call_fast_reasoning", side_effect=RuntimeError("dedup llm down")), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="dedup llm down"):
+            mg._llm_dedup_check_many(
+                "Maya owns a brass lamp",
+                ["Maya owns a lamp", "Maya keeps a notebook"],
+            )
+
+
 def test_trace_m15_failure_respects_failhard():
     import datastore.memorydb.memory_graph as mg
 

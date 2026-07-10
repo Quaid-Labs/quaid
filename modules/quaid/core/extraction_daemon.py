@@ -10447,6 +10447,8 @@ def start_daemon() -> int:
         lock_fd = os.open(str(lock_file), os.O_RDWR | os.O_CREAT, 0o600)
     except OSError as e:
         logger.error("cannot open daemon startup lock file: %s", e)
+        if _fail_hard_enabled():
+            raise
         # Fall back to checking existing PID
         existing = read_pid()
         return existing if existing else -1
