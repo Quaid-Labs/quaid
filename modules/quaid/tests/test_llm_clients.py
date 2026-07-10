@@ -718,7 +718,7 @@ class TestCallLlmProvider:
         assert test_adapter.llm_calls == []
         assert "failed to resolve max output tokens for tier deep" in caplog.text
 
-    def test_rate_limit_header_parse_failure_logs_debug(self, caplog):
+    def test_rate_limit_header_parse_failure_logs_warning(self, caplog):
         import core.llm.clients as llm_clients
 
         class _BadHeaders:
@@ -727,10 +727,27 @@ class TestCallLlmProvider:
 
         exc = urllib.error.HTTPError("https://example.test", 429, "rate limited", _BadHeaders(), None)
 
-        with caplog.at_level("DEBUG", logger="lib.llm_clients"):
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="lib.llm_clients"):
             assert llm_clients._rate_limit_headers(exc) == {}
 
         assert "Failed parsing rate-limit headers: headers broken" in caplog.text
+
+    def test_rate_limit_header_parse_failure_raises_when_failhard(self):
+        import core.llm.clients as llm_clients
+
+        class _BadHeaders:
+            def items(self):
+                raise RuntimeError("headers broken")
+
+        exc = urllib.error.HTTPError("https://example.test", 429, "rate limited", _BadHeaders(), None)
+
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Failed parsing rate-limit headers") as excinfo:
+                llm_clients._rate_limit_headers(exc)
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "headers broken" in str(excinfo.value.__cause__)
 
     def test_retry_delay_logs_bad_retry_after_header(self, caplog):
         import core.llm.clients as llm_clients

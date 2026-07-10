@@ -8960,7 +8960,10 @@ def _docs_infer_project_for_source(rag: Any, source_file: str) -> Optional[str]:
         return None
     try:
         inferred = infer_project(source_file)
-    except Exception:
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError("Docs project inference failed while failHard is enabled") from exc
+        logger.warning("Docs project inference failed for %s: %s", source_file, exc)
         return None
     return str(inferred) if inferred else None
 
@@ -20427,7 +20430,10 @@ def _registered_project_name_in_query(lowered_query: str) -> Optional[str]:
             clean = str(name or "").strip().lower()
             if clean and name not in deleted and _mentions_project(clean):
                 return str(name)
-    except Exception:
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError("Registered project lookup failed while failHard is enabled") from exc
+        logger.warning("registered project lookup failed: %s", exc)
         return None
     return None
 

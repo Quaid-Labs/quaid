@@ -15572,6 +15572,32 @@ class TestRecallFastHookInjectContract:
         assert len(chunks) == 1
         assert "Mixed-case project milestone" in chunks[0]["content"]
 
+    def test_docs_infer_project_for_source_failure_raises_when_failhard(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class BrokenDocsRAG:
+            def infer_project_for_source(self, _source_file):
+                raise RuntimeError("infer failed")
+
+        with patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="Docs project inference failed") as excinfo:
+                mg._docs_infer_project_for_source(BrokenDocsRAG(), "/tmp/PROJECT.log")
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "infer failed" in str(excinfo.value.__cause__)
+
+    def test_docs_infer_project_for_source_failure_warns_when_failopen(self, caplog):
+        import datastore.memorydb.memory_graph as mg
+
+        class BrokenDocsRAG:
+            def infer_project_for_source(self, _source_file):
+                raise RuntimeError("infer failed")
+
+        with patch.object(mg, "_is_fail_hard_mode", return_value=False), caplog.at_level("WARNING"):
+            assert mg._docs_infer_project_for_source(BrokenDocsRAG(), "/tmp/PROJECT.log") is None
+
+        assert "Docs project inference failed for /tmp/PROJECT.log: infer failed" in caplog.text
+
     def test_docs_project_log_query_terms_keep_short_compact_unicode_anchors(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -18092,6 +18118,37 @@ class TestRecallFastHookInjectContract:
         os.utime(registry, ns=(123456789000000000, 123456789000000000))
 
         assert mg._registered_project_name_in_query("new-refresh-project docs") == "new-refresh-project"
+
+    def test_registered_project_name_failure_raises_when_failhard(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        registry = tmp_path / "project-registry.json"
+        registry.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(mg, "_registered_project_registry_cache", None)
+
+        with patch("lib.instance.shared_registry_path", return_value=registry), \
+             patch.object(mg, "_registered_project_registry_snapshot", side_effect=RuntimeError("registry unreadable")), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="Registered project lookup failed") as excinfo:
+                mg._registered_project_name_in_query("cross-live-test docs")
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "registry unreadable" in str(excinfo.value.__cause__)
+
+    def test_registered_project_name_failure_warns_when_failopen(self, tmp_path, monkeypatch, caplog):
+        import datastore.memorydb.memory_graph as mg
+
+        registry = tmp_path / "project-registry.json"
+        registry.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(mg, "_registered_project_registry_cache", None)
+
+        with patch("lib.instance.shared_registry_path", return_value=registry), \
+             patch.object(mg, "_registered_project_registry_snapshot", side_effect=RuntimeError("registry unreadable")), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=False), \
+             caplog.at_level("WARNING"):
+            assert mg._registered_project_name_in_query("cross-live-test docs") is None
+
+        assert "registered project lookup failed: registry unreadable" in caplog.text
 
     def test_infer_recall_store_defaults_does_not_match_project_name_inside_relation_chain_word(self, tmp_path, monkeypatch):
         import datastore.memorydb.memory_graph as mg

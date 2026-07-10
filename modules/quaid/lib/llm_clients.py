@@ -499,7 +499,9 @@ def _rate_limit_headers(exc: BaseException) -> Dict[str, str]:
                 out[key] = str(v)
         return out
     except Exception as exc:
-        logger.debug("Failed parsing rate-limit headers: %s", exc)
+        logger.warning("Failed parsing rate-limit headers: %s", exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed parsing rate-limit headers while failHard is enabled") from exc
         return {}
 
 
