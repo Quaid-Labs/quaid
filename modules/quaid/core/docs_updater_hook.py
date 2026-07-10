@@ -11,6 +11,7 @@ See docs/PROJECT-SYSTEM-SPEC.md#extraction-event-integration.
 """
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 # PROJECT.log remains append-only and must never be edited by this path.
 _UPDATABLE_ROOT_DOCS = {"PROJECT.md", "TOOLS.md", "AGENTS.md"}
 _FAST_GATE_MAX_TOKENS = 200
+_DEFAULT_MAX_DOCS_PER_RUN = 12
 _PROJECT_MD_MANAGED_SECTIONS = {
     "project home",
     "source roots",
@@ -50,6 +52,78 @@ def _log_preview(value: Any, limit: int = 1200) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "...<truncated>"
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("[docs-hook] Invalid %s=%r; using default %d", name, raw, default)
+        return default
+    return max(minimum, value)
+
+
+def _max_docs_per_run() -> int:
+    return _env_int("QUAID_DOCS_HOOK_MAX_DOCS_PER_RUN", _DEFAULT_MAX_DOCS_PER_RUN, minimum=1)
+
+
+def _split_git_diff_sections(diff_text: str) -> List[str]:
+    text = str(diff_text or "")
+    if not text:
+        return []
+    sections: List[str] = []
+    current: List[str] = []
+    for line in text.splitlines(keepends=True):
+        if line.startswith("diff --git ") and current:
+            sections.append("".join(current))
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        sections.append("".join(current))
+    return sections
+
+
+def _bounded_snapshot_diff(diff_text: str) -> str:
+    from datastore.docsdb.updater import (
+        _max_diff_file_bytes,
+        _max_diff_total_bytes,
+        _truncate_text_bytes,
+    )
+
+    sections = _split_git_diff_sections(diff_text)
+    if not sections:
+        return ""
+
+    max_file = _max_diff_file_bytes()
+    max_total = _max_diff_total_bytes()
+    bounded: List[str] = []
+    total = 0
+
+    for section_index, section in enumerate(sections):
+        clipped, _ = _truncate_text_bytes(section, max_file)
+        section_bytes = len(clipped.encode("utf-8", errors="replace"))
+        if total + section_bytes > max_total:
+            remaining = max_total - total
+            if remaining > 512:
+                tail, _ = _truncate_text_bytes(clipped, remaining)
+                bounded.append(tail)
+            skipped = len(sections) - section_index
+            bounded.append(
+                "\n### Snapshot diff prompt limit reached\n"
+                f"- safety_mode: catalog_only_tail\n"
+                f"- max_total_diff_bytes: {max_total}\n"
+                f"- remaining_diff_sections_not_expanded: {max(0, skipped)}\n"
+                "- note: omitted diff sections must be treated as catalog-only until a scoped update drills into them.\n"
+            )
+            break
+        bounded.append(clipped)
+        total += section_bytes
+
+    return "\n\n".join(part.rstrip("\n") for part in bounded if part)
 
 
 def _parse_edit_block_fields(edit_block: str) -> Dict[str, str]:
@@ -307,7 +381,7 @@ def _update_project(
     # Find which docs exist for this project. The updater may edit the
     # project-facing docs surface, but PROJECT.log is append-only and excluded.
     docs_to_update = []
-    for doc_name in _UPDATABLE_ROOT_DOCS:
+    for doc_name in sorted(_UPDATABLE_ROOT_DOCS):
         doc_path = canonical / doc_name
         if doc_path.is_file():
             docs_to_update.append(doc_path)
@@ -321,6 +395,18 @@ def _update_project(
     if not docs_to_update:
         metrics["docs_skipped"] += 1
         return
+
+    max_docs = _max_docs_per_run()
+    if len(docs_to_update) > max_docs:
+        omitted = len(docs_to_update) - max_docs
+        logger.warning(
+            "[docs-hook] %s: limiting docs update run to %d docs; %d docs omitted",
+            project_name,
+            max_docs,
+            omitted,
+        )
+        docs_to_update = docs_to_update[:max_docs]
+        metrics["docs_skipped"] += omitted
 
     # Build context for the LLM
     context = _build_update_context(
@@ -372,9 +458,10 @@ def _build_update_context(
 
     # Git diff
     if diff_text:
+        bounded_diff = _bounded_snapshot_diff(diff_text)
         parts.append("## Code Diff")
         parts.append("```diff")
-        parts.append(diff_text)
+        parts.append(bounded_diff)
         parts.append("```\n")
 
     # Project log entries from this extraction
@@ -400,8 +487,17 @@ def _update_single_doc(
     """
     from lib.llm_clients import call_deep_reasoning, call_fast_reasoning, parse_json_response
 
-    current_doc = doc_path.read_text(encoding="utf-8")
+    from datastore.docsdb.updater import _max_doc_prompt_bytes, _read_prompt_doc
+
+    current_doc, doc_capped = _read_prompt_doc(doc_path)
     doc_name = doc_path.name
+    if doc_capped:
+        logger.warning(
+            "[docs-hook] Skipping %s: current doc exceeds prompt safety cap (%d bytes)",
+            doc_path,
+            _max_doc_prompt_bytes(),
+        )
+        return False
 
     # For borderline classification, use Fast Reasoning as a cheap gate
     if classification.get("confidence", 1.0) < 0.6:
