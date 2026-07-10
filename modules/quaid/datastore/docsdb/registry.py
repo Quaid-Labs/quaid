@@ -942,7 +942,10 @@ class DocsRegistry:
             resolved = self._resolve_path(str(file_path)).resolve(strict=False)
         except TypeError:
             resolved = self._resolve_path(str(file_path)).resolve()
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed resolving canonical project path from %r: %s", file_path, exc)
+            if _fail_hard_enabled():
+                raise RuntimeError(f"Failed resolving canonical project path from {file_path!r}") from exc
             return None
         projects_root = (_visible_home() / "projects").resolve()
         try:

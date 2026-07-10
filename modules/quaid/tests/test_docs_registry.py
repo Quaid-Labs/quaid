@@ -2569,6 +2569,48 @@ class TestProjectDefinitionsTable:
             r._ensure_global_project_entry("missing-defn-proj")
         assert excinfo.value.__cause__ is err
 
+    def test_global_project_entry_canonical_path_failure_logs_when_fail_open(
+        self, setup_env, monkeypatch, caplog
+    ):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        err = OSError("path unavailable")
+        monkeypatch.setattr(r, "_resolve_path", lambda _path: (_ for _ in ()).throw(err))
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level(logging.WARNING):
+            assert r._ensure_global_project_entry(
+                "canonical-fail-proj",
+                file_path="docs/canonical.md",
+                create_scaffold=False,
+            ) is False
+
+        assert "Failed resolving canonical project path from 'docs/canonical.md'" in caplog.text
+        assert "path unavailable" in caplog.text
+
+    def test_global_project_entry_canonical_path_failure_raises_under_failhard(
+        self, setup_env, monkeypatch, caplog
+    ):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        err = OSError("path unavailable")
+        monkeypatch.setattr(r, "_resolve_path", lambda _path: (_ for _ in ()).throw(err))
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(RuntimeError, match="Failed resolving canonical project path") as excinfo:
+                r._ensure_global_project_entry(
+                    "canonical-fail-proj",
+                    file_path="docs/canonical.md",
+                    create_scaffold=False,
+                )
+
+        assert excinfo.value.__cause__ is err
+        assert "Failed resolving canonical project path from 'docs/canonical.md'" in caplog.text
+        assert "path unavailable" in caplog.text
+
     def test_global_reconcile_path_resolution_failure_raises_under_failhard(self, setup_env, monkeypatch):
         """failHard should not hide path-resolution failures during global sync."""
         from config import ProjectDefinition
