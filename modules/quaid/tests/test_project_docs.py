@@ -1954,9 +1954,26 @@ def test_linked_projects_resolution_failure_logs(monkeypatch, caplog):
         "datastore.docsdb.rag._linked_projects_for_current_instance",
         lambda: (_ for _ in ()).throw(RuntimeError("linkage broken")),
     )
+    monkeypatch.setattr(updater, "_fail_hard_enabled", lambda: False)
 
     with caplog.at_level(logging.WARNING, logger="core.docs.updater"):
         assert updater._linked_projects_for_current_instance() == (set(), False)
+
+    assert "failed to resolve linked projects for current instance" in caplog.text
+
+
+def test_linked_projects_resolution_failure_raises_when_failhard(monkeypatch, caplog):
+    from core.docs import updater
+
+    monkeypatch.setattr(
+        "datastore.docsdb.rag._linked_projects_for_current_instance",
+        lambda: (_ for _ in ()).throw(RuntimeError("linkage broken")),
+    )
+    monkeypatch.setattr(updater, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level(logging.WARNING, logger="core.docs.updater"):
+        with pytest.raises(RuntimeError, match="linkage broken"):
+            updater._linked_projects_for_current_instance()
 
     assert "failed to resolve linked projects for current instance" in caplog.text
 
@@ -1966,11 +1983,26 @@ def test_resolve_registered_doc_path_workspace_failure_logs(monkeypatch, tmp_pat
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("config._workspace_root", lambda: (_ for _ in ()).throw(RuntimeError("workspace broken")))
+    monkeypatch.setattr(updater, "_fail_hard_enabled", lambda: False)
 
-    with caplog.at_level(logging.DEBUG, logger="core.docs.updater"):
+    with caplog.at_level(logging.WARNING, logger="core.docs.updater"):
         resolved = updater._resolve_registered_doc_path(object(), "docs/example.md")
 
     assert resolved == (tmp_path / "docs" / "example.md").resolve()
+    assert "workspace root resolution failed" in caplog.text
+
+
+def test_resolve_registered_doc_path_workspace_failure_raises_when_failhard(monkeypatch, tmp_path, caplog):
+    from core.docs import updater
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("config._workspace_root", lambda: (_ for _ in ()).throw(RuntimeError("workspace broken")))
+    monkeypatch.setattr(updater, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level(logging.WARNING, logger="core.docs.updater"):
+        with pytest.raises(RuntimeError, match="workspace broken"):
+            updater._resolve_registered_doc_path(object(), "docs/example.md")
+
     assert "workspace root resolution failed" in caplog.text
 
 
@@ -1995,6 +2027,7 @@ def test_sync_project_visible_docs_logs_unresolvable_registered_path(project_env
             raise RuntimeError("path broken")
 
     monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", lambda: _BadRegistry())
+    monkeypatch.setattr(updater, "_fail_hard_enabled", lambda: False)
 
     with caplog.at_level(logging.WARNING, logger="core.docs.updater"):
         result = updater.sync_project_visible_docs(
@@ -2005,6 +2038,45 @@ def test_sync_project_visible_docs_logs_unresolvable_registered_path(project_env
         )
 
     assert result["unregistered"] == 0
+    assert "failed to resolve path 'broken.md' for unregistration check" in caplog.text
+
+
+def test_sync_project_visible_docs_unresolvable_registered_path_raises_when_failhard(
+    project_env,
+    monkeypatch,
+    caplog,
+):
+    _tmp_path, _src, entry = project_env
+    from core.docs import updater
+
+    class _BadRegistry:
+        def list_docs(self, project=None):
+            return [{"file_path": "broken.md"}]
+
+        def get(self, _path):
+            return {}
+
+        def register(self, *_args, **_kwargs):
+            return {}
+
+        def unregister(self, _path):
+            raise AssertionError("unregister should not run for unresolvable path")
+
+        def _resolve_path(self, _path):
+            raise RuntimeError("path broken")
+
+    monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", lambda: _BadRegistry())
+    monkeypatch.setattr(updater, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level(logging.WARNING, logger="core.docs.updater"):
+        with pytest.raises(RuntimeError, match="path broken"):
+            updater.sync_project_visible_docs(
+                "demo",
+                entry["canonical_path"],
+                root_docs=set(),
+                protected_names=set(),
+            )
+
     assert "failed to resolve path 'broken.md' for unregistration check" in caplog.text
 
 
