@@ -12130,6 +12130,7 @@ def _recall_once(
         search_limit = max(search_limit, min(max(limit * 12, 60), 160))
     search_query = clean_query
     results: List[Tuple[Node, float]] = []
+    lexical_preflight_results: List[Tuple[Node, float]] = []
     _fast_lexical_preflight_used = False
     planner_mode = str(lexical_anchor_planner_mode or "llm").strip().lower()
     if (
@@ -12138,7 +12139,7 @@ def _recall_once(
         and _fast_lexical_preflight_enabled(timeout_ms)
     ):
         _phase_t0 = _time.monotonic()
-        results = _fast_lexical_preflight_results(
+        lexical_preflight_results = _fast_lexical_preflight_results(
             graph,
             clean_query,
             limit=search_limit,
@@ -12146,22 +12147,19 @@ def _recall_once(
             owner_id=owner_id,
         )
         _phase_ms["fts_fallback_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
-        if results:
+        if lexical_preflight_results:
             _fast_lexical_preflight_used = True
             _fts_fallback_used = True
 
-    # Fast Ollama health check — skip semantic search entirely if Ollama is down
-    # Saves ~30s of embedding timeout waits when Ollama is unreachable. Strong
-    # fast lexical preflight rows intentionally avoid provider calls altogether.
+    # Fast Ollama health check — skip semantic search entirely if Ollama is down.
+    # Lexical preflight is additive: it should not pre-empt hybrid semantic recall
+    # when embeddings are healthy, because lexical rows can be only a subset.
     _ollama_up = True
-    if not results:
-        _phase_t0 = _time.monotonic()
-        _ollama_up = _ollama_healthy()
-        _phase_ms["ollama_health_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
+    _phase_t0 = _time.monotonic()
+    _ollama_up = _ollama_healthy()
+    _phase_ms["ollama_health_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
-    if results:
-        search_query = clean_query
-    elif _ollama_up:
+    if _ollama_up:
         # Route query through LLM (HyDE) — only when embeddings will be used
         cfg_use_hyde = True
         try:
@@ -12185,6 +12183,25 @@ def _recall_once(
             intent=intent,
             timeout_seconds=search_timeout_s,
         )
+        if lexical_preflight_results:
+            merged = list(results)
+            merged_by_id: Dict[str, int] = {}
+            for index, (node, _quality) in enumerate(results):
+                node_id = str(getattr(node, "id", "") or "").strip()
+                if node_id:
+                    merged_by_id[node_id] = index
+            for node, quality in lexical_preflight_results:
+                node_id = str(getattr(node, "id", "") or "").strip()
+                if not node_id:
+                    merged.append((node, quality))
+                    continue
+                existing_index = merged_by_id.get(node_id)
+                if existing_index is None:
+                    merged_by_id[node_id] = len(merged)
+                    merged.append((node, quality))
+                elif quality > merged[existing_index][1]:
+                    merged[existing_index] = (node, quality)
+            results = merged
         _phase_ms["search_hybrid_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
     else:
         search_query = clean_query  # No HyDE when embeddings unavailable
@@ -12199,7 +12216,7 @@ def _recall_once(
                 "Set retrieval.fail_hard=false to allow fallback, "
                 "but this is not recommended because it masks infrastructure faults."
             )
-        results = []  # Skip semantic search, go straight to FTS fallback
+        results = list(lexical_preflight_results)
         _fts_fallback_used = True
 
     # FTS fallback: if hybrid search returned nothing (Ollama may be down),

@@ -4059,7 +4059,7 @@ class TestRecallBasic:
             assert mg._recall_store_plan_timeout_s(3000, fast_mode=True) == 3.0
             assert mg._recall_store_plan_timeout_s(None, fast_mode=False) == 30.0
 
-    def test_recall_fast_uses_strong_lexical_preflight_before_semantic_timeout(self, tmp_path, monkeypatch):
+    def test_recall_fast_merges_strong_lexical_preflight_with_hybrid_search(self, tmp_path, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 
         graph, _ = _make_graph(tmp_path)
@@ -4080,26 +4080,36 @@ class TestRecallBasic:
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
-            stored = mg.store(
+            lexical = mg.store(
                 "The owner keeps a flatbed scanner beside the archive setup",
                 owner_id="quaid",
                 skip_dedup=True,
                 status="approved",
             )
+            semantic = mg.store(
+                "The owner's document digitizer is a Plustek OpticBook",
+                owner_id="quaid",
+                skip_dedup=True,
+                status="approved",
+            )
+            semantic_node = graph.get_node(semantic["id"])
+            assert semantic_node is not None
             with patch.object(mg, "_plan_fanout_queries", return_value=([query], planner_meta)), \
-                 patch.object(mg.MemoryGraph, "search_hybrid", side_effect=TimeoutError("semantic search should not start")), \
-                 patch.object(mg, "_ollama_healthy", side_effect=AssertionError("lexical preflight should avoid provider health check")):
+                 patch.object(mg.MemoryGraph, "search_hybrid", return_value=[(semantic_node, 0.99)]), \
+                 patch.object(mg, "_ollama_healthy", return_value=True):
                 rows, meta = mg.recall_fast(
                     query,
                     owner_id="quaid",
+                    limit=5,
                     return_meta=True,
                     planner_profile="fast",
                     domain={"all": True},
                     timeout_ms=30_000,
                 )
 
-        assert rows
-        assert rows[0]["id"] == stored["id"]
+        result_ids = {row["id"] for row in rows}
+        assert lexical["id"] in result_ids
+        assert semantic["id"] in result_ids
         branches = (((meta.get("turn_details") or [{}])[0].get("fanout") or {}).get("branches") or [])
         assert branches[0].get("flags", {}).get("fast_lexical_preflight_used") is True
 
