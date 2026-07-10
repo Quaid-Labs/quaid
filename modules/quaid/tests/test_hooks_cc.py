@@ -1733,12 +1733,13 @@ def test_store_context_refresh_state_does_not_unlink_replaced_temp(tmp_path, mon
     assert json.loads(state_path.read_text(encoding="utf-8"))["sessions"]["sess-1"]["turn_count"] == 2
 
 
-def test_store_context_refresh_state_logs_merge_failures_when_fail_open(tmp_path, monkeypatch, caplog):
+def test_store_context_refresh_state_preserves_existing_file_when_merge_fails_fail_open(tmp_path, monkeypatch, caplog):
     from core.interface import hooks
 
     state_path = tmp_path / "data" / "context-refresh-state.json"
     state_path.parent.mkdir(parents=True)
-    state_path.write_text("{not-json", encoding="utf-8")
+    original_state = "{not-json"
+    state_path.write_text(original_state, encoding="utf-8")
 
     monkeypatch.setattr(hooks, "_context_refresh_state_path", lambda: state_path)
     monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
@@ -1746,8 +1747,34 @@ def test_store_context_refresh_state_logs_merge_failures_when_fail_open(tmp_path
     with caplog.at_level("WARNING", logger="core.interface.hooks"):
         hooks._store_context_refresh_state({"sessions": {"sess-1": {"turn_count": 2}}})
 
-    assert "Failed merging context refresh state before write" in caplog.text
-    assert json.loads(state_path.read_text(encoding="utf-8"))["sessions"]["sess-1"]["turn_count"] == 2
+    assert "Failed reading context refresh state before write; preserving existing state" in caplog.text
+    assert state_path.read_text(encoding="utf-8") == original_state
+
+
+def test_turn_based_refresh_preserves_existing_file_when_state_parse_fails(tmp_path, monkeypatch, caplog):
+    from core.interface import hooks
+
+    state_path = tmp_path / "data" / "context-refresh-state.json"
+    state_path.parent.mkdir(parents=True)
+    original_state = "{not-json"
+    state_path.write_text(original_state, encoding="utf-8")
+
+    def capability(key, default=None):
+        if key == "context_refresh_strategy":
+            return "turn_based"
+        if key == "context_refresh_guard":
+            return {"min_turns": 1, "min_interval_minutes": 1}
+        return default
+
+    monkeypatch.setattr(hooks, "_context_refresh_state_path", lambda: state_path)
+    monkeypatch.setattr(hooks, "_adapter_capability", capability)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        assert hooks._should_emit_turn_based_refresh("sess-1", prompt="ordinary prompt") is False
+
+    assert "Failed reading context refresh state under lock; preserving existing state" in caplog.text
+    assert state_path.read_text(encoding="utf-8") == original_state
 
 
 def test_turn_based_refresh_increment_reads_state_under_lock(tmp_path, monkeypatch):

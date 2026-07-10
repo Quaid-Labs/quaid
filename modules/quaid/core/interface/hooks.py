@@ -2743,9 +2743,10 @@ def _store_context_refresh_state(state: Dict[str, Any]) -> None:
                         merged["sessions"] = sessions
                     state_to_write = merged
         except Exception as merge_exc:
-            logger.warning("Failed merging context refresh state before write: %s", merge_exc)
             if _fail_hard_enabled():
                 raise
+            logger.warning("Failed reading context refresh state before write; preserving existing state: %s", merge_exc)
+            return
         tmp_path = path.with_suffix(f".tmp.{os.getpid()}.{time.time_ns()}")
         tmp_path.write_text(json.dumps(state_to_write, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp_path, path)
@@ -2800,9 +2801,10 @@ def _update_context_refresh_state_locked(update_func):
                 if isinstance(payload, dict):
                     state = payload
         except Exception as load_exc:
-            logger.warning("Failed merging context refresh state before write: %s", load_exc)
             if _fail_hard_enabled():
                 raise
+            logger.warning("Failed reading context refresh state under lock; preserving existing state: %s", load_exc)
+            return None
 
         result = update_func(state)
         try:
