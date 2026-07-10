@@ -9096,19 +9096,38 @@ class TestSignalRoundTrip:
         assert sig["adapter"] == "cc"
         assert "_signal_path" in sig
 
-    def test_write_signal_unknown_type_falls_back_to_session_end(self, monkeypatch, tmp_path):
+    def test_write_signal_unknown_type_falls_back_to_session_end_when_fail_open(
+        self, monkeypatch, tmp_path, caplog
+    ):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
 
-        extraction_daemon.write_signal(
-            signal_type="totally_invalid",
-            session_id="sess-99",
-            transcript_path="/fake.jsonl",
-        )
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            extraction_daemon.write_signal(
+                signal_type="totally_invalid",
+                session_id="sess-99",
+                transcript_path="/fake.jsonl",
+            )
 
         signals = extraction_daemon.read_pending_signals()
         assert len(signals) == 1
         assert signals[0]["type"] == "session_end"
+        assert "unknown signal type 'totally_invalid', defaulting to session_end" in caplog.text
+
+    def test_write_signal_unknown_type_raises_when_fail_hard(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(ValueError, match="unknown signal type 'totally_invalid'"):
+            extraction_daemon.write_signal(
+                signal_type="totally_invalid",
+                session_id="sess-99",
+                transcript_path="/fake.jsonl",
+            )
+
+        assert extraction_daemon.read_pending_signals() == []
 
     def test_write_signal_all_valid_types_accepted(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))

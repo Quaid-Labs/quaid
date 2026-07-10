@@ -978,6 +978,8 @@ def write_signal(
     """
     # B062: Validate signal type
     if signal_type not in VALID_SIGNAL_TYPES:
+        if _fail_hard_enabled():
+            raise ValueError(f"unknown signal type {signal_type!r}")
         logger.warning("unknown signal type %r, defaulting to session_end", signal_type)
         signal_type = "session_end"
 
