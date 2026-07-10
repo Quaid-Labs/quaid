@@ -1209,7 +1209,15 @@ def _get_core_markdown_info(doc_path: str) -> Optional[Tuple[str, int]]:
     file_info = cfg.docs.core_markdown.files.get(filename)
     if file_info:
         purpose = file_info.get('purpose', '')
-        max_lines = file_info.get('maxLines', 200)
+        raw_max_lines = file_info.get('maxLines', 200)
+        try:
+            max_lines = int(raw_max_lines)
+        except (TypeError, ValueError):
+            logger.warning("Invalid core markdown maxLines for %s=%r; using default 200", filename, raw_max_lines)
+            max_lines = 200
+        if max_lines <= 0:
+            logger.warning("Non-positive core markdown maxLines for %s=%r; using default 200", filename, raw_max_lines)
+            max_lines = 200
         return (purpose, max_lines)
     return None
 

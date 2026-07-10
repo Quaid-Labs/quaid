@@ -672,6 +672,36 @@ class TestGetCoreMarkdownInfo:
             result = _get_core_markdown_info("TOOLS.md")
             assert result == ("API docs and configs", 350)
 
+    def test_nonpositive_core_markdown_max_lines_uses_default(self, caplog):
+        cfg = _make_test_config()
+        cfg.docs.core_markdown = MagicMock()
+        cfg.docs.core_markdown.files = {
+            "TOOLS.md": {"purpose": "API docs", "maxLines": 0},
+        }
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg):
+            from datastore.docsdb.updater import _get_core_markdown_info
+
+            caplog.set_level("WARNING")
+            result = _get_core_markdown_info("TOOLS.md")
+
+        assert result == ("API docs", 200)
+        assert "Non-positive core markdown maxLines for TOOLS.md=0; using default 200" in caplog.text
+
+    def test_invalid_core_markdown_max_lines_uses_default(self, caplog):
+        cfg = _make_test_config()
+        cfg.docs.core_markdown = MagicMock()
+        cfg.docs.core_markdown.files = {
+            "TOOLS.md": {"purpose": "API docs", "maxLines": "many"},
+        }
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg):
+            from datastore.docsdb.updater import _get_core_markdown_info
+
+            caplog.set_level("WARNING")
+            result = _get_core_markdown_info("TOOLS.md")
+
+        assert result == ("API docs", 200)
+        assert "Invalid core markdown maxLines for TOOLS.md='many'; using default 200" in caplog.text
+
     def test_returns_none_for_regular_doc(self):
         """Non-core markdown files return None."""
         cfg = _make_test_config()
