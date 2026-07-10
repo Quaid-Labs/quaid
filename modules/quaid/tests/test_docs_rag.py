@@ -425,6 +425,30 @@ def test_get_file_hash_raises_read_failure_when_failhard(tmp_path, monkeypatch, 
     assert "Failed to hash docs file" in caplog.text
 
 
+def test_get_file_hash_marks_md5_non_security_for_fips_hosts(tmp_path, monkeypatch):
+    import datastore.docsdb.rag as rag_module
+
+    rag = _make_rag(tmp_path)
+    doc = tmp_path / "PROJECT.md"
+    doc.write_text("alpha docs", encoding="utf-8")
+    calls = []
+
+    class FakeHash:
+        def hexdigest(self):
+            return "stable-md5"
+
+    def fake_md5(data, *, usedforsecurity=True):
+        calls.append((data, usedforsecurity))
+        if usedforsecurity:
+            raise ValueError("md5 disabled in FIPS mode")
+        return FakeHash()
+
+    monkeypatch.setattr(rag_module.hashlib, "md5", fake_md5)
+
+    assert rag._get_file_hash(str(doc)) == "stable-md5"
+    assert calls == [(b"alpha docs", False)]
+
+
 # ---------------------------------------------------------------------------
 # chunk_markdown
 # ---------------------------------------------------------------------------

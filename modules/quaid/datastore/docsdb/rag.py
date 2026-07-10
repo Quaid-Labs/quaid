@@ -1195,7 +1195,7 @@ class DocsRAG:
         """Get a hash of file content for change detection."""
         try:
             with open(file_path, 'rb') as f:
-                return hashlib.md5(f.read()).hexdigest()
+                return hashlib.md5(f.read(), usedforsecurity=False).hexdigest()
         except Exception as exc:
             logger.warning("Failed to hash docs file %s; treating hash as empty: %s", file_path, exc)
             if is_fail_hard_enabled():
