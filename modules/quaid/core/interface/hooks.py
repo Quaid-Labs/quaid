@@ -2539,7 +2539,10 @@ def _context_refresh_state_path() -> Path | None:
     try:
         from lib.adapter import get_adapter
 
-        return get_adapter().data_dir() / "context-refresh-state.json"
+        data_dir = get_adapter().data_dir()
+        if not isinstance(data_dir, (str, Path)):
+            return None
+        return Path(data_dir) / "context-refresh-state.json"
     except Exception:
         return None
 

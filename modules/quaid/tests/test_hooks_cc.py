@@ -297,6 +297,16 @@ def test_get_pending_context_raises_when_fail_hard(monkeypatch, caplog):
     assert "Failed reading pending hook context: adapter broken" in caplog.text
 
 
+def test_context_refresh_state_path_rejects_non_path_adapter_data_dir(monkeypatch):
+    from core.interface import hooks
+
+    adapter = _adapter_mock()
+    adapter.data_dir.return_value = MagicMock()
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+
+    assert hooks._context_refresh_state_path() is None
+
+
 def test_claude_code_inject_writes_session_end_signal_for_clear_command(monkeypatch, tmp_path, cursor_dir):
     from adaptors.claude_code.adapter import ClaudeCodeAdapter
 
