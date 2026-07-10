@@ -86,7 +86,10 @@ def _hook_inject_recall_timeout_ms() -> int:
         from lib.config import get_injection_timeout_ms
 
         configured = int(get_injection_timeout_ms(_HOOK_INJECT_RECALL_TIMEOUT_FALLBACK_MS))
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed reading hook injection timeout config; using fallback: %s", exc)
+        if _fail_hard_enabled():
+            raise
         return _HOOK_INJECT_RECALL_TIMEOUT_FALLBACK_MS
     return max(1, configured)
 
@@ -1031,6 +1034,8 @@ def _validate_prompt_model_config_for_hook(adapter_id: str) -> str:
             max_retries=0,
         )
     except Exception as exc:
+        if _fail_hard_enabled() or not _is_provider_failure(exc):
+            raise
         notice = _provider_failure_notice_message(exc)
         _write_prompt_model_probe_state({
             "fingerprint": fingerprint,

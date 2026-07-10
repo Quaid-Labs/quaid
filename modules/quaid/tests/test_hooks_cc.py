@@ -1529,6 +1529,7 @@ def test_claude_code_session_start_clear_queues_prior_session_signal(
     monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
     monkeypatch.setattr(hooks, "_build_runtime_context_block", lambda: "[Quaid runtime]")
+    monkeypatch.setattr(hooks, "_validate_prompt_model_config_for_hook", lambda _adapter_id: "")
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
     monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
     monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
@@ -2924,6 +2925,7 @@ class TestHookInjectRecallResilience:
             "lib.config.get_injection_timeout_ms",
             lambda default=3000: (_ for _ in ()).throw(RuntimeError("config unavailable")),
         )
+        monkeypatch.setattr("core.interface.hooks._fail_hard_enabled", lambda: False)
 
         captured = {}
 
@@ -2943,6 +2945,32 @@ class TestHookInjectRecallResilience:
             )
 
         assert captured["timeout_ms"] == 30_000
+
+    def test_hook_inject_raises_recall_timeout_config_failure_when_failhard(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_quaid_agents_baseline_context", lambda: "")
+        monkeypatch.setattr(
+            "lib.config.get_injection_timeout_ms",
+            lambda default=3000: (_ for _ in ()).throw(RuntimeError("config unavailable")),
+        )
+        monkeypatch.setattr("core.interface.hooks._fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="config unavailable"):
+            _run_hook_inject(
+                {
+                    "prompt": "What grinder do I use for my espresso setup?",
+                    "session_id": "sess-timeout-budget-config-failhard",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
 
     def test_recall_fast_non_timeout_exception_surfaces_when_fail_hard_enabled(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
@@ -3686,6 +3714,7 @@ class TestHookInjectRecallResilience:
         mock_adapter.store_auth_token.return_value = tmp_path / ".auth-token"
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
         monkeypatch.setattr(hooks, "_get_projects_dir", lambda: projects_dir)
         monkeypatch.setattr(hooks, "_get_identity_dir", lambda: identity_dir)
         monkeypatch.setattr(hooks, "_check_janitor_health", lambda: "")
@@ -3998,7 +4027,7 @@ class TestHookInjectRecallResilience:
         with patch(
             "lib.llm_clients.call_fast_reasoning",
             side_effect=RuntimeError("model=invalid-model-m6-probe"),
-        ):
+        ), patch("core.interface.hooks._fail_hard_enabled", return_value=False):
             notice = hooks._validate_prompt_model_config_for_hook("claude-code")
 
         assert "[Quaid error] [provider]" in notice
@@ -4014,6 +4043,62 @@ class TestHookInjectRecallResilience:
         with patch("lib.llm_clients.call_fast_reasoning") as probe:
             assert hooks._validate_prompt_model_config_for_hook("claude-code") == ""
         probe.assert_not_called()
+
+    def test_prompt_model_config_probe_raises_provider_failure_when_failhard(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core.interface import hooks
+
+        mock_adapter.adapter_id.return_value = "claude-code"
+        mock_adapter.data_dir.return_value = tmp_path / "data"
+        monkeypatch.setattr(
+            hooks,
+            "_adapter_capability",
+            lambda key, default=None: key == "prompt_model_config_probe" or default,
+        )
+        config_path = tmp_path / "claude-code" / "config.json"
+        config_path.parent.mkdir()
+        config_path.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(
+            hooks,
+            "_runtime_config_snapshot",
+            lambda: ((str(config_path), 1),),
+        )
+
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            side_effect=RuntimeError("model=invalid-model-m6-probe"),
+        ), patch("core.interface.hooks._fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="invalid-model-m6-probe"):
+                hooks._validate_prompt_model_config_for_hook("claude-code")
+
+    def test_prompt_model_config_probe_raises_non_provider_failure_when_fail_open(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core.interface import hooks
+
+        mock_adapter.adapter_id.return_value = "claude-code"
+        mock_adapter.data_dir.return_value = tmp_path / "data"
+        monkeypatch.setattr(
+            hooks,
+            "_adapter_capability",
+            lambda key, default=None: key == "prompt_model_config_probe" or default,
+        )
+        config_path = tmp_path / "claude-code" / "config.json"
+        config_path.parent.mkdir()
+        config_path.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(
+            hooks,
+            "_runtime_config_snapshot",
+            lambda: ((str(config_path), 1),),
+        )
+
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            side_effect=ValueError("probe parser exploded"),
+        ), patch("core.interface.hooks._fail_hard_enabled", return_value=False):
+            with pytest.raises(ValueError, match="probe parser exploded"):
+                hooks._validate_prompt_model_config_for_hook("claude-code")
 
     def test_claude_code_relays_deferred_notice_before_recall_work(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
@@ -5150,6 +5235,10 @@ class TestHookSessionInitRegistryAugmentation:
         adapter.get_compatibility_context_files.return_value = {
             str(compat_path): {"purpose": "compatibility", "maxLines": 20}
         }
+        monkeypatch.setattr(
+            "core.interface.hooks._validate_prompt_model_config_for_hook",
+            lambda _adapter_id: "",
+        )
         monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
 
         with patch("core.project_registry.list_projects", return_value={}):

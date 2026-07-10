@@ -916,6 +916,7 @@ def test_codex_hook_inject_probes_prompt_model_config(monkeypatch, tmp_path):
     monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
     monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
     monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
     monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
     monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr(hooks, "_get_owner_id", lambda: "codex-owner")
@@ -1031,7 +1032,7 @@ def test_codex_prompt_model_recovery_clears_sticky_provider_notices(monkeypatch,
     with patch(
         "lib.llm_clients.call_fast_reasoning",
         side_effect=RuntimeError("model=invalid-model-m6-probe"),
-    ):
+    ), patch("core.interface.hooks._fail_hard_enabled", return_value=False):
         first_notice = hooks._validate_prompt_model_config_for_hook("codex")
 
     assert "invalid-model-m6-probe" in first_notice
