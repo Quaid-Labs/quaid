@@ -1,4 +1,5 @@
 import builtins
+import threading
 import time
 
 import pytest
@@ -296,3 +297,47 @@ def test_scheduler_non_positive_platform_slots_raises_when_fail_hard(monkeypatch
 
     with pytest.raises(ValueError, match="platform_scheduler_slots must be positive"):
         scheduler_mod._platform_scheduler_slots(0)
+
+
+def test_reset_global_scheduler_shutdown_does_not_hold_global_lock(monkeypatch):
+    import core.llm.scheduler as scheduler_mod
+
+    shutdown_entered = threading.Event()
+    release_shutdown = threading.Event()
+
+    class _BlockingScheduler:
+        def shutdown(self, wait=False):
+            assert wait is True
+            shutdown_entered.set()
+            assert release_shutdown.wait(timeout=2.0)
+
+    class _FreshScheduler:
+        def shutdown(self, wait=False):
+            return None
+
+    monkeypatch.setattr(scheduler_mod, "_SCHEDULER", _BlockingScheduler())
+    monkeypatch.setattr(scheduler_mod, "_scheduler_max_workers", lambda: 1)
+    monkeypatch.setattr(scheduler_mod, "GlobalLlmScheduler", lambda max_workers: _FreshScheduler())
+
+    reset_thread = threading.Thread(
+        target=scheduler_mod.reset_global_llm_scheduler,
+        kwargs={"wait": True},
+    )
+    reset_thread.start()
+    try:
+        assert shutdown_entered.wait(timeout=1.0)
+
+        resolved = []
+        getter_thread = threading.Thread(
+            target=lambda: resolved.append(scheduler_mod.get_global_llm_scheduler())
+        )
+        getter_thread.start()
+        getter_thread.join(timeout=0.5)
+
+        assert resolved
+        assert isinstance(resolved[0], _FreshScheduler)
+    finally:
+        release_shutdown.set()
+        reset_thread.join(timeout=1.0)
+
+    assert not reset_thread.is_alive()

@@ -415,8 +415,8 @@ def reset_global_llm_scheduler(wait: bool = False) -> None:
     with _SCHEDULER_LOCK:
         sched = _SCHEDULER
         _SCHEDULER = None
-        if sched is not None:
-            sched.shutdown(wait=wait)
+    if sched is not None:
+        sched.shutdown(wait=wait)
 
 
 atexit.register(reset_global_llm_scheduler, wait=False)
