@@ -561,12 +561,36 @@ def write_context_refresh_timeout_marker(session_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _atomic_write(path: Path, content: str) -> None:
-    """Write content atomically via temp file + os.replace()."""
+    """Write content durably via temp file + fsync + os.replace()."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(f".tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}")
+    fd: Optional[int] = None
     try:
-        tmp_path.write_text(content, encoding="utf-8")
+        fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fd = None
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(str(tmp_path), str(path))
+        dir_fd: Optional[int] = None
+        try:
+            dir_fd = os.open(str(path.parent), os.O_RDONLY)
+            os.fsync(dir_fd)
+        except OSError:
+            pass
+        finally:
+            if dir_fd is not None:
+                try:
+                    os.close(dir_fd)
+                except OSError:
+                    pass
     except BaseException:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         try:
             tmp_path.unlink()
         except OSError:
@@ -6539,1003 +6563,1017 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             logger.debug("[%s] rolling signal dedup while locked failed: %s", label, exc)
         return
 
-    try:
-        from core.subagent_registry import is_registered_subagent
-        if is_registered_subagent(session_id):
-            logger.info("[%s] session %s: registered subagent, skipping standalone extraction", label, session_id)
-            mark_signal_processed(signal_data)
-            _release_session_processing_lock(lock_owner_key, lock_fd)
+    lock_released = False
+
+    def _release_current_processing_lock() -> None:
+        nonlocal lock_released
+        if lock_released:
             return
-    except Exception as exc:
-        if _fail_hard_enabled():
-            _release_session_processing_lock(lock_owner_key, lock_fd)
-            raise
-        logger.debug("[%s] registered subagent lookup failed for %s: %s", label, session_id, exc)
+        _release_session_processing_lock(lock_owner_key, lock_fd)
+        lock_released = True
 
-    adapter = _load_runtime_adapter_for_signal(label, session_id)
-    cursor_data = _read_cursor_with_source_compat(session_id, lock_owner_key)
+    try:
+        try:
+            from core.subagent_registry import is_registered_subagent
+            if is_registered_subagent(session_id):
+                logger.info("[%s] session %s: registered subagent, skipping standalone extraction", label, session_id)
+                mark_signal_processed(signal_data)
+                _release_current_processing_lock()
+                return
+        except Exception as exc:
+            if _fail_hard_enabled():
+                _release_current_processing_lock()
+                raise
+            logger.debug("[%s] registered subagent lookup failed for %s: %s", label, session_id, exc)
 
-    if not transcript_path or not os.path.isfile(transcript_path):
-        fallback_path, fallback_source = _resolve_existing_transcript_fallback_for_signal(
-            label=label,
-            session_id=session_id,
-            transcript_path=str(transcript_path or ""),
-            signal_meta=signal_meta,
-            cursor_data=cursor_data,
-            staged_state=staged_state,
-            adapter=adapter,
-        )
-        if fallback_path:
-            transcript_path = fallback_path
-            logger.info(
-                "[%s] transcript path missing/invalid before internal cursor reconciliation; "
-                "using %s fallback: %s",
+        adapter = _load_runtime_adapter_for_signal(label, session_id)
+        cursor_data = _read_cursor_with_source_compat(session_id, lock_owner_key)
+
+        if not transcript_path or not os.path.isfile(transcript_path):
+            fallback_path, fallback_source = _resolve_existing_transcript_fallback_for_signal(
+                label=label,
+                session_id=session_id,
+                transcript_path=str(transcript_path or ""),
+                signal_meta=signal_meta,
+                cursor_data=cursor_data,
+                staged_state=staged_state,
+                adapter=adapter,
+            )
+            if fallback_path:
+                transcript_path = fallback_path
+                logger.info(
+                    "[%s] transcript path missing/invalid before internal cursor reconciliation; "
+                    "using %s fallback: %s",
+                    label,
+                    fallback_source,
+                    transcript_path,
+                )
+
+        if (
+            transcript_path
+            and os.path.isfile(transcript_path)
+            and not _cursor_or_adapter_owns_transcript_path(
+                adapter,
+                session_id,
+                transcript_path,
+                cursor_data=cursor_data,
+            )
+        ):
+            logger.warning(
+                "[%s] session %s: transcript does not belong to active instance, skipping: %s",
                 label,
-                fallback_source,
+                session_id,
                 transcript_path,
             )
+            clear_rolling_state(session_id)
+            mark_signal_processed(signal_data)
+            _release_current_processing_lock()
+            return
 
-    if (
-        transcript_path
-        and os.path.isfile(transcript_path)
-        and not _cursor_or_adapter_owns_transcript_path(
+        if staged_state_has_payload(staged_state) or _semantic_buffer_has_content(staged_state):
+            internal_state = "not_internal"
+        else:
+            internal_state = _reconcile_internal_cursor_state(
+                session_id,
+                transcript_path,
+                cursor_data=cursor_data,
+                cursor_key=lock_owner_key,
+                adapter=adapter,
+            )
+        if internal_state == "frozen":
+            logger.info("[%s] session %s: cursor marked internal with no new content, skipping signal", label, session_id)
+            mark_signal_processed(signal_data)
+            _release_current_processing_lock()
+            return
+        if internal_state == "advanced":
+            logger.info("[%s] session %s: internal maintenance transcript, advancing cursor to EOF", label, session_id)
+            mark_signal_processed(signal_data)
+            _release_current_processing_lock()
+            return
+        if internal_state == "ignored":
+            logger.info("[%s] session %s: ignored non-extractable transcript content", label, session_id)
+            mark_signal_processed(signal_data)
+            _release_current_processing_lock()
+            return
+        if internal_state == "unfrozen":
+            logger.info(
+                "[%s] session %s: non-internal content arrived past frozen internal cursor, resuming extraction",
+                label,
+                session_id,
+            )
+            cursor_data = _read_cursor_with_source_compat(session_id, lock_owner_key)
+
+        try:
+            is_subagent_session_fn = getattr(adapter, "is_subagent_session", None) if adapter is not None else None
+            if callable(is_subagent_session_fn) and is_subagent_session_fn(session_id, Path(transcript_path)):
+                logger.info("[%s] session %s: adapter-marked subagent, skipping standalone extraction", label, session_id)
+                mark_signal_processed(signal_data)
+                _release_current_processing_lock()
+                return
+        except Exception as exc:
+            if _fail_hard_enabled():
+                _release_current_processing_lock()
+                raise
+            logger.debug("[%s] adapter subagent lookup failed for %s: %s", label, session_id, exc)
+
+        # FIFO ordering: if a lifecycle/timeout signal arrives while a rolling
+        # signal for the same session is still pending, defer this signal so rolling
+        # can stage threshold-crossing facts first. The lifecycle/timeout signal
+        # then flushes staged facts and drains any residual tail.
+        if signal_type in ("compaction", "reset", "session_end", "timeout") and not staged_payload_sweep_signal:
+            try:
+                _ses_sig_path = signal_data.get("_signal_path", "")
+                for _rf in list(_signal_dir().iterdir()):
+                    if not _rf.name.endswith(".json") or str(_rf) == _ses_sig_path:
+                        continue
+                    try:
+                        _rs = json.loads(_rf.read_text(encoding="utf-8"))
+                        if _rs.get("session_id") == session_id and _rs.get("type") == "rolling":
+                            logger.info(
+                                "[%s] session %s: %s deferred — pending rolling signal "
+                                "found; will retry after rolling extraction completes (FIFO)",
+                                label, session_id, signal_type,
+                            )
+                            _release_current_processing_lock()
+                            return  # preserve signal on disk; retry next poll cycle
+                    except (json.JSONDecodeError, OSError):
+                        pass
+            except Exception as _fifo_err:
+                logger.warning("[%s] FIFO rolling-pending check failed: %s", label, _fifo_err)
+                if _fail_hard_enabled():
+                    _release_current_processing_lock()
+                    raise
+
+        # Consume duplicate signals for this session now that we hold the lock.
+        # Signals with the same or lower priority are redundant — this extraction
+        # will process the content and advance the cursor. Higher-priority signals
+        # (e.g. a rolling signal pending while a reset is processing) are preserved
+        # so they can stage content before the next flush.
+        _current_priority = _SIGNAL_PRIORITY.get(signal_type, 99)
+        try:
+            _current_sig_path = signal_data.get("_signal_path", "")
+            for _dup_f in list(_signal_dir().iterdir()):
+                if not _dup_f.name.endswith(".json") or str(_dup_f) == _current_sig_path:
+                    continue
+                try:
+                    _dup = json.loads(_dup_f.read_text(encoding="utf-8"))
+                    if _dup.get("session_id") == session_id:
+                        if signal_type == "rolling" and _dup.get("type") in ("session_end", "reset", "compaction", "timeout"):
+                            # A rolling pass only stages threshold-crossing content.
+                            # Lifecycle/timeout signals must survive to drain any
+                            # preserved sub-threshold semantic tail.
+                            continue
+                        _dup_priority = _SIGNAL_PRIORITY.get(_dup.get("type", ""), 99)
+                        if _dup_priority < _current_priority:
+                            # Higher-priority signal (e.g. rolling) — preserve it so it
+                            # can stage content before this flush processes.
+                            continue
+                        _dup_meta = _dup.get("meta") if isinstance(_dup.get("meta"), dict) else {}
+                        if (
+                            not staged_payload_sweep_signal
+                            and _is_staged_payload_flush_signal_meta(_dup_meta)
+                        ):
+                            # Synthetic rolling flushes are the only durable publish
+                            # trigger for already-staged payloads. A real lifecycle
+                            # signal may drain tail content, but it must not consume
+                            # the staged-payload flush before it publishes.
+                            continue
+                        if (
+                            staged_payload_sweep_signal
+                            and _semantic_buffer_has_content(staged_state)
+                            and _dup.get("type") in ("session_end", "reset", "compaction", "timeout")
+                            and not _is_staged_payload_flush_signal_meta(_dup_meta)
+                        ):
+                            # A synthetic rolling flush only publishes the already
+                            # staged payload. A real lifecycle signal is still needed
+                            # to drain any preserved sub-threshold semantic tail.
+                            continue
+                        _dup["_signal_path"] = str(_dup_f)
+                        mark_signal_processed(_dup)
+                except (json.JSONDecodeError, OSError):
+                    pass
+        except Exception as exc:
+            if _fail_hard_enabled():
+                _release_current_processing_lock()
+                raise
+            logger.warning("[%s] duplicate signal sweep failed for session %s: %s", label, session_id, exc)
+
+        if not transcript_path or not os.path.isfile(transcript_path):
+            for _fallback_source, _fallback_path in (
+                ("signal_meta_source", str(signal_meta.get("source_transcript_path") or "").strip()),
+                ("cursor", str(cursor_data.get("transcript_path") or "").strip()),
+                ("rolling_state", str(staged_state.get("transcript_path") or "").strip()),
+                ("rolling_state_source", str(staged_state.get("source_transcript_path") or "").strip()),
+                ("rolling_state_buffer", str(staged_state.get("buffer_transcript_path") or "").strip()),
+            ):
+                if _fallback_path and os.path.isfile(_fallback_path):
+                    transcript_path = _fallback_path
+                    logger.info(
+                        "[%s] transcript path missing/invalid; using %s fallback: %s",
+                        label,
+                        _fallback_source,
+                        transcript_path,
+                    )
+                    break
+            if (not transcript_path or not os.path.isfile(transcript_path)) and adapter is not None:
+                _get_session_path = getattr(adapter, "get_session_path", None)
+                if callable(_get_session_path):
+                    try:
+                        _adapter_path = _get_session_path(session_id)
+                    except Exception as exc:
+                        logger.warning(
+                            "[%s] failed resolving adapter transcript path for %s: %s",
+                            label,
+                            session_id,
+                            exc,
+                        )
+                    else:
+                        _adapter_path_str = str(_adapter_path or "").strip()
+                        if _adapter_path_str and os.path.isfile(_adapter_path_str):
+                            transcript_path = _adapter_path_str
+                            logger.info(
+                                "[%s] transcript path missing/invalid; using adapter fallback: %s",
+                                label,
+                                transcript_path,
+                            )
+
+        if not transcript_path or not os.path.isfile(transcript_path):
+            # OC /new renames the session file to .jsonl.reset.<timestamp> — check for that backup.
+            _reset_found = False
+            if transcript_path and transcript_path.endswith(".jsonl"):
+                import glob as _glob
+                _reset_pattern = transcript_path[:-len(".jsonl")] + ".jsonl.reset.*"
+                _reset_candidates = sorted(_glob.glob(_reset_pattern))
+                if _reset_candidates:
+                    transcript_path = _reset_candidates[-1]
+                    _reset_found = True
+                    logger.info("[%s] transcript renamed to reset backup, using: %s", label, transcript_path)
+            if not _reset_found:
+                if signal_type in ("reset", "session_end", "compaction", "timeout") and _preserve_missing_transcript_signal_for_retry(
+                    signal_data,
+                    session_id=session_id,
+                    signal_type=signal_type,
+                    transcript_path=str(transcript_path or ""),
+                    label=label,
+                ):
+                    _release_current_processing_lock()
+                    return
+                logger.warning("[%s] transcript not found: %s", label, transcript_path)
+                mark_signal_processed(signal_data)
+                _release_current_processing_lock()
+                return
+
+        if signal_type == "timeout" and _is_daemon_preserved_session_transcript_path(str(transcript_path)):
+            logger.info(
+                "[%s] session %s: timeout signal points at daemon-owned preserved transcript; "
+                "skipping inactive mirror: %s",
+                label,
+                session_id,
+                transcript_path,
+            )
+            mark_signal_processed(signal_data)
+            _release_current_processing_lock()
+            return
+
+        if not _cursor_or_adapter_owns_transcript_path(
             adapter,
             session_id,
             transcript_path,
             cursor_data=cursor_data,
-        )
-    ):
-        logger.warning(
-            "[%s] session %s: transcript does not belong to active instance, skipping: %s",
-            label,
-            session_id,
-            transcript_path,
-        )
-        clear_rolling_state(session_id)
-        mark_signal_processed(signal_data)
-        _release_session_processing_lock(lock_owner_key, lock_fd)
-        return
-
-    if staged_state_has_payload(staged_state) or _semantic_buffer_has_content(staged_state):
-        internal_state = "not_internal"
-    else:
-        internal_state = _reconcile_internal_cursor_state(
-            session_id,
-            transcript_path,
-            cursor_data=cursor_data,
-            cursor_key=lock_owner_key,
-            adapter=adapter,
-        )
-    if internal_state == "frozen":
-        logger.info("[%s] session %s: cursor marked internal with no new content, skipping signal", label, session_id)
-        mark_signal_processed(signal_data)
-        _release_session_processing_lock(lock_owner_key, lock_fd)
-        return
-    if internal_state == "advanced":
-        logger.info("[%s] session %s: internal maintenance transcript, advancing cursor to EOF", label, session_id)
-        mark_signal_processed(signal_data)
-        _release_session_processing_lock(lock_owner_key, lock_fd)
-        return
-    if internal_state == "ignored":
-        logger.info("[%s] session %s: ignored non-extractable transcript content", label, session_id)
-        mark_signal_processed(signal_data)
-        _release_session_processing_lock(lock_owner_key, lock_fd)
-        return
-    if internal_state == "unfrozen":
-        logger.info(
-            "[%s] session %s: non-internal content arrived past frozen internal cursor, resuming extraction",
-            label,
-            session_id,
-        )
-        cursor_data = _read_cursor_with_source_compat(session_id, lock_owner_key)
-
-    try:
-        is_subagent_session_fn = getattr(adapter, "is_subagent_session", None) if adapter is not None else None
-        if callable(is_subagent_session_fn) and is_subagent_session_fn(session_id, Path(transcript_path)):
-            logger.info("[%s] session %s: adapter-marked subagent, skipping standalone extraction", label, session_id)
-            mark_signal_processed(signal_data)
-            _release_session_processing_lock(lock_owner_key, lock_fd)
-            return
-    except Exception as exc:
-        if _fail_hard_enabled():
-            _release_session_processing_lock(lock_owner_key, lock_fd)
-            raise
-        logger.debug("[%s] adapter subagent lookup failed for %s: %s", label, session_id, exc)
-
-    # FIFO ordering: if a lifecycle/timeout signal arrives while a rolling
-    # signal for the same session is still pending, defer this signal so rolling
-    # can stage threshold-crossing facts first. The lifecycle/timeout signal
-    # then flushes staged facts and drains any residual tail.
-    if signal_type in ("compaction", "reset", "session_end", "timeout") and not staged_payload_sweep_signal:
-        try:
-            _ses_sig_path = signal_data.get("_signal_path", "")
-            for _rf in list(_signal_dir().iterdir()):
-                if not _rf.name.endswith(".json") or str(_rf) == _ses_sig_path:
-                    continue
-                try:
-                    _rs = json.loads(_rf.read_text(encoding="utf-8"))
-                    if _rs.get("session_id") == session_id and _rs.get("type") == "rolling":
-                        logger.info(
-                            "[%s] session %s: %s deferred — pending rolling signal "
-                            "found; will retry after rolling extraction completes (FIFO)",
-                            label, session_id, signal_type,
-                        )
-                        _release_session_processing_lock(lock_owner_key, lock_fd)
-                        return  # preserve signal on disk; retry next poll cycle
-                except (json.JSONDecodeError, OSError):
-                    pass
-        except Exception as _fifo_err:
-            logger.warning("[%s] FIFO rolling-pending check failed: %s", label, _fifo_err)
-            if _fail_hard_enabled():
-                _release_session_processing_lock(lock_owner_key, lock_fd)
-                raise
-
-    # Consume duplicate signals for this session now that we hold the lock.
-    # Signals with the same or lower priority are redundant — this extraction
-    # will process the content and advance the cursor. Higher-priority signals
-    # (e.g. a rolling signal pending while a reset is processing) are preserved
-    # so they can stage content before the next flush.
-    _current_priority = _SIGNAL_PRIORITY.get(signal_type, 99)
-    try:
-        _current_sig_path = signal_data.get("_signal_path", "")
-        for _dup_f in list(_signal_dir().iterdir()):
-            if not _dup_f.name.endswith(".json") or str(_dup_f) == _current_sig_path:
-                continue
-            try:
-                _dup = json.loads(_dup_f.read_text(encoding="utf-8"))
-                if _dup.get("session_id") == session_id:
-                    if signal_type == "rolling" and _dup.get("type") in ("session_end", "reset", "compaction", "timeout"):
-                        # A rolling pass only stages threshold-crossing content.
-                        # Lifecycle/timeout signals must survive to drain any
-                        # preserved sub-threshold semantic tail.
-                        continue
-                    _dup_priority = _SIGNAL_PRIORITY.get(_dup.get("type", ""), 99)
-                    if _dup_priority < _current_priority:
-                        # Higher-priority signal (e.g. rolling) — preserve it so it
-                        # can stage content before this flush processes.
-                        continue
-                    _dup_meta = _dup.get("meta") if isinstance(_dup.get("meta"), dict) else {}
-                    if (
-                        not staged_payload_sweep_signal
-                        and _is_staged_payload_flush_signal_meta(_dup_meta)
-                    ):
-                        # Synthetic rolling flushes are the only durable publish
-                        # trigger for already-staged payloads. A real lifecycle
-                        # signal may drain tail content, but it must not consume
-                        # the staged-payload flush before it publishes.
-                        continue
-                    if (
-                        staged_payload_sweep_signal
-                        and _semantic_buffer_has_content(staged_state)
-                        and _dup.get("type") in ("session_end", "reset", "compaction", "timeout")
-                        and not _is_staged_payload_flush_signal_meta(_dup_meta)
-                    ):
-                        # A synthetic rolling flush only publishes the already
-                        # staged payload. A real lifecycle signal is still needed
-                        # to drain any preserved sub-threshold semantic tail.
-                        continue
-                    _dup["_signal_path"] = str(_dup_f)
-                    mark_signal_processed(_dup)
-            except (json.JSONDecodeError, OSError):
-                pass
-    except Exception as exc:
-        if _fail_hard_enabled():
-            _release_session_processing_lock(lock_owner_key, lock_fd)
-            raise
-        logger.warning("[%s] duplicate signal sweep failed for session %s: %s", label, session_id, exc)
-
-    if not transcript_path or not os.path.isfile(transcript_path):
-        for _fallback_source, _fallback_path in (
-            ("signal_meta_source", str(signal_meta.get("source_transcript_path") or "").strip()),
-            ("cursor", str(cursor_data.get("transcript_path") or "").strip()),
-            ("rolling_state", str(staged_state.get("transcript_path") or "").strip()),
-            ("rolling_state_source", str(staged_state.get("source_transcript_path") or "").strip()),
-            ("rolling_state_buffer", str(staged_state.get("buffer_transcript_path") or "").strip()),
         ):
-            if _fallback_path and os.path.isfile(_fallback_path):
-                transcript_path = _fallback_path
-                logger.info(
-                    "[%s] transcript path missing/invalid; using %s fallback: %s",
-                    label,
-                    _fallback_source,
-                    transcript_path,
-                )
-                break
-        if (not transcript_path or not os.path.isfile(transcript_path)) and adapter is not None:
-            _get_session_path = getattr(adapter, "get_session_path", None)
-            if callable(_get_session_path):
-                try:
-                    _adapter_path = _get_session_path(session_id)
-                except Exception as exc:
-                    logger.warning(
-                        "[%s] failed resolving adapter transcript path for %s: %s",
-                        label,
-                        session_id,
-                        exc,
-                    )
-                else:
-                    _adapter_path_str = str(_adapter_path or "").strip()
-                    if _adapter_path_str and os.path.isfile(_adapter_path_str):
-                        transcript_path = _adapter_path_str
-                        logger.info(
-                            "[%s] transcript path missing/invalid; using adapter fallback: %s",
-                            label,
-                            transcript_path,
-                        )
-
-    if not transcript_path or not os.path.isfile(transcript_path):
-        # OC /new renames the session file to .jsonl.reset.<timestamp> — check for that backup.
-        _reset_found = False
-        if transcript_path and transcript_path.endswith(".jsonl"):
-            import glob as _glob
-            _reset_pattern = transcript_path[:-len(".jsonl")] + ".jsonl.reset.*"
-            _reset_candidates = sorted(_glob.glob(_reset_pattern))
-            if _reset_candidates:
-                transcript_path = _reset_candidates[-1]
-                _reset_found = True
-                logger.info("[%s] transcript renamed to reset backup, using: %s", label, transcript_path)
-        if not _reset_found:
-            if signal_type in ("reset", "session_end", "compaction", "timeout") and _preserve_missing_transcript_signal_for_retry(
-                signal_data,
-                session_id=session_id,
-                signal_type=signal_type,
-                transcript_path=str(transcript_path or ""),
-                label=label,
-            ):
-                _release_session_processing_lock(lock_owner_key, lock_fd)
-                return
-            logger.warning("[%s] transcript not found: %s", label, transcript_path)
-            mark_signal_processed(signal_data)
-            _release_session_processing_lock(lock_owner_key, lock_fd)
-            return
-
-    if signal_type == "timeout" and _is_daemon_preserved_session_transcript_path(str(transcript_path)):
-        logger.info(
-            "[%s] session %s: timeout signal points at daemon-owned preserved transcript; "
-            "skipping inactive mirror: %s",
-            label,
-            session_id,
-            transcript_path,
-        )
-        mark_signal_processed(signal_data)
-        _release_session_processing_lock(lock_owner_key, lock_fd)
-        return
-
-    if not _cursor_or_adapter_owns_transcript_path(
-        adapter,
-        session_id,
-        transcript_path,
-        cursor_data=cursor_data,
-    ):
-        logger.warning(
-            "[%s] session %s: resolved transcript does not belong to active instance, skipping: %s",
-            label,
-            session_id,
-            transcript_path,
-        )
-        clear_rolling_state(session_id)
-        mark_signal_processed(signal_data)
-        _release_session_processing_lock(lock_owner_key, lock_fd)
-        return
-
-    missing_cursor_fields = [
-        field for field in ("line_offset", "transcript_path")
-        if field not in cursor_data
-    ]
-    if missing_cursor_fields:
-        message = (
-            f"[{label}] session {session_id}: cursor state for {lock_owner_key} "
-            f"missing required field(s): {', '.join(missing_cursor_fields)}"
-        )
-        if _fail_hard_enabled():
-            _release_session_processing_lock(lock_owner_key, lock_fd)
-            raise RuntimeError(message)
-        logger.warning(message)
-
-    try:
-        cursor_offset = int(cursor_data.get("line_offset", 0) or 0)
-    except (TypeError, ValueError) as exc:
-        if _fail_hard_enabled():
-            _release_session_processing_lock(lock_owner_key, lock_fd)
-            raise
-        logger.warning(
-            "[%s] session %s: invalid cursor line_offset for %s: %r (%s); "
-            "resetting offset to 0",
-            label,
-            session_id,
-            lock_owner_key,
-            cursor_data.get("line_offset"),
-            exc,
-        )
-        cursor_offset = 0
-    cursor_transcript = str(cursor_data.get("transcript_path") or "").strip()
-    cursor_processed_signal_type = str(cursor_data.get("processed_signal_type") or "").strip()
-    cursor_marks_processed_extraction = cursor_processed_signal_type in VALID_SIGNAL_TYPES
-    reset_staged_state_for_full_reextract = False
-
-    # Write a preliminary cursor entry before extraction begins so that
-    # check_idle_sessions() can discover this session even if the daemon is
-    # killed before extraction completes. The cursor is updated to the real
-    # offset at the end of a successful extraction (line ~1860).
-    if not cursor_transcript and transcript_path:
-        try:
-            write_cursor(
-                session_id,
-                cursor_offset,
-                transcript_path,
-                source_key=lock_owner_key,
-            )
-        except Exception as exc:
-            if _fail_hard_enabled():
-                _release_session_processing_lock(lock_owner_key, lock_fd)
-                raise
             logger.warning(
-                "[%s] failed writing preliminary cursor for session %s: %s",
+                "[%s] session %s: resolved transcript does not belong to active instance, skipping: %s",
                 label,
                 session_id,
+                transcript_path,
+            )
+            clear_rolling_state(session_id)
+            mark_signal_processed(signal_data)
+            _release_current_processing_lock()
+            return
+
+        missing_cursor_fields = [
+            field for field in ("line_offset", "transcript_path")
+            if field not in cursor_data
+        ]
+        if missing_cursor_fields:
+            message = (
+                f"[{label}] session {session_id}: cursor state for {lock_owner_key} "
+                f"missing required field(s): {', '.join(missing_cursor_fields)}"
+            )
+            if _fail_hard_enabled():
+                _release_current_processing_lock()
+                raise RuntimeError(message)
+            logger.warning(message)
+
+        try:
+            cursor_offset = int(cursor_data.get("line_offset", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            if _fail_hard_enabled():
+                _release_current_processing_lock()
+                raise
+            logger.warning(
+                "[%s] session %s: invalid cursor line_offset for %s: %r (%s); "
+                "resetting offset to 0",
+                label,
+                session_id,
+                lock_owner_key,
+                cursor_data.get("line_offset"),
                 exc,
             )
-
-    if cursor_transcript and cursor_transcript != transcript_path:
-        # A .jsonl → .jsonl.reset.<ts> rename is OC's /reset backup mechanism.
-        # The content up to cursor_offset is identical in the backup file, so
-        # preserving the cursor avoids re-extracting already-processed lines.
-        _is_reset_rename = (
-            cursor_transcript.endswith(".jsonl")
-            and transcript_path.startswith(cursor_transcript[:-len(".jsonl")] + ".jsonl.reset.")
-        )
-        # A same-basename move is a session directory relocation (e.g.
-        # .openclaw/agents/.../sessions/X.jsonl -> quaid/logs/.../sessions/X.jsonl).
-        # The file content is identical, so preserve the cursor.
-        _is_dir_relocation = (
-            not _is_reset_rename
-            and os.path.basename(cursor_transcript) == os.path.basename(transcript_path)
-        )
-        _relocated_current_stat = _transcript_stat_metadata(transcript_path) if _is_dir_relocation else {}
-        _relocated_cursor_size_bytes = int(cursor_data.get("transcript_size_bytes", 0) or 0)
-        _relocated_current_size_bytes = int(_relocated_current_stat.get("size_bytes", 0) or 0)
-        _relocated_cursor_mtime_ns = int(cursor_data.get("transcript_mtime_ns", 0) or 0)
-        _relocated_current_mtime_ns = int(_relocated_current_stat.get("mtime_ns", 0) or 0)
-        _relocated_cursor_inode = int(cursor_data.get("transcript_inode", 0) or 0)
-        _relocated_current_inode = int(_relocated_current_stat.get("inode", 0) or 0)
-        _relocated_cursor_device = int(cursor_data.get("transcript_device", 0) or 0)
-        _relocated_current_device = int(_relocated_current_stat.get("device", 0) or 0)
-        _relocated_file_identity_changed = bool(
-            (
-                _relocated_cursor_mtime_ns
-                and _relocated_current_mtime_ns
-                and _relocated_current_mtime_ns != _relocated_cursor_mtime_ns
-            )
-            or (
-                _relocated_cursor_inode
-                and _relocated_current_inode
-                and _relocated_current_inode != _relocated_cursor_inode
-            )
-            or (
-                _relocated_cursor_device
-                and _relocated_current_device
-                and _relocated_current_device != _relocated_cursor_device
-            )
-        )
-        _relocated_size_changed = bool(
-            _relocated_cursor_size_bytes
-            and _relocated_current_size_bytes
-            and _relocated_current_size_bytes != _relocated_cursor_size_bytes
-        )
-        # A zero-size cursor can come from an early maintenance/reset pass over
-        # an empty handshake file. If the later relocated transcript has content
-        # and file identity changed, do not let that stale EOF cursor shadow it.
-        _relocated_zero_size_cursor_rebased = bool(
-            not _relocated_cursor_size_bytes
-            and _relocated_current_size_bytes
-            and _relocated_file_identity_changed
-        )
-        _relocated_content_changed = bool(
-            _is_dir_relocation
-            and (_relocated_size_changed or _relocated_zero_size_cursor_rebased)
-        )
-        _relocated_preserved_subset_already_consumed = bool(
-            _is_dir_relocation
-            and signal_type == "session_end"
-            and cursor_offset > 0
-            and cursor_marks_processed_extraction
-            and _relocated_cursor_size_bytes
-            and _relocated_current_size_bytes
-            and _relocated_current_size_bytes < _relocated_cursor_size_bytes
-            and cursor_transcript
-            and not os.path.isfile(cursor_transcript)
-            and not _is_daemon_preserved_session_transcript_path(cursor_transcript)
-            and _is_daemon_preserved_session_transcript_path(str(transcript_path))
-        )
-        # Cross-directory reset rename: cursor is at a relocated path (dir2/X.jsonl)
-        # and the new transcript is the .reset.* backup in the original directory
-        # (dir1/X.jsonl.reset.<ts>).  The directory-level _is_reset_rename check
-        # above fails because the dirs differ.  A basename-level check catches it.
-        _cursor_base = os.path.basename(cursor_transcript)
-        _transcript_base = os.path.basename(transcript_path)
-        _is_cross_dir_reset_rename = (
-            not _is_reset_rename
-            and not _is_dir_relocation
-            and _cursor_base.endswith(".jsonl")
-            and _transcript_base.startswith(_cursor_base[:-len(".jsonl")] + ".jsonl.reset.")
-        )
-        # Cursor is on a .reset.* backup; new signal points to the plain preserved
-        # copy (.jsonl) of the same session content in a different directory.
-        # Treat as already-consumed when cursor_offset > 0.
-        _is_cursor_on_backup_to_plain = (
-            not _is_reset_rename
-            and not _is_dir_relocation
-            and not _is_cross_dir_reset_rename
-            and _transcript_base.endswith(".jsonl")
-            and _cursor_base.startswith(_transcript_base[:-len(".jsonl")] + ".jsonl.reset.")
-        )
-        if _is_reset_rename and signal_type != "reset":
-            # Non-reset signals on a renamed backup (e.g. orphan_reset_check on an
-            # active session) — content up to cursor_offset is already extracted, so
-            # preserve the cursor to avoid re-extraction.
-            logger.info(
-                "[%s] session %s: transcript path is reset backup of cursor path (%s -> %s), preserving cursor",
-                label, session_id, cursor_transcript, transcript_path,
-            )
-        elif _is_reset_rename and cursor_offset > 0 and cursor_marks_processed_extraction:
-            # Reset signal on a renamed backup, but content was already extracted
-            # from the plain path (cursor_offset > 0). This is a late duplicate
-            # signal — the backup contains the same content already consumed.
-            # Preserve cursor and skip re-extraction to avoid duplicate facts.
-            logger.info(
-                "[%s] session %s: reset signal on backup path (%s -> %s), "
-                "content already extracted at offset %d, skipping",
-                label, session_id, cursor_transcript, transcript_path, cursor_offset,
-            )
-            mark_signal_processed(signal_data)
-            _release_session_processing_lock(lock_owner_key, lock_fd)
-            return
-        elif _is_reset_rename:
-            # Reset signal on a renamed backup — this IS the /reset extraction.
-            # We want the full session content, so start from offset 0.
-            logger.info(
-                "[%s] session %s: reset signal on backup path (%s -> %s), resetting cursor for full extraction",
-                label, session_id, cursor_transcript, transcript_path,
-            )
             cursor_offset = 0
-            reset_staged_state_for_full_reextract = True
-        elif (
-            _is_dir_relocation
-            and _relocated_content_changed
-            and signal_type == "session_end"
-            and cursor_transcript
-            and os.path.isfile(cursor_transcript)
-            and not _is_daemon_preserved_session_transcript_path(cursor_transcript)
-            and _is_daemon_preserved_session_transcript_path(str(transcript_path))
-            and _preserved_mirror_user_turns_are_covered_by_live(adapter, cursor_transcript, str(transcript_path))
-        ):
-            # OpenClaw can emit session_end against the preserved mirror while
-            # the live transcript is still active. Treat it as a checkpoint
-            # only when every preserved user turn is already in the live file.
-            logger.info(
-                "[%s] session %s: preserved transcript mirror changed while live transcript still exists "
-                "(%s -> %s, cursor_size=%d, current_size=%d); treating as active-session checkpoint",
-                label, session_id, cursor_transcript, transcript_path,
-                _relocated_cursor_size_bytes, _relocated_current_size_bytes,
-            )
-            mark_signal_processed(signal_data)
-            _release_session_processing_lock(lock_owner_key, lock_fd)
-            return
-        elif _relocated_preserved_subset_already_consumed:
-            _relocated_total_lines = count_transcript_lines(transcript_path)
-            if _relocated_total_lines <= cursor_offset:
-                # OpenClaw /new can move an already-consumed subset of the live
-                # transcript into Quaid's preserved sessions dir after the live
-                # file disappears. The smaller preserved copy should not rewind
-                # the extraction cursor and replay the prior session.
-                logger.info(
-                    "[%s] session %s: relocated preserved transcript is already consumed "
-                    "(%s -> %s, cursor_offset=%d, preserved_lines=%d, cursor_size=%d, current_size=%d); "
-                    "advancing relocated cursor to EOF",
-                    label, session_id, cursor_transcript, transcript_path,
-                    cursor_offset, _relocated_total_lines,
-                    _relocated_cursor_size_bytes, _relocated_current_size_bytes,
-                )
+        cursor_transcript = str(cursor_data.get("transcript_path") or "").strip()
+        cursor_processed_signal_type = str(cursor_data.get("processed_signal_type") or "").strip()
+        cursor_marks_processed_extraction = cursor_processed_signal_type in VALID_SIGNAL_TYPES
+        reset_staged_state_for_full_reextract = False
+
+        # Write a preliminary cursor entry before extraction begins so that
+        # check_idle_sessions() can discover this session even if the daemon is
+        # killed before extraction completes. The cursor is updated to the real
+        # offset at the end of a successful extraction (line ~1860).
+        if not cursor_transcript and transcript_path:
+            try:
                 write_cursor(
                     session_id,
-                    _relocated_total_lines,
+                    cursor_offset,
                     transcript_path,
                     source_key=lock_owner_key,
-                    processed_signal_type=signal_type,
+                )
+            except Exception as exc:
+                if _fail_hard_enabled():
+                    _release_current_processing_lock()
+                    raise
+                logger.warning(
+                    "[%s] failed writing preliminary cursor for session %s: %s",
+                    label,
+                    session_id,
+                    exc,
+                )
+
+        if cursor_transcript and cursor_transcript != transcript_path:
+            # A .jsonl → .jsonl.reset.<ts> rename is OC's /reset backup mechanism.
+            # The content up to cursor_offset is identical in the backup file, so
+            # preserving the cursor avoids re-extracting already-processed lines.
+            _is_reset_rename = (
+                cursor_transcript.endswith(".jsonl")
+                and transcript_path.startswith(cursor_transcript[:-len(".jsonl")] + ".jsonl.reset.")
+            )
+            # A same-basename move is a session directory relocation (e.g.
+            # .openclaw/agents/.../sessions/X.jsonl -> quaid/logs/.../sessions/X.jsonl).
+            # The file content is identical, so preserve the cursor.
+            _is_dir_relocation = (
+                not _is_reset_rename
+                and os.path.basename(cursor_transcript) == os.path.basename(transcript_path)
+            )
+            _relocated_current_stat = _transcript_stat_metadata(transcript_path) if _is_dir_relocation else {}
+            _relocated_cursor_size_bytes = int(cursor_data.get("transcript_size_bytes", 0) or 0)
+            _relocated_current_size_bytes = int(_relocated_current_stat.get("size_bytes", 0) or 0)
+            _relocated_cursor_mtime_ns = int(cursor_data.get("transcript_mtime_ns", 0) or 0)
+            _relocated_current_mtime_ns = int(_relocated_current_stat.get("mtime_ns", 0) or 0)
+            _relocated_cursor_inode = int(cursor_data.get("transcript_inode", 0) or 0)
+            _relocated_current_inode = int(_relocated_current_stat.get("inode", 0) or 0)
+            _relocated_cursor_device = int(cursor_data.get("transcript_device", 0) or 0)
+            _relocated_current_device = int(_relocated_current_stat.get("device", 0) or 0)
+            _relocated_file_identity_changed = bool(
+                (
+                    _relocated_cursor_mtime_ns
+                    and _relocated_current_mtime_ns
+                    and _relocated_current_mtime_ns != _relocated_cursor_mtime_ns
+                )
+                or (
+                    _relocated_cursor_inode
+                    and _relocated_current_inode
+                    and _relocated_current_inode != _relocated_cursor_inode
+                )
+                or (
+                    _relocated_cursor_device
+                    and _relocated_current_device
+                    and _relocated_current_device != _relocated_cursor_device
+                )
+            )
+            _relocated_size_changed = bool(
+                _relocated_cursor_size_bytes
+                and _relocated_current_size_bytes
+                and _relocated_current_size_bytes != _relocated_cursor_size_bytes
+            )
+            # A zero-size cursor can come from an early maintenance/reset pass over
+            # an empty handshake file. If the later relocated transcript has content
+            # and file identity changed, do not let that stale EOF cursor shadow it.
+            _relocated_zero_size_cursor_rebased = bool(
+                not _relocated_cursor_size_bytes
+                and _relocated_current_size_bytes
+                and _relocated_file_identity_changed
+            )
+            _relocated_content_changed = bool(
+                _is_dir_relocation
+                and (_relocated_size_changed or _relocated_zero_size_cursor_rebased)
+            )
+            _relocated_preserved_subset_already_consumed = bool(
+                _is_dir_relocation
+                and signal_type == "session_end"
+                and cursor_offset > 0
+                and cursor_marks_processed_extraction
+                and _relocated_cursor_size_bytes
+                and _relocated_current_size_bytes
+                and _relocated_current_size_bytes < _relocated_cursor_size_bytes
+                and cursor_transcript
+                and not os.path.isfile(cursor_transcript)
+                and not _is_daemon_preserved_session_transcript_path(cursor_transcript)
+                and _is_daemon_preserved_session_transcript_path(str(transcript_path))
+            )
+            # Cross-directory reset rename: cursor is at a relocated path (dir2/X.jsonl)
+            # and the new transcript is the .reset.* backup in the original directory
+            # (dir1/X.jsonl.reset.<ts>).  The directory-level _is_reset_rename check
+            # above fails because the dirs differ.  A basename-level check catches it.
+            _cursor_base = os.path.basename(cursor_transcript)
+            _transcript_base = os.path.basename(transcript_path)
+            _is_cross_dir_reset_rename = (
+                not _is_reset_rename
+                and not _is_dir_relocation
+                and _cursor_base.endswith(".jsonl")
+                and _transcript_base.startswith(_cursor_base[:-len(".jsonl")] + ".jsonl.reset.")
+            )
+            # Cursor is on a .reset.* backup; new signal points to the plain preserved
+            # copy (.jsonl) of the same session content in a different directory.
+            # Treat as already-consumed when cursor_offset > 0.
+            _is_cursor_on_backup_to_plain = (
+                not _is_reset_rename
+                and not _is_dir_relocation
+                and not _is_cross_dir_reset_rename
+                and _transcript_base.endswith(".jsonl")
+                and _cursor_base.startswith(_transcript_base[:-len(".jsonl")] + ".jsonl.reset.")
+            )
+            if _is_reset_rename and signal_type != "reset":
+                # Non-reset signals on a renamed backup (e.g. orphan_reset_check on an
+                # active session) — content up to cursor_offset is already extracted, so
+                # preserve the cursor to avoid re-extraction.
+                logger.info(
+                    "[%s] session %s: transcript path is reset backup of cursor path (%s -> %s), preserving cursor",
+                    label, session_id, cursor_transcript, transcript_path,
+                )
+            elif _is_reset_rename and cursor_offset > 0 and cursor_marks_processed_extraction:
+                # Reset signal on a renamed backup, but content was already extracted
+                # from the plain path (cursor_offset > 0). This is a late duplicate
+                # signal — the backup contains the same content already consumed.
+                # Preserve cursor and skip re-extraction to avoid duplicate facts.
+                logger.info(
+                    "[%s] session %s: reset signal on backup path (%s -> %s), "
+                    "content already extracted at offset %d, skipping",
+                    label, session_id, cursor_transcript, transcript_path, cursor_offset,
                 )
                 mark_signal_processed(signal_data)
-                _release_session_processing_lock(lock_owner_key, lock_fd)
+                _release_current_processing_lock()
                 return
-            logger.info(
-                "[%s] session %s: relocated preserved transcript is smaller but has %d new line(s) "
-                "past cursor offset %d (%s -> %s); continuing from cursor",
-                label, session_id, _relocated_total_lines - cursor_offset, cursor_offset,
-                cursor_transcript, transcript_path,
-            )
-        elif (
-            _is_dir_relocation
-            and _relocated_content_changed
-            and signal_type == "timeout"
-            and _relocated_cursor_size_bytes
-            and _relocated_current_size_bytes
-            and _relocated_current_size_bytes < _relocated_cursor_size_bytes
-            and _is_daemon_preserved_session_transcript_path(cursor_transcript)
-            and not _is_daemon_preserved_session_transcript_path(str(transcript_path))
-        ):
-            if cursor_marks_processed_extraction:
+            elif _is_reset_rename:
+                # Reset signal on a renamed backup — this IS the /reset extraction.
+                # We want the full session content, so start from offset 0.
                 logger.info(
-                    "[%s] session %s: timeout points at smaller stale live transcript after preserved flush "
-                    "(%s -> %s, cursor_offset=%d, cursor_size=%d, current_size=%d); preserving cursor",
-                    label, session_id, cursor_transcript, transcript_path, cursor_offset,
+                    "[%s] session %s: reset signal on backup path (%s -> %s), resetting cursor for full extraction",
+                    label, session_id, cursor_transcript, transcript_path,
+                )
+                cursor_offset = 0
+                reset_staged_state_for_full_reextract = True
+            elif (
+                _is_dir_relocation
+                and _relocated_content_changed
+                and signal_type == "session_end"
+                and cursor_transcript
+                and os.path.isfile(cursor_transcript)
+                and not _is_daemon_preserved_session_transcript_path(cursor_transcript)
+                and _is_daemon_preserved_session_transcript_path(str(transcript_path))
+                and _preserved_mirror_user_turns_are_covered_by_live(adapter, cursor_transcript, str(transcript_path))
+            ):
+                # OpenClaw can emit session_end against the preserved mirror while
+                # the live transcript is still active. Treat it as a checkpoint
+                # only when every preserved user turn is already in the live file.
+                logger.info(
+                    "[%s] session %s: preserved transcript mirror changed while live transcript still exists "
+                    "(%s -> %s, cursor_size=%d, current_size=%d); treating as active-session checkpoint",
+                    label, session_id, cursor_transcript, transcript_path,
                     _relocated_cursor_size_bytes, _relocated_current_size_bytes,
                 )
                 mark_signal_processed(signal_data)
-                _release_session_processing_lock(lock_owner_key, lock_fd)
+                _release_current_processing_lock()
                 return
-            logger.info(
-                "[%s] session %s: timeout points at smaller live transcript after scan-only preserved cursor "
-                "(%s -> %s, cursor_offset=%d, cursor_size=%d, current_size=%d); resetting cursor for extraction",
-                label, session_id, cursor_transcript, transcript_path, cursor_offset,
-                _relocated_cursor_size_bytes, _relocated_current_size_bytes,
-            )
-            cursor_offset = 0
-            reset_staged_state_for_full_reextract = True
-        elif _is_dir_relocation and _relocated_content_changed:
-            logger.info(
-                "[%s] session %s: transcript directory relocation content changed "
-                "(%s -> %s, cursor_size=%d, current_size=%d), resetting cursor",
-                label, session_id, cursor_transcript, transcript_path,
-                _relocated_cursor_size_bytes, _relocated_current_size_bytes,
-            )
-            cursor_offset = 0
-            reset_staged_state_for_full_reextract = True
-        elif _is_dir_relocation and signal_type != "reset":
-            # Same-basename path: session file relocated to a different directory.
-            # Content is identical; preserve cursor to avoid duplicate extraction.
-            logger.info(
-                "[%s] session %s: transcript directory relocation (%s -> %s), preserving cursor",
-                label, session_id, cursor_transcript, transcript_path,
-            )
-        elif _is_dir_relocation:
-            # Reset signal on a relocated transcript. Two sub-cases:
-            # (a) cursor_offset == 0 or scan-only cursor: content not yet extracted — reset and extract
-            #     the full content from the relocated file (M10 scenario: first
-            #     signal for this session arrives via the relocated path; OC
-            #     rolling scans may also have advanced to EOF without extracting).
-            # (b) cursor_offset > 0 with processed_signal_type: content already
-            #     extracted in a prior pass (M2 scenario: duplicate reset signal
-            #     after relocation). The relocated file has identical content;
-            #     preserve cursor to avoid re-extracting duplicate facts.
-            if cursor_offset == 0 or not cursor_marks_processed_extraction:
+            elif _relocated_preserved_subset_already_consumed:
+                _relocated_total_lines = count_transcript_lines(transcript_path)
+                if _relocated_total_lines <= cursor_offset:
+                    # OpenClaw /new can move an already-consumed subset of the live
+                    # transcript into Quaid's preserved sessions dir after the live
+                    # file disappears. The smaller preserved copy should not rewind
+                    # the extraction cursor and replay the prior session.
+                    logger.info(
+                        "[%s] session %s: relocated preserved transcript is already consumed "
+                        "(%s -> %s, cursor_offset=%d, preserved_lines=%d, cursor_size=%d, current_size=%d); "
+                        "advancing relocated cursor to EOF",
+                        label, session_id, cursor_transcript, transcript_path,
+                        cursor_offset, _relocated_total_lines,
+                        _relocated_cursor_size_bytes, _relocated_current_size_bytes,
+                    )
+                    write_cursor(
+                        session_id,
+                        _relocated_total_lines,
+                        transcript_path,
+                        source_key=lock_owner_key,
+                        processed_signal_type=signal_type,
+                    )
+                    mark_signal_processed(signal_data)
+                    _release_current_processing_lock()
+                    return
                 logger.info(
-                    "[%s] session %s: reset signal on relocated transcript, no prior extraction marker (%s -> %s), resetting cursor for full extraction",
+                    "[%s] session %s: relocated preserved transcript is smaller but has %d new line(s) "
+                    "past cursor offset %d (%s -> %s); continuing from cursor",
+                    label, session_id, _relocated_total_lines - cursor_offset, cursor_offset,
+                    cursor_transcript, transcript_path,
+                )
+            elif (
+                _is_dir_relocation
+                and _relocated_content_changed
+                and signal_type == "timeout"
+                and _relocated_cursor_size_bytes
+                and _relocated_current_size_bytes
+                and _relocated_current_size_bytes < _relocated_cursor_size_bytes
+                and _is_daemon_preserved_session_transcript_path(cursor_transcript)
+                and not _is_daemon_preserved_session_transcript_path(str(transcript_path))
+            ):
+                if cursor_marks_processed_extraction:
+                    logger.info(
+                        "[%s] session %s: timeout points at smaller stale live transcript after preserved flush "
+                        "(%s -> %s, cursor_offset=%d, cursor_size=%d, current_size=%d); preserving cursor",
+                        label, session_id, cursor_transcript, transcript_path, cursor_offset,
+                        _relocated_cursor_size_bytes, _relocated_current_size_bytes,
+                    )
+                    mark_signal_processed(signal_data)
+                    _release_current_processing_lock()
+                    return
+                logger.info(
+                    "[%s] session %s: timeout points at smaller live transcript after scan-only preserved cursor "
+                    "(%s -> %s, cursor_offset=%d, cursor_size=%d, current_size=%d); resetting cursor for extraction",
+                    label, session_id, cursor_transcript, transcript_path, cursor_offset,
+                    _relocated_cursor_size_bytes, _relocated_current_size_bytes,
+                )
+                cursor_offset = 0
+                reset_staged_state_for_full_reextract = True
+            elif _is_dir_relocation and _relocated_content_changed:
+                logger.info(
+                    "[%s] session %s: transcript directory relocation content changed "
+                    "(%s -> %s, cursor_size=%d, current_size=%d), resetting cursor",
+                    label, session_id, cursor_transcript, transcript_path,
+                    _relocated_cursor_size_bytes, _relocated_current_size_bytes,
+                )
+                cursor_offset = 0
+                reset_staged_state_for_full_reextract = True
+            elif _is_dir_relocation and signal_type != "reset":
+                # Same-basename path: session file relocated to a different directory.
+                # Content is identical; preserve cursor to avoid duplicate extraction.
+                logger.info(
+                    "[%s] session %s: transcript directory relocation (%s -> %s), preserving cursor",
+                    label, session_id, cursor_transcript, transcript_path,
+                )
+            elif _is_dir_relocation:
+                # Reset signal on a relocated transcript. Two sub-cases:
+                # (a) cursor_offset == 0 or scan-only cursor: content not yet extracted — reset and extract
+                #     the full content from the relocated file (M10 scenario: first
+                #     signal for this session arrives via the relocated path; OC
+                #     rolling scans may also have advanced to EOF without extracting).
+                # (b) cursor_offset > 0 with processed_signal_type: content already
+                #     extracted in a prior pass (M2 scenario: duplicate reset signal
+                #     after relocation). The relocated file has identical content;
+                #     preserve cursor to avoid re-extracting duplicate facts.
+                if cursor_offset == 0 or not cursor_marks_processed_extraction:
+                    logger.info(
+                        "[%s] session %s: reset signal on relocated transcript, no prior extraction marker (%s -> %s), resetting cursor for full extraction",
+                        label, session_id, cursor_transcript, transcript_path,
+                    )
+                    cursor_offset = 0
+                    reset_staged_state_for_full_reextract = True
+                else:
+                    logger.info(
+                        "[%s] session %s: reset signal on relocated transcript, content already extracted at offset %d (%s -> %s), preserving cursor",
+                        label, session_id, cursor_offset, cursor_transcript, transcript_path,
+                    )
+            elif _is_cross_dir_reset_rename and signal_type != "reset":
+                # Non-reset signal on a cross-directory reset backup — content up to
+                # cursor_offset already extracted; preserve cursor.
+                logger.info(
+                    "[%s] session %s: cross-dir reset backup of cursor path (%s -> %s), preserving cursor",
+                    label, session_id, cursor_transcript, transcript_path,
+                )
+            elif _is_cross_dir_reset_rename:
+                # Reset signal on a cross-directory reset backup — full /reset extraction.
+                logger.info(
+                    "[%s] session %s: reset signal on cross-dir reset backup (%s -> %s), resetting cursor for full extraction",
+                    label, session_id, cursor_transcript, transcript_path,
+                )
+                cursor_offset = 0
+                reset_staged_state_for_full_reextract = True
+            elif _is_cursor_on_backup_to_plain and cursor_offset > 0:
+                # Cursor was written against a .reset.* backup; new signal points to
+                # the plain session path. OpenClaw can reuse the same session id after
+                # /new and then append the real queued user turn to the plain file
+                # after the reset backup was extracted. Only skip when the plain file
+                # is still at the extracted backup offset; otherwise keep processing
+                # the preserved copy so post-reset user content is not lost.
+                plain_total_lines = count_transcript_lines(transcript_path)
+                cursor_size_bytes = int(cursor_data.get("transcript_size_bytes", 0) or 0)
+                plain_size_bytes = _transcript_size_bytes(transcript_path)
+                if plain_total_lines < cursor_offset or (
+                    plain_total_lines == cursor_offset
+                    and cursor_size_bytes
+                    and plain_size_bytes
+                    and plain_size_bytes != cursor_size_bytes
+                ):
+                    logger.info(
+                        "[%s] session %s: cursor on reset backup but preserved copy appears rebased "
+                        "(%s -> %s, backup_offset=%d, plain_lines=%d); resetting cursor for full extraction",
+                        label, session_id, cursor_transcript, transcript_path, cursor_offset, plain_total_lines,
+                    )
+                    cursor_offset = 0
+                    reset_staged_state_for_full_reextract = True
+                elif plain_total_lines > cursor_offset:
+                    logger.info(
+                        "[%s] session %s: cursor on reset backup, preserved copy has %d new line(s) "
+                        "past offset %d (%s -> %s); continuing from cursor",
+                        label, session_id, plain_total_lines - cursor_offset, cursor_offset,
+                        cursor_transcript, transcript_path,
+                    )
+                else:
+                    logger.info(
+                        "[%s] session %s: cursor on reset backup, new signal is preserved copy "
+                        "(%s -> %s), content already extracted at offset %d, skipping",
+                        label, session_id, cursor_transcript, transcript_path, cursor_offset,
+                    )
+                    mark_signal_processed(signal_data)
+                    _release_current_processing_lock()
+                    return
+            elif _is_cursor_on_backup_to_plain:
+                # cursor_offset == 0: no prior extraction — proceed normally.
+                logger.info(
+                    "[%s] session %s: cursor on reset backup (offset 0), new signal is preserved copy "
+                    "(%s -> %s), resetting cursor for full extraction",
                     label, session_id, cursor_transcript, transcript_path,
                 )
                 cursor_offset = 0
                 reset_staged_state_for_full_reextract = True
             else:
                 logger.info(
-                    "[%s] session %s: reset signal on relocated transcript, content already extracted at offset %d (%s -> %s), preserving cursor",
-                    label, session_id, cursor_offset, cursor_transcript, transcript_path,
-                )
-        elif _is_cross_dir_reset_rename and signal_type != "reset":
-            # Non-reset signal on a cross-directory reset backup — content up to
-            # cursor_offset already extracted; preserve cursor.
-            logger.info(
-                "[%s] session %s: cross-dir reset backup of cursor path (%s -> %s), preserving cursor",
-                label, session_id, cursor_transcript, transcript_path,
-            )
-        elif _is_cross_dir_reset_rename:
-            # Reset signal on a cross-directory reset backup — full /reset extraction.
-            logger.info(
-                "[%s] session %s: reset signal on cross-dir reset backup (%s -> %s), resetting cursor for full extraction",
-                label, session_id, cursor_transcript, transcript_path,
-            )
-            cursor_offset = 0
-            reset_staged_state_for_full_reextract = True
-        elif _is_cursor_on_backup_to_plain and cursor_offset > 0:
-            # Cursor was written against a .reset.* backup; new signal points to
-            # the plain session path. OpenClaw can reuse the same session id after
-            # /new and then append the real queued user turn to the plain file
-            # after the reset backup was extracted. Only skip when the plain file
-            # is still at the extracted backup offset; otherwise keep processing
-            # the preserved copy so post-reset user content is not lost.
-            plain_total_lines = count_transcript_lines(transcript_path)
-            cursor_size_bytes = int(cursor_data.get("transcript_size_bytes", 0) or 0)
-            plain_size_bytes = _transcript_size_bytes(transcript_path)
-            if plain_total_lines < cursor_offset or (
-                plain_total_lines == cursor_offset
-                and cursor_size_bytes
-                and plain_size_bytes
-                and plain_size_bytes != cursor_size_bytes
-            ):
-                logger.info(
-                    "[%s] session %s: cursor on reset backup but preserved copy appears rebased "
-                    "(%s -> %s, backup_offset=%d, plain_lines=%d); resetting cursor for full extraction",
-                    label, session_id, cursor_transcript, transcript_path, cursor_offset, plain_total_lines,
+                    "[%s] session %s: transcript path changed (%s -> %s), resetting cursor",
+                    label, session_id, cursor_transcript, transcript_path,
                 )
                 cursor_offset = 0
                 reset_staged_state_for_full_reextract = True
-            elif plain_total_lines > cursor_offset:
-                logger.info(
-                    "[%s] session %s: cursor on reset backup, preserved copy has %d new line(s) "
-                    "past offset %d (%s -> %s); continuing from cursor",
-                    label, session_id, plain_total_lines - cursor_offset, cursor_offset,
-                    cursor_transcript, transcript_path,
-                )
-            else:
-                logger.info(
-                    "[%s] session %s: cursor on reset backup, new signal is preserved copy "
-                    "(%s -> %s), content already extracted at offset %d, skipping",
-                    label, session_id, cursor_transcript, transcript_path, cursor_offset,
-                )
-                mark_signal_processed(signal_data)
-                _release_session_processing_lock(lock_owner_key, lock_fd)
-                return
-        elif _is_cursor_on_backup_to_plain:
-            # cursor_offset == 0: no prior extraction — proceed normally.
-            logger.info(
-                "[%s] session %s: cursor on reset backup (offset 0), new signal is preserved copy "
-                "(%s -> %s), resetting cursor for full extraction",
-                label, session_id, cursor_transcript, transcript_path,
-            )
-            cursor_offset = 0
-            reset_staged_state_for_full_reextract = True
-        else:
-            logger.info(
-                "[%s] session %s: transcript path changed (%s -> %s), resetting cursor",
-                label, session_id, cursor_transcript, transcript_path,
-            )
-            cursor_offset = 0
-            reset_staged_state_for_full_reextract = True
 
-    if (
-        signal_type in ("compaction", "reset", "session_end", "timeout")
-        and not rolling_mode
-        and not staged_payload_sweep_signal
-        and staged_state_has_payload(staged_state)
-    ):
-        staged_source_path = str(
-            staged_state.get("source_transcript_path")
-            or staged_state.get("buffer_transcript_path")
-            or ""
-        ).strip()
         if (
-            staged_source_path
-            and os.path.isfile(staged_source_path)
-            and staged_source_path != str(transcript_path or "")
+            signal_type in ("compaction", "reset", "session_end", "timeout")
+            and not rolling_mode
+            and not staged_payload_sweep_signal
+            and staged_state_has_payload(staged_state)
         ):
-            try:
-                staged_source_lines = count_transcript_lines(staged_source_path)
-                current_lines = count_transcript_lines(transcript_path)
-            except OSError as exc:
-                if _fail_hard_enabled():
-                    _release_session_processing_lock(lock_owner_key, lock_fd)
-                    raise
-                logger.warning(
-                    "[%s] session %s: failed comparing rolling staged source transcript %s to %s: %s",
-                    label,
-                    session_id,
-                    staged_source_path,
-                    transcript_path,
-                    exc,
-                )
-            else:
-                if staged_source_lines > current_lines or _is_daemon_owned_transcript_snapshot_path(str(transcript_path)):
-                    logger.info(
-                        "[%s] session %s: staged rolling payload source has live residual "
-                        "(%s lines=%d > %s lines=%d); draining source transcript during lifecycle flush",
+            staged_source_path = str(
+                staged_state.get("source_transcript_path")
+                or staged_state.get("buffer_transcript_path")
+                or ""
+            ).strip()
+            if (
+                staged_source_path
+                and os.path.isfile(staged_source_path)
+                and staged_source_path != str(transcript_path or "")
+            ):
+                try:
+                    staged_source_lines = count_transcript_lines(staged_source_path)
+                    current_lines = count_transcript_lines(transcript_path)
+                except OSError as exc:
+                    if _fail_hard_enabled():
+                        _release_current_processing_lock()
+                        raise
+                    logger.warning(
+                        "[%s] session %s: failed comparing rolling staged source transcript %s to %s: %s",
                         label,
                         session_id,
                         staged_source_path,
-                        staged_source_lines,
                         transcript_path,
-                        current_lines,
+                        exc,
                     )
-                    transcript_path = staged_source_path
+                else:
+                    if staged_source_lines > current_lines or _is_daemon_owned_transcript_snapshot_path(str(transcript_path)):
+                        logger.info(
+                            "[%s] session %s: staged rolling payload source has live residual "
+                            "(%s lines=%d > %s lines=%d); draining source transcript during lifecycle flush",
+                            label,
+                            session_id,
+                            staged_source_path,
+                            staged_source_lines,
+                            transcript_path,
+                            current_lines,
+                        )
+                        transcript_path = staged_source_path
 
-    total_lines = count_transcript_lines(transcript_path)
-    cursor_clamped_to_eof = False
-    if cursor_offset > total_lines:
-        same_transcript_source = (
-            bool(cursor_transcript)
-            and bool(transcript_path)
-            and _canonicalize_transcript_source_path(cursor_transcript)
-            == _canonicalize_transcript_source_path(transcript_path)
-        )
-        prior_size_bytes = int(cursor_data.get("transcript_size_bytes", 0) or 0)
-        current_size_bytes = _transcript_size_bytes(transcript_path)
-        same_source_rebased_smaller = bool(
-            same_transcript_source
-            and prior_size_bytes
-            and current_size_bytes
-            and current_size_bytes < prior_size_bytes
-        )
-        if same_source_rebased_smaller:
-            logger.warning(
-                "[%s] session %s: cursor offset %d > file length %d on same path, "
-                "but transcript shrank from %d to %d bytes; resetting cursor for rebased content",
-                label,
-                session_id,
-                cursor_offset,
-                total_lines,
-                prior_size_bytes,
-                current_size_bytes,
+        total_lines = count_transcript_lines(transcript_path)
+        cursor_clamped_to_eof = False
+        if cursor_offset > total_lines:
+            same_transcript_source = (
+                bool(cursor_transcript)
+                and bool(transcript_path)
+                and _canonicalize_transcript_source_path(cursor_transcript)
+                == _canonicalize_transcript_source_path(transcript_path)
             )
-            cursor_offset = 0
-            reset_staged_state_for_full_reextract = True
-        elif same_transcript_source and signal_type != "reset":
-            logger.warning(
-                "[%s] session %s: cursor offset %d > file length %d on unchanged transcript source, "
-                "clamping cursor to EOF to avoid replay",
-                label, session_id, cursor_offset, total_lines,
+            prior_size_bytes = int(cursor_data.get("transcript_size_bytes", 0) or 0)
+            current_size_bytes = _transcript_size_bytes(transcript_path)
+            same_source_rebased_smaller = bool(
+                same_transcript_source
+                and prior_size_bytes
+                and current_size_bytes
+                and current_size_bytes < prior_size_bytes
             )
-            cursor_offset = total_lines
-            cursor_clamped_to_eof = True
-        else:
-            logger.warning(
-                "[%s] session %s: cursor offset %d > file length %d (file truncated?), resetting cursor",
-                label, session_id, cursor_offset, total_lines,
-            )
-            cursor_offset = 0
-            reset_staged_state_for_full_reextract = True
+            if same_source_rebased_smaller:
+                logger.warning(
+                    "[%s] session %s: cursor offset %d > file length %d on same path, "
+                    "but transcript shrank from %d to %d bytes; resetting cursor for rebased content",
+                    label,
+                    session_id,
+                    cursor_offset,
+                    total_lines,
+                    prior_size_bytes,
+                    current_size_bytes,
+                )
+                cursor_offset = 0
+                reset_staged_state_for_full_reextract = True
+            elif same_transcript_source and signal_type != "reset":
+                logger.warning(
+                    "[%s] session %s: cursor offset %d > file length %d on unchanged transcript source, "
+                    "clamping cursor to EOF to avoid replay",
+                    label, session_id, cursor_offset, total_lines,
+                )
+                cursor_offset = total_lines
+                cursor_clamped_to_eof = True
+            else:
+                logger.warning(
+                    "[%s] session %s: cursor offset %d > file length %d (file truncated?), resetting cursor",
+                    label, session_id, cursor_offset, total_lines,
+                )
+                cursor_offset = 0
+                reset_staged_state_for_full_reextract = True
 
-    cursor_last_flushed_line_offset = max(
-        0,
-        min(int(cursor_data.get("last_flushed_line_offset", 0) or 0), int(cursor_offset or 0)),
-    )
-    transcript_read_guard_start = int(cursor_offset or 0)
-    transcript_read_guard_count = max(0, int(total_lines or 0) - transcript_read_guard_start)
-    transcript_read_guard_digest = _transcript_line_window_digest(
-        transcript_path,
-        transcript_read_guard_start,
-        transcript_read_guard_count,
-    )
-
-    chunk_budget = _get_capture_chunk_tokens()
-    chunk_line_budget = _get_capture_chunk_max_lines()
-    if (
-        reset_staged_state_for_full_reextract
-        and not staged_payload_sweep_signal
-        and not preserve_active_rolling_state_after_flush
-        and _rolling_state_has_pending_content(staged_state)
-    ):
-        logger.info(
-            "[%s] session %s: cursor reset for full extraction; clearing stale rolling buffer state",
-            label,
-            session_id,
+        cursor_last_flushed_line_offset = max(
+            0,
+            min(int(cursor_data.get("last_flushed_line_offset", 0) or 0), int(cursor_offset or 0)),
         )
-        clear_rolling_state(session_id)
-        staged_state = read_rolling_state(session_id)
-    semantic_buffer_metrics = {
-        "raw_lines_added": 0,
-        "semantic_chars_added": 0,
-        "semantic_tokens_added": 0,
-        "buffered_line_offset": int(staged_state.get("buffered_line_offset", cursor_offset) or 0),
-    }
-    refreshed_semantic_buffer_for_nonrolling = False
-    buffered_line_offset = max(
-        int(staged_state.get("buffered_line_offset", cursor_offset) or 0),
-        int(cursor_offset or 0),
-    )
-    recover_unflushed_scanned_window = bool(
-        not rolling_mode
-        and not staged_payload_sweep_signal
-        and signal_type in ("compaction", "reset", "session_end", "timeout")
-        and int(cursor_offset or 0) > int(cursor_last_flushed_line_offset or 0)
-        and not _rolling_state_has_pending_content(staged_state)
-    )
-    if recover_unflushed_scanned_window:
-        buffered_line_offset = min(buffered_line_offset, cursor_last_flushed_line_offset)
-        logger.info(
-            "[%s] session %s: lifecycle signal found unflushed rolling scan window "
-            "(last_flushed=%d cursor=%d); draining from last flushed line",
-            label,
-            session_id,
-            cursor_last_flushed_line_offset,
-            cursor_offset,
-        )
-    staged_semantic_ready = rolling_mode and _semantic_buffer_has_content(staged_state)
-    staged_rolling_batches = int(staged_state.get("rolling_batches", 0) or 0)
-    continued_raw_tail_pending = bool(signal_meta.get("flush_staged_payload_only"))
-    drain_unstaged_semantic_buffer_on_sweep = bool(
-        staged_payload_sweep_signal
-        and signal_type == "session_end"
-        and _semantic_buffer_has_content(staged_state)
-        and (staged_rolling_batches <= 0 or not continued_raw_tail_pending)
-    )
-    if drain_unstaged_semantic_buffer_on_sweep:
-        if staged_rolling_batches > 0:
-            logger.info(
-                "[%s] session %s: rolling-stage flush has residual semantic buffer and no continued raw tail; "
-                "draining before publish",
-                label,
-                session_id,
-            )
-        else:
-            logger.info(
-                "[%s] session %s: rolling-stage flush has no completed rolling batch; "
-                "draining pending semantic buffer during lifecycle flush",
-                label,
-                session_id,
-            )
-    flush_staged_payload_only = bool(
-        staged_payload_sweep_signal
-        and signal_meta.get("flush_staged_payload_only")
-        and staged_state_has_payload(staged_state)
-        and not drain_unstaged_semantic_buffer_on_sweep
-    )
-    if total_lines > buffered_line_offset and not staged_semantic_ready and not flush_staged_payload_only:
-        buffer_kwargs: Dict[str, Any] = {"adapter": adapter}
-        if rolling_mode:
-            buffer_kwargs["max_tokens"] = chunk_budget
-            buffer_kwargs["max_lines"] = chunk_line_budget
-        buffer_kwargs["session_id"] = session_id
-        buffer_kwargs["label"] = label
-        staged_state, semantic_buffer_metrics = _buffer_transcript_tail(
+        transcript_read_guard_start = int(cursor_offset or 0)
+        transcript_read_guard_count = max(0, int(total_lines or 0) - transcript_read_guard_start)
+        transcript_read_guard_digest = _transcript_line_window_digest(
             transcript_path,
-            buffered_line_offset,
-            staged_state,
-            **buffer_kwargs,
+            transcript_read_guard_start,
+            transcript_read_guard_count,
         )
-        if int(semantic_buffer_metrics.get("parse_failed", 0) or 0):
+
+        chunk_budget = _get_capture_chunk_tokens()
+        chunk_line_budget = _get_capture_chunk_max_lines()
+        if (
+            reset_staged_state_for_full_reextract
+            and not staged_payload_sweep_signal
+            and not preserve_active_rolling_state_after_flush
+            and _rolling_state_has_pending_content(staged_state)
+        ):
+            logger.info(
+                "[%s] session %s: cursor reset for full extraction; clearing stale rolling buffer state",
+                label,
+                session_id,
+            )
+            clear_rolling_state(session_id)
+            staged_state = read_rolling_state(session_id)
+        semantic_buffer_metrics = {
+            "raw_lines_added": 0,
+            "semantic_chars_added": 0,
+            "semantic_tokens_added": 0,
+            "buffered_line_offset": int(staged_state.get("buffered_line_offset", cursor_offset) or 0),
+        }
+        refreshed_semantic_buffer_for_nonrolling = False
+        buffered_line_offset = max(
+            int(staged_state.get("buffered_line_offset", cursor_offset) or 0),
+            int(cursor_offset or 0),
+        )
+        recover_unflushed_scanned_window = bool(
+            not rolling_mode
+            and not staged_payload_sweep_signal
+            and signal_type in ("compaction", "reset", "session_end", "timeout")
+            and int(cursor_offset or 0) > int(cursor_last_flushed_line_offset or 0)
+            and not _rolling_state_has_pending_content(staged_state)
+        )
+        if recover_unflushed_scanned_window:
+            buffered_line_offset = min(buffered_line_offset, cursor_last_flushed_line_offset)
+            logger.info(
+                "[%s] session %s: lifecycle signal found unflushed rolling scan window "
+                "(last_flushed=%d cursor=%d); draining from last flushed line",
+                label,
+                session_id,
+                cursor_last_flushed_line_offset,
+                cursor_offset,
+            )
+        staged_semantic_ready = rolling_mode and _semantic_buffer_has_content(staged_state)
+        staged_rolling_batches = int(staged_state.get("rolling_batches", 0) or 0)
+        continued_raw_tail_pending = bool(signal_meta.get("flush_staged_payload_only"))
+        drain_unstaged_semantic_buffer_on_sweep = bool(
+            staged_payload_sweep_signal
+            and signal_type == "session_end"
+            and _semantic_buffer_has_content(staged_state)
+            and (staged_rolling_batches <= 0 or not continued_raw_tail_pending)
+        )
+        if drain_unstaged_semantic_buffer_on_sweep:
+            if staged_rolling_batches > 0:
+                logger.info(
+                    "[%s] session %s: rolling-stage flush has residual semantic buffer and no continued raw tail; "
+                    "draining before publish",
+                    label,
+                    session_id,
+                )
+            else:
+                logger.info(
+                    "[%s] session %s: rolling-stage flush has no completed rolling batch; "
+                    "draining pending semantic buffer during lifecycle flush",
+                    label,
+                    session_id,
+                )
+        flush_staged_payload_only = bool(
+            staged_payload_sweep_signal
+            and signal_meta.get("flush_staged_payload_only")
+            and staged_state_has_payload(staged_state)
+            and not drain_unstaged_semantic_buffer_on_sweep
+        )
+        if total_lines > buffered_line_offset and not staged_semantic_ready and not flush_staged_payload_only:
+            buffer_kwargs: Dict[str, Any] = {"adapter": adapter}
+            if rolling_mode:
+                buffer_kwargs["max_tokens"] = chunk_budget
+                buffer_kwargs["max_lines"] = chunk_line_budget
+            buffer_kwargs["session_id"] = session_id
+            buffer_kwargs["label"] = label
+            staged_state, semantic_buffer_metrics = _buffer_transcript_tail(
+                transcript_path,
+                buffered_line_offset,
+                staged_state,
+                **buffer_kwargs,
+            )
+            if int(semantic_buffer_metrics.get("parse_failed", 0) or 0):
+                write_rolling_state(session_id, staged_state)
+                mark_signal_processed(signal_data)
+                _release_current_processing_lock()
+                return
             write_rolling_state(session_id, staged_state)
-            mark_signal_processed(signal_data)
-            _release_session_processing_lock(lock_owner_key, lock_fd)
-            return
-        write_rolling_state(session_id, staged_state)
-        if rolling_mode:
+            if rolling_mode:
+                buffered_line_offset = int(
+                    staged_state.get("buffered_line_offset", buffered_line_offset) or buffered_line_offset
+                )
+            else:
+                refreshed_semantic_buffer_for_nonrolling = True
+        elif staged_semantic_ready:
             buffered_line_offset = int(
                 staged_state.get("buffered_line_offset", buffered_line_offset) or buffered_line_offset
             )
-        else:
-            refreshed_semantic_buffer_for_nonrolling = True
-    elif staged_semantic_ready:
-        buffered_line_offset = int(
-            staged_state.get("buffered_line_offset", buffered_line_offset) or buffered_line_offset
+        read_start_offset = cursor_offset if rolling_mode else buffered_line_offset
+        pending_subagent_harvest = False
+        new_lines = [] if flush_staged_payload_only else (
+            read_transcript_token_window(
+                transcript_path,
+                cursor_offset,
+                chunk_budget,
+                chunk_line_budget,
+                adapter=adapter,
+            )
+            if rolling_mode
+            else read_transcript_slice(transcript_path, read_start_offset)
         )
-    read_start_offset = cursor_offset if rolling_mode else buffered_line_offset
-    pending_subagent_harvest = False
-    new_lines = [] if flush_staged_payload_only else (
-        read_transcript_token_window(
-            transcript_path,
-            cursor_offset,
-            chunk_budget,
-            chunk_line_budget,
-            adapter=adapter,
-        )
-        if rolling_mode
-        else read_transcript_slice(transcript_path, read_start_offset)
-    )
 
-    if not new_lines:
-        logger.info("[%s] session %s: no new content past cursor (offset=%d)", label, session_id, cursor_offset)
-        pending_subagent_harvest = not rolling_mode and _session_has_harvestable_subagents(session_id, adapter=adapter)
-        if rolling_mode and _semantic_buffer_has_content(staged_state):
-            logger.info(
-                "[%s] session %s: no raw tail past cursor but semantic rolling buffer is pending; "
-                "continuing with buffered content",
-                label,
-                session_id,
-            )
-            new_lines = []
-        elif rolling_mode and staged_state_has_payload(staged_state):
-            logger.info(
-                "[%s] session %s: no raw tail past cursor but staged rolling payload is pending; "
-                "queueing staged payload flush",
-                label,
-                session_id,
-            )
-            write_signal(
-                signal_type="session_end",
-                session_id=session_id,
-                transcript_path=transcript_path,
-                meta={
-                    "reason": "rolling_stage_flush",
-                    "source_signal": "rolling",
-                    "staged_payload_sweep": True,
-                    "buffered_line_offset": int(
-                        staged_state.get("buffered_line_offset", cursor_offset) or cursor_offset
-                    ),
-                },
-            )
-            _finalize_no_payload_signal(
-                session_id=session_id,
-                transcript_path=transcript_path,
-                signal_data=signal_data,
-                lock_owner_key=lock_owner_key,
-                lock_fd=lock_fd,
-                cursor_key=lock_owner_key,
-            )
-            return
-        elif not rolling_mode and (
-            staged_state_has_payload(staged_state)
-            or _semantic_buffer_has_content(staged_state)
-            or pending_subagent_harvest
-        ):
-            new_lines = []
-        else:
-            if signal_type == "session_end":
-                try:
-                    session_logs_transcript_path = _session_logs_ingest_transcript_path_for_signal(
-                        str(transcript_path),
-                        session_id=session_id,
-                        adapter=adapter,
-                        signal_meta=signal_meta,
-                        cursor_data=cursor_data,
-                        staged_state=staged_state,
-                    )
-                    if session_logs_transcript_path != str(transcript_path):
-                        logger.info(
-                            "[%s] session %s: session_logs ingest using current source transcript path: %s "
-                            "(signal path=%s)",
-                            label,
-                            session_id,
-                            session_logs_transcript_path,
-                            transcript_path,
-                        )
-                    if not session_logs_transcript_path or not os.path.isfile(session_logs_transcript_path):
-                        logger.info(
-                            "[%s] session %s: session_logs ingest skipped: "
-                            "resolved transcript path is unavailable: %s",
-                            label,
-                            session_id,
-                            session_logs_transcript_path,
-                        )
-                    else:
-                        sl_result = _request_session_logs_ingest(
+        if not new_lines:
+            logger.info("[%s] session %s: no new content past cursor (offset=%d)", label, session_id, cursor_offset)
+            pending_subagent_harvest = not rolling_mode and _session_has_harvestable_subagents(session_id, adapter=adapter)
+            if rolling_mode and _semantic_buffer_has_content(staged_state):
+                logger.info(
+                    "[%s] session %s: no raw tail past cursor but semantic rolling buffer is pending; "
+                    "continuing with buffered content",
+                    label,
+                    session_id,
+                )
+                new_lines = []
+            elif rolling_mode and staged_state_has_payload(staged_state):
+                logger.info(
+                    "[%s] session %s: no raw tail past cursor but staged rolling payload is pending; "
+                    "queueing staged payload flush",
+                    label,
+                    session_id,
+                )
+                write_signal(
+                    signal_type="session_end",
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                    meta={
+                        "reason": "rolling_stage_flush",
+                        "source_signal": "rolling",
+                        "staged_payload_sweep": True,
+                        "buffered_line_offset": int(
+                            staged_state.get("buffered_line_offset", cursor_offset) or cursor_offset
+                        ),
+                    },
+                )
+                _finalize_no_payload_signal(
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                    signal_data=signal_data,
+                    lock_owner_key=lock_owner_key,
+                    lock_fd=lock_fd,
+                    cursor_key=lock_owner_key,
+                )
+                return
+            elif not rolling_mode and (
+                staged_state_has_payload(staged_state)
+                or _semantic_buffer_has_content(staged_state)
+                or pending_subagent_harvest
+            ):
+                new_lines = []
+            else:
+                if signal_type == "session_end":
+                    try:
+                        session_logs_transcript_path = _session_logs_ingest_transcript_path_for_signal(
+                            str(transcript_path),
                             session_id=session_id,
-                            owner_id=_get_owner_id(),
-                            label=label,
-                            transcript_path=session_logs_transcript_path,
-                            message_count=0,
-                            topic_hint="",
+                            adapter=adapter,
+                            signal_meta=signal_meta,
+                            cursor_data=cursor_data,
+                            staged_state=staged_state,
                         )
-                        sl_status = sl_result.get("status", "unknown") if isinstance(sl_result, dict) else str(sl_result)
-                        sl_reason = sl_result.get("reason", "") if isinstance(sl_result, dict) else ""
-                        logger.info("[%s] session %s: session_logs ingest (no-new-content path): %s%s",
-                                    label, session_id, sl_status,
-                                    f" ({sl_reason})" if sl_reason else "")
-                except Exception as e:
-                    if _fail_hard_enabled():
-                        logger.error(
-                            "[%s] session %s: session_logs ingest failed on no-new-content path; "
-                            "removing stale signal before failHard raise",
-                            label,
-                            session_id,
-                        )
-                        mark_signal_processed(signal_data)
-                        _release_session_processing_lock(lock_owner_key, lock_fd)
-                        raise RuntimeError("session_logs ingest failed (no-new-content path)") from e
-                    logger.warning("[%s] session %s: session_logs ingest failed (no-new-content path): %s",
-                                   label, session_id, e)
-            _finalize_no_payload_signal(
-                session_id=session_id,
-                transcript_path=transcript_path,
-                signal_data=signal_data,
-                lock_owner_key=lock_owner_key,
-                lock_fd=lock_fd,
-                cursor_key=lock_owner_key,
-                next_cursor_offset=cursor_offset if cursor_clamped_to_eof else None,
-                emit_noop_metric=lambda: _emit_noop_flush_metric("no_new_content"),
-            )
-            return
+                        if session_logs_transcript_path != str(transcript_path):
+                            logger.info(
+                                "[%s] session %s: session_logs ingest using current source transcript path: %s "
+                                "(signal path=%s)",
+                                label,
+                                session_id,
+                                session_logs_transcript_path,
+                                transcript_path,
+                            )
+                        if not session_logs_transcript_path or not os.path.isfile(session_logs_transcript_path):
+                            logger.info(
+                                "[%s] session %s: session_logs ingest skipped: "
+                                "resolved transcript path is unavailable: %s",
+                                label,
+                                session_id,
+                                session_logs_transcript_path,
+                            )
+                        else:
+                            sl_result = _request_session_logs_ingest(
+                                session_id=session_id,
+                                owner_id=_get_owner_id(),
+                                label=label,
+                                transcript_path=session_logs_transcript_path,
+                                message_count=0,
+                                topic_hint="",
+                            )
+                            sl_status = sl_result.get("status", "unknown") if isinstance(sl_result, dict) else str(sl_result)
+                            sl_reason = sl_result.get("reason", "") if isinstance(sl_result, dict) else ""
+                            logger.info("[%s] session %s: session_logs ingest (no-new-content path): %s%s",
+                                        label, session_id, sl_status,
+                                        f" ({sl_reason})" if sl_reason else "")
+                    except Exception as e:
+                        if _fail_hard_enabled():
+                            logger.error(
+                                "[%s] session %s: session_logs ingest failed on no-new-content path; "
+                                "removing stale signal before failHard raise",
+                                label,
+                                session_id,
+                            )
+                            mark_signal_processed(signal_data)
+                            _release_current_processing_lock()
+                            raise RuntimeError("session_logs ingest failed (no-new-content path)") from e
+                        logger.warning("[%s] session %s: session_logs ingest failed (no-new-content path): %s",
+                                       label, session_id, e)
+                _finalize_no_payload_signal(
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                    signal_data=signal_data,
+                    lock_owner_key=lock_owner_key,
+                    lock_fd=lock_fd,
+                    cursor_key=lock_owner_key,
+                    next_cursor_offset=cursor_offset if cursor_clamped_to_eof else None,
+                    emit_noop_metric=lambda: _emit_noop_flush_metric("no_new_content"),
+                )
+                return
 
-    capped_lines = len(new_lines) >= MAX_TRANSCRIPT_LINES
-    if capped_lines and signal_type in ("compaction", "reset"):
-        remaining_after_cap = total_lines - (cursor_offset + len(new_lines))
-        if remaining_after_cap > 0:
-            logger.warning(
-                "[%s] session %s: transcript cap hit on %s signal; %d lines remain above cap; "
-                "writing follow-up session_end signal to prevent data loss on transcript rotation",
-                label, session_id, signal_type, remaining_after_cap,
-            )
-            write_signal(
-                signal_type="session_end",
-                session_id=session_id,
-                transcript_path=transcript_path,
-                meta={"reason": "cap_followup", "cap_offset": cursor_offset + len(new_lines)},
-            )
+        capped_lines = len(new_lines) >= MAX_TRANSCRIPT_LINES
+        if capped_lines and signal_type in ("compaction", "reset"):
+            remaining_after_cap = total_lines - (cursor_offset + len(new_lines))
+            if remaining_after_cap > 0:
+                logger.warning(
+                    "[%s] session %s: transcript cap hit on %s signal; %d lines remain above cap; "
+                    "writing follow-up session_end signal to prevent data loss on transcript rotation",
+                    label, session_id, signal_type, remaining_after_cap,
+                )
+                write_signal(
+                    signal_type="session_end",
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                    meta={"reason": "cap_followup", "cap_offset": cursor_offset + len(new_lines)},
+                )
+
+    except BaseException:
+        _release_current_processing_lock()
+        raise
 
     tmp_path = None
     operation_phase = "prepare"
@@ -8335,7 +8373,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             except Exception as e:
                 logger.warning("[%s] session %s: mark_harvested error: %s", label, session_id, e)
         mark_signal_processed(signal_data)
-        _release_session_processing_lock(lock_owner_key, lock_fd)
+        _release_current_processing_lock()
         lock_fd = None
 
         try:
@@ -8568,7 +8606,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         logger.error("[%s] session %s: extraction failed (signal preserved for retry): %s",
                      label, session_id, e, exc_info=True)
     finally:
-        _release_session_processing_lock(lock_owner_key, lock_fd)
+        _release_current_processing_lock()
         if tmp_path:
             try:
                 os.unlink(tmp_path)

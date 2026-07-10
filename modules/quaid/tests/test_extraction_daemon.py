@@ -228,6 +228,27 @@ def test_atomic_write_uses_unique_temp_paths_within_process(monkeypatch, tmp_pat
     assert target.read_text(encoding="utf-8") == "second"
 
 
+def test_atomic_write_fsyncs_before_replace(monkeypatch, tmp_path):
+    target = tmp_path / "signal.json"
+    events = []
+    real_replace = extraction_daemon.os.replace
+
+    def _record_fsync(_fd):
+        events.append("fsync")
+
+    def _record_replace(src, dst):
+        events.append("replace")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(extraction_daemon.os, "fsync", _record_fsync)
+    monkeypatch.setattr(extraction_daemon.os, "replace", _record_replace)
+
+    extraction_daemon._atomic_write(target, '{"ok": true}')
+
+    assert target.read_text(encoding="utf-8") == '{"ok": true}'
+    assert events == ["fsync", "replace", "fsync"]
+
+
 @pytest.mark.parametrize(
     ("signal_type", "event_name"),
     [
@@ -10580,6 +10601,33 @@ class TestSignalRoundTrip:
         )
 
         assert marked == []
+
+    def test_process_signal_releases_lock_when_pre_extraction_setup_fails(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text('{"role":"user","content":"hi"}\n', encoding="utf-8")
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_load_runtime_adapter_for_signal",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("adapter load failed")),
+        )
+
+        with pytest.raises(RuntimeError, match="adapter load failed"):
+            extraction_daemon.process_signal(
+                {
+                    "type": "session_end",
+                    "session_id": "sess-pre-setup-fail",
+                    "transcript_path": str(transcript_path),
+                    "timestamp": "2026-03-20T00:00:00Z",
+                }
+            )
+
+        lock_dir = tmp_path / "instances" / "test-inst" / "data" / "session-processing"
+        lock_files = list(lock_dir.glob("*.lock"))
+        assert len(lock_files) == 1
+        assert extraction_daemon._processing_lock_active(lock_files[0].stem) is False
 
     def test_process_signal_serializes_shared_source_across_session_ids(self, monkeypatch, tmp_path):
         from ingest import extract as extract_mod
