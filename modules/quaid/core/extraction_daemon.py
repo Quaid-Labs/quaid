@@ -776,8 +776,11 @@ def _is_daemon_process(pid: int) -> bool:
             capture_output=True, text=True, timeout=2,
         )
         return "extraction_daemon" in result.stdout
-    except Exception:
+    except Exception as exc:
         # If we can't verify, assume it's valid to avoid false negatives
+        logger.warning("failed to verify daemon process %s; assuming valid: %s", pid, exc)
+        if _fail_hard_enabled():
+            raise
         return True
 
 

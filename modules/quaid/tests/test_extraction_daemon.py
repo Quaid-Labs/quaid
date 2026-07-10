@@ -2979,6 +2979,58 @@ def test_read_pid_removes_unchanged_malformed_pidfile(monkeypatch, tmp_path):
     assert not pid_path.exists()
 
 
+def test_is_daemon_process_logs_and_assumes_valid_when_verification_fails_fail_open(
+    monkeypatch,
+    caplog,
+):
+    import subprocess
+
+    original_exists = pathlib.Path.exists
+
+    def fake_exists(path):
+        if str(path).startswith("/proc/"):
+            return False
+        return original_exists(path)
+
+    monkeypatch.setattr(pathlib.Path, "exists", fake_exists)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("ps unavailable")),
+    )
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="quaid.daemon"):
+        assert extraction_daemon._is_daemon_process(4242) is True
+
+    assert "failed to verify daemon process 4242" in caplog.text
+    assert "ps unavailable" in caplog.text
+
+
+def test_is_daemon_process_raises_when_verification_fails_fail_hard(
+    monkeypatch,
+):
+    import subprocess
+
+    original_exists = pathlib.Path.exists
+
+    def fake_exists(path):
+        if str(path).startswith("/proc/"):
+            return False
+        return original_exists(path)
+
+    monkeypatch.setattr(pathlib.Path, "exists", fake_exists)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("ps unavailable")),
+    )
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="ps unavailable"):
+        extraction_daemon._is_daemon_process(4242)
+
+
 def test_config_reload_watcher_reloads_when_config_mtime_changes(monkeypatch, tmp_path):
     cfg_path = tmp_path / "instances" / "pytest-runner" / "config.json"
     cfg_path.parent.mkdir(parents=True)
