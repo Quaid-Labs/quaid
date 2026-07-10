@@ -1677,7 +1677,7 @@ class DocsRegistry:
             title=f"Project: {label}",
             registered_by="create-project",
         )
-        _generate_project_md(self, name, self._get_config())
+        _generate_project_md(self, name, self._get_config(), quiet=quiet)
 
         if not quiet:
             print(f"Created project '{name}' at {home_abs}")
@@ -2620,7 +2620,7 @@ def sync_existing_docs(registry: DocsRegistry) -> Dict[str, int]:
     return {"registered": registered, "from_chunks": from_chunks}
 
 
-def _generate_project_md(registry: DocsRegistry, project_name: str, cfg) -> None:
+def _generate_project_md(registry: DocsRegistry, project_name: str, cfg, *, quiet: bool = False) -> None:
     """Generate PROJECT.md from the current registry-backed project state."""
     defn = cfg.projects.definitions.get(project_name)
     if not defn:
@@ -2649,7 +2649,8 @@ def _generate_project_md(registry: DocsRegistry, project_name: str, cfg) -> None
         registered_docs_body=sections["registered_docs"],
     )
     _atomic_write_text(project_md_path, content)
-    print(f"  Generated PROJECT.md at {project_md_path}")
+    if not quiet:
+        print(f"  Generated PROJECT.md at {project_md_path}")
 
 
 # ============================================================================
