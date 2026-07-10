@@ -172,10 +172,6 @@ class QuaidAdapter(abc.ABC):
         re.compile(r"^\s*---\s*$", flags=re.MULTILINE),
         re.compile(r"^\s*Queued\s*#\d+(?:\s*\([^)]+\))?\s*$", flags=re.IGNORECASE | re.MULTILINE),
     )
-    _QUAID_META_PREFIX_RE = re.compile(
-        r"^\s*(?:•\s*)?(?:\*{1,2}\s*)?\[Quaid(?:[^\]]*)\](?:\*{1,2})?\s*(?:[:—-]\s*)?",
-        flags=re.IGNORECASE,
-    )
     _GATEWAY_TIMESTAMP_PREFIX_RE = re.compile(
         r"^\[[^\W\d_]{1,16}\s+"
         r"\d{4}-\d{2}-\d{2}\s+"
@@ -474,8 +470,6 @@ class QuaidAdapter(abc.ABC):
         """Adapter-specific transcript noise filtering."""
         value = str(text or "").strip()
         if not value:
-            return True
-        if self._QUAID_META_PREFIX_RE.match(value):
             return True
         return self.filter_system_messages(text)
 

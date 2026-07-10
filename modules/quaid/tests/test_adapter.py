@@ -373,6 +373,21 @@ class TestStandaloneAdapter:
 
         assert "Assistant: Quaid notices: scheduled review found 3 facts." in transcript
 
+    def test_build_transcript_preserves_user_visible_quaid_bracket_notice(self, standalone):
+        transcript = standalone.build_transcript([
+            {
+                "role": "assistant",
+                "content": "[Quaid Notice]: Janitor found a stale provider warning for Project Heron.",
+            },
+            {
+                "role": "user",
+                "content": "Capture the Heron warning in the incident notes.",
+            },
+        ])
+
+        assert "Assistant: [Quaid Notice]: Janitor found a stale provider warning for Project Heron." in transcript
+        assert "User: Capture the Heron warning in the incident notes." in transcript
+
     def test_gateway_config_returns_none(self, standalone):
         assert standalone.get_gateway_config_path() is None
 

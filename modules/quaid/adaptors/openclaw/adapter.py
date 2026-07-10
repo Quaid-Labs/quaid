@@ -935,6 +935,10 @@ class OpenClawAdapter(QuaidAdapter):
         flags=re.IGNORECASE,
     )
     _OPENCLAW_QUEUED_BUSY_RE = re.compile(r"\[Queued messages while agent was busy\]", flags=re.IGNORECASE)
+    _QUAID_COMPACTION_SUMMARY_RE = re.compile(
+        r"^\s*(?:\*{1,2}\s*)?\[Quaid\](?:\*{1,2})?\s+.*?\bCompaction extraction summary\b",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
 
     def sanitize_transcript_text(self, text: str) -> str:
         value = super().sanitize_transcript_text(text)
@@ -955,6 +959,8 @@ class OpenClawAdapter(QuaidAdapter):
         return value.strip()
 
     def filter_system_messages(self, text: str) -> bool:
+        if self._QUAID_COMPACTION_SUMMARY_RE.match(text):
+            return True
         if text.startswith("GatewayRestart:") or text.startswith("System:"):
             return True
         if '"kind": "restart"' in text:
