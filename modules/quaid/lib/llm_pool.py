@@ -27,6 +27,8 @@ _DEEP_POOL_SIZE = 0
 _POOL_RESIZE_WARNED = False
 _DEFAULT_PROCESS_LOCK_SLOTS = 4
 _DEFAULT_FAST_RESERVED_SLOTS = 1
+_DEFAULT_PROCESS_LOCK_TIMEOUT_SECONDS = 300.0
+_DEFAULT_PROCESS_LOCK_WARN_SECONDS = 10.0
 
 
 def _fail_hard_enabled() -> bool:
@@ -122,6 +124,36 @@ def _process_lock_enabled() -> bool:
     return True
 
 
+def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
+    raw = str(os.environ.get(name, "") or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except Exception as exc:
+        logger.warning("Invalid %s=%r; using default %s: %s", name, raw, default, exc)
+        if _fail_hard_enabled():
+            raise RuntimeError(f"{name} config invalid") from exc
+        return default
+    return max(minimum, value)
+
+
+def _default_process_lock_timeout_seconds() -> float:
+    return _env_float(
+        "QUAID_LLM_PROCESS_LOCK_TIMEOUT_SECONDS",
+        _DEFAULT_PROCESS_LOCK_TIMEOUT_SECONDS,
+        minimum=1.0,
+    )
+
+
+def _process_lock_warn_seconds() -> float:
+    return _env_float(
+        "QUAID_LLM_PROCESS_LOCK_WARN_SECONDS",
+        _DEFAULT_PROCESS_LOCK_WARN_SECONDS,
+        minimum=1.0,
+    )
+
+
 def _process_lock_slot_count() -> int:
     raw = str(os.environ.get("QUAID_LLM_PROCESS_LOCK_SLOTS", "") or "").strip()
     if not raw:
@@ -180,7 +212,15 @@ def _acquire_process_lock(timeout_seconds: Optional[float], pool_kind: str = "fa
         return
 
     lock_paths[0].parent.mkdir(parents=True, exist_ok=True)
-    deadline = None if timeout_seconds is None else time.monotonic() + max(0.0, float(timeout_seconds))
+    effective_timeout = (
+        _default_process_lock_timeout_seconds()
+        if timeout_seconds is None
+        else max(0.0, float(timeout_seconds))
+    )
+    deadline = time.monotonic() + effective_timeout
+    warn_interval = _process_lock_warn_seconds()
+    next_warn_at = time.monotonic() + warn_interval
+    warned = False
     acquired_fd = None
     try:
         while acquired_fd is None:
@@ -198,13 +238,29 @@ def _acquire_process_lock(timeout_seconds: Optional[float], pool_kind: str = "fa
                     last_blocked_error = exc
             if acquired_fd is not None:
                 break
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("Timed out waiting for cross-process LLM worker slot") from last_blocked_error
-                time.sleep(min(0.05, remaining))
-            else:
-                time.sleep(0.05)
+            now = time.monotonic()
+            remaining = deadline - now
+            if remaining <= 0:
+                raise TimeoutError("Timed out waiting for cross-process LLM worker slot") from last_blocked_error
+            if now >= next_warn_at:
+                warned = True
+                logger.warning(
+                    "Still waiting for cross-process LLM %s worker slot after %.1fs "
+                    "(slots=%d, timeout=%.1fs, lock_dir=%s)",
+                    str(pool_kind or "fast"),
+                    max(0.0, effective_timeout - remaining),
+                    len(lock_paths),
+                    effective_timeout,
+                    lock_paths[0].parent,
+                )
+                next_warn_at = now + warn_interval
+            time.sleep(min(0.05, remaining))
+        if warned:
+            logger.info(
+                "Acquired cross-process LLM %s worker slot after waiting %.1fs",
+                str(pool_kind or "fast"),
+                max(0.0, effective_timeout - (deadline - time.monotonic())),
+            )
         yield
     finally:
         if acquired_fd is not None:

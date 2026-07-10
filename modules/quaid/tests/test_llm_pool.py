@@ -385,6 +385,47 @@ class TestProcessLock:
                     with acquire_llm_slot(pool_kind="deep", timeout_seconds=0.05):
                         pass
 
+    def test_process_lock_without_explicit_timeout_warns_and_uses_default_cap(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        import fcntl
+
+        import lib.llm_pool as m
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_LLM_PROCESS_LOCK_SLOTS", "1")
+        monkeypatch.setattr(m, "_default_process_lock_timeout_seconds", lambda: 0.12)
+        monkeypatch.setattr(m, "_process_lock_warn_seconds", lambda: 0.01)
+        cfg = SimpleNamespace(core=SimpleNamespace(parallel=SimpleNamespace(llm_workers=1)))
+        lock_path = tmp_path / "shared" / "run" / "llm" / "slot-0.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(lock_path, "a") as held_fd:
+            fcntl.flock(held_fd, fcntl.LOCK_EX)
+            try:
+                started = time.monotonic()
+                with patch("config.get_config", return_value=cfg), \
+                     caplog.at_level("WARNING", logger="lib.llm_pool"), \
+                     pytest.raises(TimeoutError, match="cross-process LLM worker slot"):
+                    with m._acquire_process_lock(None):
+                        pass
+                elapsed = time.monotonic() - started
+            finally:
+                fcntl.flock(held_fd, fcntl.LOCK_UN)
+
+        assert elapsed < 1.0
+        assert "Still waiting for cross-process LLM fast worker slot" in caplog.text
+        assert "timeout=0.1s" in caplog.text
+
+    def test_process_lock_default_timeout_invalid_env_raises_when_failhard(self, monkeypatch):
+        import lib.llm_pool as m
+
+        monkeypatch.setenv("QUAID_LLM_PROCESS_LOCK_TIMEOUT_SECONDS", "bad")
+        monkeypatch.setattr(m, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="QUAID_LLM_PROCESS_LOCK_TIMEOUT_SECONDS config invalid"):
+            m._default_process_lock_timeout_seconds()
+
 
 # ---------------------------------------------------------------------------
 # Resize warning
