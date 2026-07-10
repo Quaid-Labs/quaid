@@ -379,6 +379,30 @@ def test_suggest_unlinked_projects_registry_failure_raises_when_failhard(tmp_pat
     assert "Failed reading project registry for unlinked docs suggestions" in caplog.text
 
 
+def test_suggest_unlinked_projects_normalizes_linked_project_names(tmp_path):
+    rag = _make_rag(tmp_path)
+    with sqlite3.connect(rag.db_path) as conn:
+        conn.execute(
+            "INSERT INTO doc_chunks (id, source_file, chunk_index, content, embedding) VALUES (?, ?, ?, ?, ?)",
+            ("mixed:0", "/tmp/docs/MyProject/guide.md", 0, "north pier beacon", b"e"),
+        )
+        conn.commit()
+
+        with patch("lib.project_registry.list_all", return_value={"MyProject": {"canonical_path": "/tmp/docs/MyProject"}}), \
+             patch("datastore.docsdb.rag._lib_has_vec", return_value=False), \
+             patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2]), \
+             patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95), \
+             patch.object(rag, "infer_project_for_source", return_value="MyProject"):
+            suggestions = rag._suggest_unlinked_projects(
+                conn=conn,
+                query="north pier",
+                query_embedding=[0.1, 0.2],
+                linked_projects=["myproject"],
+            )
+
+    assert suggestions == []
+
+
 def test_docs_rag_legacy_migration_failure_raises_under_failhard(tmp_path, monkeypatch, caplog):
     import datastore.docsdb.rag as rag_module
     from datastore.docsdb import db_migration

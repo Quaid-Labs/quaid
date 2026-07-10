@@ -2444,7 +2444,8 @@ class DocsRAG:
                 source_project_cache[source_file] = inferred_project
             if not inferred_project:
                 continue
-            if inferred_project in linked_set:
+            inferred_key = _docs_project_scope_key(inferred_project)
+            if inferred_key in linked_set:
                 continue
 
             if use_vec:
