@@ -148,10 +148,13 @@ def _now() -> datetime:
     raw = os.environ.get("QUAID_NOW", "").strip()
     if raw:
         try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError as exc:
             raise ValueError(f"Invalid QUAID_NOW={raw!r}") from exc
-    return datetime.now()
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _now_iso() -> str:
