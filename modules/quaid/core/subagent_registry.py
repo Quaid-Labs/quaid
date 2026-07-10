@@ -139,6 +139,8 @@ def _write_registry(parent_session_id: str, data: Dict[str, Any]) -> None:
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
+        if _fail_hard_enabled():
+            raise RuntimeError(f"Failed to write subagent registry {p}") from e
 
 
 def _is_placeholder_running_child(child_id: str, entry: Dict[str, Any]) -> bool:

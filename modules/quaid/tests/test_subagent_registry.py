@@ -198,6 +198,50 @@ class TestMarkComplete:
         entry_b = _read_raw(tmp_path, "parent-1")["children"]["child-B"]
         assert entry_b["status"] == "running"
 
+    def test_write_failure_raises_when_fail_hard(self, tmp_path, monkeypatch):
+        import core.subagent_registry as registry
+        from core.subagent_registry import register, mark_complete
+
+        register("parent-1", "child-A")
+        monkeypatch.setattr(registry, "_fail_hard_enabled", lambda: True)
+
+        original_write_text = registry.Path.write_text
+
+        def fail_registry_tmp_write(self, *args, **kwargs):
+            if str(self).endswith("parent-1.tmp"):
+                raise OSError("disk full")
+            return original_write_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(registry.Path, "write_text", fail_registry_tmp_write)
+
+        with pytest.raises(RuntimeError, match="Failed to write subagent registry") as excinfo:
+            mark_complete("parent-1", "child-A", transcript_path="/sessions/child-A.jsonl")
+
+        assert isinstance(excinfo.value.__cause__, OSError)
+
+    def test_write_failure_degrades_when_fail_hard_disabled(self, tmp_path, monkeypatch, caplog):
+        import core.subagent_registry as registry
+        from core.subagent_registry import register, mark_complete
+
+        register("parent-1", "child-A")
+        before = _registry_file(tmp_path, "parent-1").read_text(encoding="utf-8")
+        monkeypatch.setattr(registry, "_fail_hard_enabled", lambda: False)
+
+        original_write_text = registry.Path.write_text
+
+        def fail_registry_tmp_write(self, *args, **kwargs):
+            if str(self).endswith("parent-1.tmp"):
+                raise OSError("disk full")
+            return original_write_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(registry.Path, "write_text", fail_registry_tmp_write)
+
+        with caplog.at_level("ERROR", logger="core.subagent_registry"):
+            mark_complete("parent-1", "child-A", transcript_path="/sessions/child-A.jsonl")
+
+        assert "failed to write" in caplog.text
+        assert _registry_file(tmp_path, "parent-1").read_text(encoding="utf-8") == before
+
 
 # ---------------------------------------------------------------------------
 # get_harvestable()
