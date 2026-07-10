@@ -5870,6 +5870,132 @@ def test_process_signal_flushes_staged_payload_when_preserved_mirror_is_smaller(
     assert cursor["processed_signal_type"] == "session_end"
 
 
+def test_process_signal_flushes_staged_payload_when_cursor_path_deleted_and_preserved_mirror_smaller(
+    monkeypatch,
+    tmp_path,
+):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+    from core import ingest_runtime
+    from core.runtime import notify as notify_mod
+
+    session_id = "8e3d8717-e091-47f7-a257-d0ef2a76e942"
+    cursor_dir = tmp_path / ".openclaw" / "stale-snapshots"
+    live_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+    mirror_dir = tmp_path / "instances" / "openclaw-main" / "logs" / "quaid" / "sessions"
+    cursor_dir.mkdir(parents=True)
+    live_dir.mkdir(parents=True)
+    mirror_dir.mkdir(parents=True)
+    cursor_path = cursor_dir / f"{session_id}.jsonl"
+    live_path = live_dir / f"{session_id}.jsonl"
+    mirror_path = mirror_dir / f"{session_id}.jsonl"
+    live_lines = [
+        f'{{"type":"session","id":"{session_id}"}}',
+        '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Chunk 1 setup."}]}}',
+        '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ACK"}]}}',
+        '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Emília Rosa gave Baxter an orange linen notebook."}]}}',
+        '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ACK"}]}}',
+    ]
+    mirror_lines = live_lines[:3]
+    cursor_path.write_text("\n".join(live_lines) + "\n", encoding="utf-8")
+    live_path.write_text("\n".join(live_lines) + "\n", encoding="utf-8")
+    mirror_path.write_text("\n".join(mirror_lines) + "\n", encoding="utf-8")
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(cursor_path))
+    extraction_daemon.write_cursor(
+        session_id,
+        len(live_lines),
+        str(cursor_path),
+        source_key=source_key,
+        processed_signal_type="reset",
+    )
+    cursor_path.unlink()
+    staged_fact = {
+        "text": "Emília Rosa gave Baxter an orange linen notebook.",
+        "category": "fact",
+    }
+    extraction_daemon.write_rolling_state(
+        session_id,
+        {
+            "session_id": session_id,
+            "transcript_path": str(live_path),
+            "source_transcript_path": str(live_path),
+            "processed_line_offset": len(live_lines),
+            "buffered_line_offset": len(live_lines),
+            "semantic_buffer": "",
+            "semantic_buffer_tokens": 0,
+            "raw_facts": [staged_fact],
+            "carry_facts": [],
+            "rolling_batches": 1,
+        },
+    )
+
+    captured = {}
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / "instances" / "openclaw-main"
+
+        def parse_session_jsonl(self, path):
+            captured.setdefault("parsed_paths", []).append(str(path))
+            return "User: Emília Rosa gave Baxter an orange linen notebook.\nAssistant: ACK"
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {})
+    monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+    monkeypatch.setattr(
+        extract_mod,
+        "extract_from_transcript",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("deleted cursor path with staged payload should not re-extract the smaller mirror")
+        ),
+    )
+
+    def fake_apply_extracted_payloads(payload, **_kwargs):
+        captured["flush_payload"] = payload
+        return {
+            "facts_stored": len(payload.get("raw_facts", [])),
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [{"status": "stored"} for _ in payload.get("raw_facts", [])],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        }
+
+    monkeypatch.setattr(extract_mod, "apply_extracted_payloads", fake_apply_extracted_payloads)
+
+    try:
+        signal_path = extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id=session_id,
+            transcript_path=str(mirror_path),
+        )
+        signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(signal_path)
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    published_facts = captured["flush_payload"]["raw_facts"]
+    assert [fact["text"] for fact in published_facts] == [staged_fact["text"]]
+    assert not extraction_daemon._rolling_state_path(session_id).exists()
+    cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+    assert cursor["line_offset"] == len(live_lines)
+    assert cursor["transcript_path"] == str(live_path)
+    assert cursor["processed_signal_type"] == "session_end"
+
+
 def test_process_signal_extracts_preserved_mirror_user_turn_missing_from_live(
     monkeypatch,
     tmp_path,

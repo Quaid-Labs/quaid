@@ -7084,7 +7084,14 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 return
             elif _relocated_preserved_subset_already_consumed:
                 _relocated_total_lines = count_transcript_lines(transcript_path)
-                if _relocated_total_lines <= cursor_offset:
+                if relocated_smaller_preserved_pending_flush:
+                    logger.info(
+                        "[%s] session %s: relocated preserved transcript is already consumed "
+                        "but staged rolling payload is pending; preserving staged flush",
+                        label,
+                        session_id,
+                    )
+                elif _relocated_total_lines <= cursor_offset:
                     # OpenClaw /new can move an already-consumed subset of the live
                     # transcript into Quaid's preserved sessions dir after the live
                     # file disappears. The smaller preserved copy should not rewind
@@ -7107,12 +7114,13 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     mark_signal_processed(signal_data)
                     _release_current_processing_lock()
                     return
-                logger.info(
-                    "[%s] session %s: relocated preserved transcript is smaller but has %d new line(s) "
-                    "past cursor offset %d (%s -> %s); continuing from cursor",
-                    label, session_id, _relocated_total_lines - cursor_offset, cursor_offset,
-                    cursor_transcript, transcript_path,
-                )
+                else:
+                    logger.info(
+                        "[%s] session %s: relocated preserved transcript is smaller but has %d new line(s) "
+                        "past cursor offset %d (%s -> %s); continuing from cursor",
+                        label, session_id, _relocated_total_lines - cursor_offset, cursor_offset,
+                        cursor_transcript, transcript_path,
+                    )
             elif relocated_smaller_preserved_pending_flush:
                 logger.info(
                     "[%s] session %s: smaller preserved transcript mirror arrived while staged rolling "
