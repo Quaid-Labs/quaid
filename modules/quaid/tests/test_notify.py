@@ -506,7 +506,8 @@ class TestNotifyAgent:
         adapter.instance_root.return_value = tmp_path
         adapter.notify.return_value = False
 
-        with patch("lib.agent_notice.get_adapter", return_value=adapter):
+        with patch("lib.agent_notice.get_adapter", return_value=adapter), \
+             patch("lib.agent_notice.is_fail_hard_enabled", return_value=False):
             ok = notify_agent("provider down", severity="error", source="provider")
             assert ok is True
 
@@ -549,13 +550,50 @@ class TestNotifyAgent:
         assert "Tell the user: Quaid memory recall is currently degraded" in requests[0]["message"]
         assert "invalid-model-m6-probe" in requests[0]["message"]
 
+    def test_notify_false_raises_when_failhard_enabled(self, tmp_path):
+        adapter = MagicMock()
+        adapter.data_dir.return_value = tmp_path
+        adapter.instance_root.return_value = tmp_path
+        adapter.notify.return_value = False
+
+        with patch("lib.agent_notice.get_adapter", return_value=adapter), \
+             patch("lib.agent_notice.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Agent notice delivery returned False"):
+                notify_agent("provider down", severity="error", source="provider")
+
+    def test_notify_failure_raises_when_failhard_enabled(self, tmp_path):
+        adapter = MagicMock()
+        adapter.data_dir.return_value = tmp_path
+        adapter.instance_root.return_value = tmp_path
+        adapter.notify.side_effect = RuntimeError("bad channel")
+
+        with patch("lib.agent_notice.get_adapter", return_value=adapter), \
+             patch("lib.agent_notice.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="bad channel"):
+                notify_agent("janitor summary", severity="warning", source="janitor")
+
+    def test_deferred_fallback_failure_raises_when_failhard_enabled(self, tmp_path):
+        adapter = MagicMock()
+        adapter.get_capability.side_effect = (
+            lambda key, default=False: True if key == "turn_scoped_provider_notices" else default
+        )
+        adapter.data_dir.return_value = tmp_path / "data"
+        adapter.instance_root.return_value = tmp_path
+
+        with patch("lib.agent_notice.get_adapter", return_value=adapter), \
+             patch("lib.agent_notice.queue_deferred_notice", side_effect=RuntimeError("queue broken")), \
+             patch("lib.agent_notice.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="queue broken"):
+                notify_agent("provider down", severity="error", source="provider")
+
     def test_falls_back_to_deferred_when_notify_raises(self, tmp_path):
         adapter = MagicMock()
         adapter.data_dir.return_value = tmp_path
         adapter.instance_root.return_value = tmp_path
         adapter.notify.side_effect = RuntimeError("bad channel")
 
-        with patch("lib.agent_notice.get_adapter", return_value=adapter):
+        with patch("lib.agent_notice.get_adapter", return_value=adapter), \
+             patch("lib.agent_notice.is_fail_hard_enabled", return_value=False):
             ok = notify_agent("janitor summary", severity="warning", source="janitor")
             assert ok is True
 

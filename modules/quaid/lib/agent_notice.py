@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from lib.adapter import get_adapter
+from lib.fail_policy import is_fail_hard_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -363,6 +364,8 @@ def notify_agent(
         except Exception as deferred_exc:
             logger.warning("Failed queueing deferred fallback for agent notice: %s", deferred_exc)
             _trace_m15("agent_notice.notify.deferred_fallback_error", error=str(deferred_exc))
+            if is_fail_hard_enabled():
+                raise
             return False
 
     if _uses_turn_scoped_provider_notices(adapter, severity=severity, source=source):
@@ -391,10 +394,14 @@ def notify_agent(
         )
         if not ok:
             logger.warning("Agent notice delivery returned False; queueing deferred fallback.")
+            if is_fail_hard_enabled():
+                raise RuntimeError("Agent notice delivery returned False")
             return _fallback_to_deferred()
     except Exception as exc:
         logger.warning("Failed delivering agent notice: %s", exc)
         _trace_m15("agent_notice.notify.adapter_error", error=str(exc))
+        if is_fail_hard_enabled():
+            raise
         return _fallback_to_deferred()
 
     if ok and dedupe_token and ttl_seconds > 0 and not dry_run and state_path is not None and not bypass_dedupe:
@@ -747,6 +754,8 @@ def deliver_deferred_notices(
     except Exception as exc:
         logger.warning("Failed importing notification sender for deferred delivery: %s", exc)
         _trace_m15("deferred_notice.deliver.import_error", error=str(exc))
+        if is_fail_hard_enabled():
+            raise
         return []
 
     delivered_ids: set[str] = set()
@@ -766,6 +775,8 @@ def deliver_deferred_notices(
         except Exception as exc:
             logger.warning("Failed delivering deferred notice %s: %s", item_id, exc)
             _trace_m15("deferred_notice.deliver.error", id=item_id, error=str(exc))
+            if is_fail_hard_enabled():
+                raise
             continue
         if sent and not dry_run:
             delivered_ids.add(item_id)

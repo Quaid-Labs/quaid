@@ -315,6 +315,33 @@ def test_deliver_deferred_notices_marks_only_successful_sends(clean_adapter):
     assert pending_items[0]["kind"] == "janitor_summary"
 
 
+def test_deliver_deferred_notices_raises_send_failure_when_failhard(clean_adapter):
+    queue_deferred_notice("first", kind="janitor_summary", priority="low")
+
+    with patch("lib.runtime_context.send_notification", side_effect=RuntimeError("sender broken")), \
+         patch("lib.agent_notice.is_fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="sender broken"):
+            deliver_deferred_notices(limit=10)
+
+
+def test_deliver_deferred_notices_raises_import_failure_when_failhard(clean_adapter, monkeypatch):
+    import builtins
+
+    queue_deferred_notice("first", kind="janitor_summary", priority="low")
+    real_import = builtins.__import__
+
+    def failing_import(name, *args, **kwargs):
+        if name == "lib.runtime_context":
+            raise ImportError("runtime context unavailable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+
+    with patch("lib.agent_notice.is_fail_hard_enabled", return_value=True):
+        with pytest.raises(ImportError, match="runtime context unavailable"):
+            deliver_deferred_notices(limit=10)
+
+
 def test_deliver_deferred_notices_dry_run_keeps_items_pending(clean_adapter):
     queue_deferred_notice("first", kind="janitor_summary", priority="low")
 
