@@ -14,6 +14,11 @@ _POOL_GUARD = threading.Lock()
 _POOLS: Dict[Tuple[str, int], ThreadPoolExecutor] = {}
 
 
+def _quiet_env_enabled() -> bool:
+    value = str(os.environ.get("QUAID_QUIET", "") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def _pool(pool_name: str, max_workers: int) -> ThreadPoolExecutor:
     key = (str(pool_name or "default"), max(1, int(max_workers)))
     with _POOL_GUARD:
@@ -40,7 +45,7 @@ def shutdown_worker_pools(wait: bool = False) -> None:
     with _POOL_GUARD:
         pool_items = list(_POOLS.items())
         _POOLS.clear()
-    quiet = bool(os.environ.get("QUAID_QUIET"))
+    quiet = _quiet_env_enabled()
     if pool_items:
         if not quiet:
             print(f"[worker_pool][atexit] shutting down {len(pool_items)} pool(s), wait={wait}", flush=True, file=sys.stderr)

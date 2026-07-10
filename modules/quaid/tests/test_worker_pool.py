@@ -341,6 +341,17 @@ class TestShutdown:
         assert captured.out == ""
         assert worker_pool._POOLS == {}
 
+    def test_shutdown_treats_false_quiet_as_disabled(self, monkeypatch, capsys):
+        worker_pool.run_callables([lambda: 1, lambda: 2], max_workers=2, pool_name="false-quiet")
+        assert worker_pool._POOLS
+
+        monkeypatch.setenv("QUAID_QUIET", "false")
+        worker_pool.shutdown_worker_pools(wait=True)
+
+        captured = capsys.readouterr()
+        assert "[worker_pool][atexit] shutting down 1 pool(s)" in captured.err
+        assert worker_pool._POOLS == {}
+
     def test_run_after_shutdown_creates_new_pool(self):
         worker_pool.run_callables([lambda: 1], max_workers=2, pool_name="shutdown-recreate")
         worker_pool.shutdown_worker_pools(wait=True)

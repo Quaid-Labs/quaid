@@ -511,6 +511,24 @@ class TestConfigPathResolution:
             config._warned_unknown_config_keys.clear()
             config._warned_unknown_config_keys.update(old_warned)
 
+    def test_unknown_key_warning_treats_false_quiet_as_disabled(self, tmp_path, capsys, monkeypatch):
+        import config
+        old_config = config._config
+        old_warned = set(config._warned_unknown_config_keys)
+        config._config = None
+        config._warned_unknown_config_keys.clear()
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({"unexpectedSection": {"enabled": True}}))
+            monkeypatch.setenv("QUAID_QUIET", "false")
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                _ = load_config()
+            assert "Unknown config key ignored: unexpected_section" in capsys.readouterr().err
+        finally:
+            config._config = old_config
+            config._warned_unknown_config_keys.clear()
+            config._warned_unknown_config_keys.update(old_warned)
+
     def test_instance_metadata_section_is_not_unknown(self, tmp_path, capsys):
         import config
         old_config = config._config
@@ -1742,6 +1760,28 @@ class TestConfigPathResolution:
         finally:
             config._config = old_config
 
+    def test_failhard_plugin_strict_mismatch_warning_treats_false_quiet_as_disabled(
+        self,
+        tmp_path,
+        capsys,
+        monkeypatch,
+    ):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({
+                "retrieval": {"failHard": False},
+                "plugins": {"strict": True},
+            }))
+            monkeypatch.setenv("QUAID_QUIET", "false")
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                _ = load_config()
+            assert "retrieval.fail_hard and plugins.strict differ" in capsys.readouterr().err
+        finally:
+            config._config = old_config
+
     def test_config_callback_failure_warns_when_plugins_non_strict(self, capsys):
         import config
 
@@ -1833,6 +1873,34 @@ class TestConfigPathResolution:
                  patch("core.runtime.plugins.run_plugin_contract_surface", side_effect=_surface_warning):
                 _ = load_config()
             assert "declares surface tool_runtime" not in capsys.readouterr().err
+        finally:
+            config._config = old_config
+
+    def test_plugin_surface_warnings_treat_false_quiet_as_disabled(self, tmp_path, capsys, monkeypatch):
+        import config
+
+        old_config = config._config
+        config._config = None
+        monkeypatch.setenv("QUAID_QUIET", "false")
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({
+            "plugins": {
+                "enabled": True,
+                "strict": False,
+                "slots": {},
+            }
+        }))
+
+        def _surface_warning(*args, **kwargs):
+            return [], ["Plugin fixture declares surface tool_runtime with empty exports"]
+
+        try:
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch("core.runtime.plugins.initialize_plugin_runtime", return_value=(object(), [], [])), \
+                 patch("core.runtime.events.validate_declared_event_contract", return_value=[]), \
+                 patch("core.runtime.plugins.run_plugin_contract_surface", side_effect=_surface_warning):
+                _ = load_config()
+            assert "declares surface tool_runtime" in capsys.readouterr().err
         finally:
             config._config = old_config
 

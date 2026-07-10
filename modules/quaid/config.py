@@ -859,7 +859,7 @@ def _warn_unknown_keys(section: str, data: Any, known_keys: set[str]) -> None:
         if token in _warned_unknown_config_keys:
             continue
         _warned_unknown_config_keys.add(token)
-        if not os.environ.get("QUAID_QUIET"):
+        if not _truthy_env("QUAID_QUIET"):
             print(f"[config] Unknown config key ignored: {token}", file=sys.stderr)
 
 
@@ -1632,7 +1632,7 @@ def _load_config_inner() -> MemoryConfig:
         ),
         config=plugins_data.get('config', {}) if isinstance(plugins_data.get('config', {}), dict) else {},
     )
-    if retrieval.fail_hard != plugins.strict and not os.environ.get("QUAID_QUIET"):
+    if retrieval.fail_hard != plugins.strict and not _truthy_env("QUAID_QUIET"):
         print(
             "[config] WARNING: retrieval.fail_hard and plugins.strict differ; "
             "retrieval controls memory/LLM fallback, plugins.strict controls plugin contract enforcement.",
@@ -1695,7 +1695,7 @@ def _load_config_inner() -> MemoryConfig:
         def _emit_plugin_messages() -> None:
             for msg in plugin_errors:
                 print(f"[plugins][error] {msg}", file=sys.stderr)
-            if not os.environ.get("QUAID_QUIET"):
+            if not _truthy_env("QUAID_QUIET"):
                 for msg in plugin_warnings:
                     print(f"[plugins][warn] {msg}", file=sys.stderr)
 
