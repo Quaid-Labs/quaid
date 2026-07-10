@@ -18050,6 +18050,23 @@ class TestRecallFastHookInjectContract:
         assert stores == ["vector", "graph"]
         assert project is None
 
+    def test_infer_recall_store_defaults_routes_unicode_genitive_relation_chain_to_graph(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(mg, "_registered_project_name_in_query", return_value=None), \
+             patch.object(mg, "get_edge_keywords", return_value={
+                 "sibling_of": ["兄", "哥哥"],
+                 "spouse_of": ["妻", "妻子"],
+             }), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]):
+            japanese_stores, japanese_project = mg._infer_recall_store_defaults("兄の妻は何をしていますか")
+            chinese_stores, chinese_project = mg._infer_recall_store_defaults("哥哥的妻子做什么")
+
+        assert japanese_stores == ["vector", "graph"]
+        assert japanese_project is None
+        assert chinese_stores == ["vector", "graph"]
+        assert chinese_project is None
+
     def test_infer_recall_store_defaults_routes_docs_for_project_says_query(self, tmp_path, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 
@@ -21616,6 +21633,7 @@ class TestRecallFastHookInjectContract:
         ):
             assert mg._ordered_relation_matches_for_query("兄の妻は何をしていますか") == ["sibling_of", "spouse_of"]
             assert mg._relation_chain_groups_for_query("兄の妻は何をしていますか") == ["sibling", "spouse"]
+            assert mg._has_relation_chain_structure("兄の妻は何をしていますか") is True
             assert mg._has_generic_graph_signal("兄の妻は何をしていますか") is True
 
     def test_generic_graph_signal_uses_structural_entity_pairs_not_english_cues(self):

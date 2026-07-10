@@ -4076,6 +4076,7 @@ _SYMMETRIC_RELATIONS = {
     "aunt_of",
     "uncle_of",
 }
+_RELATION_CHAIN_GENITIVE_PARTICLES = frozenset({"の", "的", "之", "의"})
 
 
 def _canonical_relation_group_for_relation(relation: str) -> str:
@@ -4103,13 +4104,12 @@ def _relation_chain_groups_for_query(query: str) -> List[str]:
 
 
 def _has_relation_chain_structure(query: str) -> bool:
-    lowered = str(query or "").lower()
+    text = _unicode_casefold(query)
     return (
-        lowered.count("'s") + lowered.count("’s") >= 1
-        or bool(re.search(r"\bof\b", lowered))
-        or len(_relation_chain_groups_for_query(query)) >= 2
+        len(_relation_chain_groups_for_query(query)) >= 2
+        or any(marker in text for marker in _RELATION_CHAIN_GENITIVE_PARTICLES)
         or (
-            any(ord(ch) > 127 for ch in lowered)
+            any(ord(ch) > 127 for ch in text)
             and len(_normalize_relation_query_tokens(query)) <= 1
         )
     )
