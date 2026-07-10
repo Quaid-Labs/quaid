@@ -2604,19 +2604,19 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     state.lastUpdateMs = now;
 
     const batchAgeMs = now - state.startedAtMs;
-    if (batchAgeMs >= COMPACTION_NOTIFY_BATCH_MAX_MS) {
+    const flushImmediately = batchAgeMs >= COMPACTION_NOTIFY_BATCH_MAX_MS;
+    if (flushImmediately) {
       if (state.timer) {
         clearTimeout(state.timer);
         state.timer = null;
       }
-      state.startedAtMs = 0;
       state.lastUpdateMs = now;
     }
     if (state.timer) {
       clearTimeout(state.timer);
       state.timer = null;
     }
-    const flushDelayMs = state.startedAtMs === 0
+    const flushDelayMs = flushImmediately
       ? 0
       : Math.max(0, Math.min(COMPACTION_NOTIFY_BATCH_MS, COMPACTION_NOTIFY_BATCH_MAX_MS - (now - state.startedAtMs)));
     state.timer = setTimeout(() => {

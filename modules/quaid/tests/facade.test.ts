@@ -3009,14 +3009,38 @@ describe("QuaidFacade", () => {
     vi.useFakeTimers();
     const notify = vi.fn();
     const facade = createQuaidFacade(makeMockDeps());
-    facade.queueCompactionExtractionSummary("s1", 2, 1, 1, notify);
-    facade.queueCompactionExtractionSummary("s2", 3, 0, 2, notify);
-    vi.advanceTimersByTime(11_000);
-    expect(notify).toHaveBeenCalledTimes(1);
-    const msg = String(notify.mock.calls[0]?.[0] || "");
-    expect(msg).toContain("Sessions processed: 2");
-    expect(msg).toContain("Facts stored: 5");
-    vi.useRealTimers();
+    try {
+      facade.queueCompactionExtractionSummary("s1", 2, 1, 1, notify);
+      facade.queueCompactionExtractionSummary("s2", 3, 0, 2, notify);
+      vi.advanceTimersByTime(11_000);
+      expect(notify).toHaveBeenCalledTimes(1);
+      const msg = String(notify.mock.calls[0]?.[0] || "");
+      expect(msg).toContain("Sessions processed: 2");
+      expect(msg).toContain("Facts stored: 5");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("queueCompactionExtractionSummary reports max-age flush window from batch start", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    const notify = vi.fn();
+    const facade = createQuaidFacade(makeMockDeps());
+    try {
+      facade.queueCompactionExtractionSummary("s1", 1, 0, 0, notify);
+      vi.setSystemTime(1_700_000_045_000);
+      facade.queueCompactionExtractionSummary("s2", 1, 0, 0, notify);
+      vi.advanceTimersByTime(0);
+
+      expect(notify).toHaveBeenCalledTimes(1);
+      const msg = String(notify.mock.calls[0]?.[0] || "");
+      expect(msg).toContain("Sessions processed: 2");
+      expect(msg).toContain("Window: 45s");
+      expect(msg).not.toContain("1700000000");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("filterConversationMessages drops internal extraction payloads and maintenance prompts", () => {
