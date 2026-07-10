@@ -582,6 +582,19 @@ class TestSnapshotAllProjects:
         results = snapshot_all_projects()
         assert results == []
 
+    def test_snapshot_failure_raises_when_failhard(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        src = tmp_path / "code"
+        src.mkdir()
+
+        with patch("core.project_registry._sync_docs_registry_project"):
+            create_project("my-app", source_root=str(src))
+
+        with patch("core.shadow_git.ShadowGit.snapshot", side_effect=RuntimeError("snapshot broken")), \
+             patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="snapshot broken"):
+            snapshot_all_projects()
+
 
 class TestCreateProjectUsesInstanceId:
     def test_instances_list_records_instance_id(self, mock_adapter):
@@ -1074,6 +1087,33 @@ class TestDeleteProjectPurgesDb:
                 project_name="my-app",
                 canonical=tmp_path / "projects" / "my-app",
             )
+
+    def test_cleanup_pending_project_review_parse_failure_raises_when_failhard(self, mock_adapter):
+        from core import project_registry as registry_mod
+
+        _adapter, tmp_path = mock_adapter
+        queue_dir = tmp_path / "instances" / "test-inst" / "logs" / "janitor"
+        queue_dir.mkdir(parents=True)
+        (queue_dir / "pending-project-review.json").write_text("{not json", encoding="utf-8")
+
+        with patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(json.JSONDecodeError):
+            registry_mod._cleanup_pending_project_review_entries(
+                quaid_home=tmp_path,
+                project_name="my-app",
+                canonical=tmp_path / "projects" / "my-app",
+            )
+
+    def test_delete_post_queue_cleanup_failure_raises_when_failhard(self, mock_adapter):
+        create_project("my-app")
+
+        with patch(
+            "core.project_registry._cleanup_pending_project_review_entries",
+            side_effect=RuntimeError("pending cleanup broken"),
+        ), \
+             patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="pending cleanup broken"):
+            delete_project("my-app")
 
     def test_reconcile_docs_registry_failure_uses_failhard_helper(self, mock_adapter, monkeypatch, caplog):
         from core import project_registry as registry_mod

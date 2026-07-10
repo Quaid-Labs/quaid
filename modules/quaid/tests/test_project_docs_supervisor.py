@@ -1727,8 +1727,9 @@ def test_requested_janitor_run_contains_worker_failure_when_failhard(monkeypatch
     workers: dict[str, subprocess.Popen] = {"alpha": _FailedProc()}
     active = {"request_id": request["request_id"], "errors": [], "exit_codes": {}}
 
-    with caplog.at_level("ERROR", logger=supervisor.__name__):
-        assert supervisor._maintain_on_demand_janitor_request(active, {}, workers) is None
+    with caplog.at_level("ERROR", logger=supervisor.__name__), \
+         pytest.raises(RuntimeError, match="janitor request failed under failHard"):
+        supervisor._maintain_on_demand_janitor_request(active, {}, workers)
 
     assert "janitor request failed under failHard: instance alpha janitor exited rc=1" in caplog.text
     payload = project_docs.read_janitor_request()
@@ -1910,7 +1911,7 @@ def test_janitor_checkpoint_status_raises_missing_checkpoint_when_failhard(monke
     assert "instance alpha janitor checkpoint missing" in caplog.text
 
 
-def test_requested_janitor_run_writes_failed_status_without_supervisor_reraise(monkeypatch, tmp_path, caplog):
+def test_requested_janitor_run_raises_after_writing_failed_status_under_failhard(monkeypatch, tmp_path, caplog):
     from core import project_docs, project_docs_supervisor as supervisor
 
     class _FailedProc:
@@ -1928,8 +1929,9 @@ def test_requested_janitor_run_writes_failed_status_without_supervisor_reraise(m
     workers: dict[str, subprocess.Popen] = {"alpha": _FailedProc()}
     active = {"request_id": request["request_id"], "errors": [], "exit_codes": {}}
 
-    with caplog.at_level("ERROR", logger=supervisor.__name__):
-        assert supervisor._maintain_on_demand_janitor_request(active, {}, workers) is None
+    with caplog.at_level("ERROR", logger=supervisor.__name__), \
+         pytest.raises(RuntimeError, match="janitor request failed under failHard"):
+        supervisor._maintain_on_demand_janitor_request(active, {}, workers)
 
     assert "janitor request failed under failHard: instance alpha janitor exited rc=1" in caplog.text
     payload = project_docs.read_janitor_request()

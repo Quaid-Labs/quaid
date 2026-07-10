@@ -319,6 +319,8 @@ def _cleanup_pending_project_review_entries(
             raw = json.loads(queue_path.read_text(encoding="utf-8"))
         except Exception as exc:
             logger.warning("Failed to parse pending project review queue %s: %s", queue_path, exc)
+            if _fail_hard_enabled():
+                raise
             continue
         if not isinstance(raw, list):
             continue
@@ -1136,6 +1138,8 @@ def delete_project(name: str) -> None:
             )
     except Exception as e:
         logger.warning("Failed post-delete queue cleanup for project %s: %s", name, e)
+        if _fail_hard_enabled():
+            raise
 
     if converged:
         logger.info("Deleted project: %s", name)
@@ -1246,5 +1250,7 @@ def snapshot_all_projects() -> List[Dict[str, Any]]:
                 )
         except Exception as e:
             logger.warning("Shadow git snapshot failed for %s: %s", name, e)
+            if _fail_hard_enabled():
+                raise
 
     return results

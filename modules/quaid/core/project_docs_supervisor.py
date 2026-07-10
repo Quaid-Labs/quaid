@@ -830,9 +830,7 @@ def _finalize_janitor_request_payload(
     if final_errors and _fail_hard_enabled():
         message = "janitor request failed under failHard: " + "; ".join(final_errors)
         _LOGGER.error(message)
-        # The request record is the user-facing failure surface: `quaid janitor --status`
-        # exits non-zero and prints these errors. Raising here would convert one
-        # failed instance worker into a global supervisor-failure marker.
+        raise RuntimeError(message)
 
 
 def _start_requested_janitor_run(
