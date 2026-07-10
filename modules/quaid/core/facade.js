@@ -2226,9 +2226,17 @@ Consider running: docs staleness updater (update-stale --apply)`;
     scored.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
     return scored.slice(0, limit);
   }
+  function parseBrokerJson(out, label) {
+    try {
+      return JSON.parse(out);
+    } catch (err) {
+      const detail = String(err?.message || err);
+      throw new Error(`${label} broker response JSON parse failed: ${detail}`, { cause: err });
+    }
+  }
   function parseProjectBrokerResults(out, project) {
     if (!out || !out.trim()) return [];
-    const parsed = JSON.parse(out);
+    const parsed = parseBrokerJson(out, "project");
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("project broker response must be an object");
     }
@@ -2270,7 +2278,7 @@ Consider running: docs staleness updater (update-stale --apply)`;
   }
   function parseMemoryBrokerResults(out, selector) {
     if (!out || !out.trim()) return [];
-    const parsed = JSON.parse(out);
+    const parsed = parseBrokerJson(out, "memory");
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("memory broker response must be an object");
     }

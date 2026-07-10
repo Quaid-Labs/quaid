@@ -3093,12 +3093,21 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   // Project broker result parser
   // -------------------------------------------------------------------------
 
+  function parseBrokerJson(out: string, label: "project" | "memory"): any {
+    try {
+      return JSON.parse(out);
+    } catch (err: unknown) {
+      const detail = String((err as Error)?.message || err);
+      throw new Error(`${label} broker response JSON parse failed: ${detail}`, { cause: err as Error });
+    }
+  }
+
   function parseProjectBrokerResults(
     out: string,
     project?: string,
   ): MemoryResult[] {
     if (!out || !out.trim()) return [];
-    const parsed = JSON.parse(out);
+    const parsed = parseBrokerJson(out, "project");
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("project broker response must be an object");
     }
@@ -3144,7 +3153,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     selector: MemoryStoreRecallRequest["selector"],
   ): MemoryResult[] {
     if (!out || !out.trim()) return [];
-    const parsed = JSON.parse(out);
+    const parsed = parseBrokerJson(out, "memory");
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("memory broker response must be an object");
     }

@@ -1497,6 +1497,65 @@ describe("QuaidFacade", () => {
     })).rejects.toThrow("project broker response selector must be project");
   });
 
+  it("project broker invalid JSON preserves vector rows without failHard", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall-memory-request") {
+        return memoryBrokerResponse("vector_basic", [
+          { text: "vector survives project json failure", category: "fact", similarity: 0.8 },
+        ]);
+      }
+      if (command === "recall-docs-request") {
+        return "{not json";
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({
+      execPython,
+      isSystemEnabled: vi.fn((system: string) => system === "memory" || system === "projects"),
+      isFailHardEnabled: vi.fn(() => false),
+      getMemoryConfig: vi.fn(() => ({ retrieval: { failHard: false } })),
+    }));
+
+    try {
+      const results = await facade.recall({
+        query: "mixed broker invalid json",
+        limit: 5,
+        routeStores: false,
+        datastores: ["vector_basic", "project"],
+        expandGraph: false,
+      });
+
+      expect(results.map((row) => row.text)).toContain("vector survives project json failure");
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("datastore=project failed: project broker response JSON parse failed"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("project broker invalid JSON raises a descriptive error under failHard", async () => {
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall-docs-request") {
+        return "{not json";
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({
+      execPython,
+      isSystemEnabled: vi.fn((system: string) => system === "projects"),
+      isFailHardEnabled: vi.fn(() => true),
+      getMemoryConfig: vi.fn(() => ({ retrieval: { failHard: true } })),
+    }));
+
+    await expect(facade.recall({
+      query: "bad project json",
+      limit: 5,
+      routeStores: false,
+      datastores: ["project"],
+      expandGraph: false,
+    })).rejects.toThrow("project broker response JSON parse failed");
+  });
+
   it("memory broker malformed output preserves project rows without failHard", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const execPython = vi.fn(async (command: string) => {
@@ -1572,6 +1631,79 @@ describe("QuaidFacade", () => {
       datastores: ["vector_basic"],
       expandGraph: false,
     })).rejects.toThrow("memory broker response results must be a list");
+  });
+
+  it("memory broker invalid JSON preserves project rows without failHard", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall-memory-request") {
+        return "{not json";
+      }
+      if (command === "recall-docs-request") {
+        return JSON.stringify({
+          selector: "project",
+          store: "docs",
+          docs: {
+            chunks: [
+              {
+                content: "PROJECT.md survives memory json failure",
+                source: "~/projects/quaid/PROJECT.md",
+                similarity: 0.91,
+                project: "quaid",
+              },
+            ],
+            project: "quaid",
+          },
+          limit: 5,
+          meta: {},
+        });
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({
+      execPython,
+      isSystemEnabled: vi.fn((system: string) => system === "projects"),
+      isFailHardEnabled: vi.fn(() => false),
+      getMemoryConfig: vi.fn(() => ({ retrieval: { failHard: false } })),
+    }));
+
+    try {
+      const results = await facade.recall({
+        query: "memory broker invalid json",
+        limit: 5,
+        routeStores: false,
+        datastores: ["vector_basic", "project"],
+        expandGraph: false,
+        project: "quaid",
+      });
+
+      expect(results.some((row) => row.text.includes("PROJECT.md survives memory json failure"))).toBe(true);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("datastore=vector_basic failed: memory broker response JSON parse failed"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("memory broker invalid JSON raises a descriptive error under failHard", async () => {
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall-memory-request") {
+        return "{not json";
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({
+      execPython,
+      isFailHardEnabled: vi.fn(() => true),
+      getMemoryConfig: vi.fn(() => ({ retrieval: { failHard: true } })),
+    }));
+
+    await expect(facade.recall({
+      query: "bad memory json",
+      limit: 5,
+      routeStores: false,
+      datastores: ["vector_basic"],
+      expandGraph: false,
+    })).rejects.toThrow("memory broker response JSON parse failed");
   });
 
   it("recallWithDiagnostics forwards timeout budget in JSON config", async () => {
