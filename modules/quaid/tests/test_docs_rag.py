@@ -2851,6 +2851,16 @@ class TestDocsSearchFiltering:
         assert linked == []
         assert resolved is False
 
+    def test_linked_project_scope_raises_instance_error_when_failhard(self, tmp_path):
+        from datastore.docsdb import rag as rag_module
+        from lib.instance import InstanceError
+
+        rag_module._LINKED_PROJECT_SCOPE_RECONCILE_NEXT_AT = 0.0
+        with patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+             patch("lib.instance.instance_id", side_effect=InstanceError("instance missing")), \
+             pytest.raises(RuntimeError, match="Failed to resolve current instance project scope"):
+            rag_module._linked_projects_for_current_instance()
+
     def test_linked_project_scope_throttles_registry_reconcile(self, tmp_path):
         from datastore.docsdb import rag as rag_module
 
@@ -2902,7 +2912,8 @@ class TestDocsSearchFiltering:
         finally:
             db.close()
 
-        with patch("lib.instance.instance_id", side_effect=InstanceError("instance missing")), \
+        with patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False), \
+             patch("lib.instance.instance_id", side_effect=InstanceError("instance missing")), \
              patch.object(
                  rag,
                  "_get_project_paths",
@@ -2951,7 +2962,8 @@ class TestDocsSearchFiltering:
         finally:
             db.close()
 
-        with patch("lib.instance.instance_id", side_effect=InstanceError("instance missing")), \
+        with patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False), \
+             patch("lib.instance.instance_id", side_effect=InstanceError("instance missing")), \
              patch("datastore.docsdb.rag._workspace", side_effect=RuntimeError("workspace unavailable without instance")), \
              patch("datastore.docsdb.rag.get_visible_quaid_home", return_value=Path("/tmp/workspace")), \
              patch.object(

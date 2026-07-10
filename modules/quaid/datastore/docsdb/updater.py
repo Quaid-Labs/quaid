@@ -179,6 +179,8 @@ def _queue_delayed_notification(message: str, kind: str, priority: str, source: 
             extra={"source": source, "kind": kind},
             exc_info=True,
         )
+        if is_fail_hard_enabled():
+            raise
 
 
 def _docs_index_timeout_seconds() -> float:
@@ -377,6 +379,8 @@ def _load_changelog() -> List[dict]:
         return json.loads(_changelog_path().read_text(encoding="utf-8"))
     except (json.JSONDecodeError, IOError) as exc:
         logger.warning("Failed reading docs updater changelog; starting empty: %s", exc)
+        if is_fail_hard_enabled():
+            raise
         return []
 
 
@@ -439,6 +443,8 @@ def log_doc_update(
                 )
         except Exception as e:
             logger.warning("Failed to notify user about doc update for %s: %s", doc_path, e)
+            if is_fail_hard_enabled():
+                raise
 
 
 def get_changelog(limit: int = 20) -> List[dict]:

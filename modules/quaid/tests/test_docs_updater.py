@@ -1172,6 +1172,34 @@ class TestCleanupStateLocking:
             assert entries[0]["timestamp"].endswith("+00:00")
             assert "Invalid QUAID_NOW='not-a-date'; falling back to wall clock" in caplog.text
 
+    def test_log_doc_update_notification_failure_raises_when_fail_hard(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+            monkeypatch.setattr(
+                updater,
+                "get_config",
+                lambda: SimpleNamespace(docs=SimpleNamespace(notify_on_update=True)),
+            )
+            monkeypatch.setattr(
+                updater,
+                "_queue_delayed_notification",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("notice queue offline")),
+            )
+
+            with pytest.raises(RuntimeError, match="notice queue offline"):
+                updater.log_doc_update(
+                    "docs/test.md",
+                    "janitor",
+                    ["src/app.py"],
+                    "updated",
+                    dry_run=False,
+                    success=True,
+                    chars_before=10,
+                    chars_after=11,
+                )
+
     def test_queue_delayed_notification_logs_exc_info(self, tmp_path, monkeypatch, caplog):
         with _adapter_patch(tmp_path):
             import datastore.docsdb.updater as updater
@@ -1181,6 +1209,7 @@ class TestCleanupStateLocking:
                 "queue_deferred_notice",
                 lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("notice queue offline")),
             )
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
             caplog.set_level("WARNING", logger="datastore.docsdb.updater")
 
             updater._queue_delayed_notification("message", "doc_update", "normal", "pytest")
@@ -1188,18 +1217,45 @@ class TestCleanupStateLocking:
             assert "Failed queuing delayed notification" in caplog.text
             assert any(record.exc_info for record in caplog.records)
 
-    def test_load_changelog_logs_corrupt_file(self, tmp_path, caplog):
+    def test_queue_delayed_notification_raises_when_fail_hard(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            monkeypatch.setattr(
+                updater,
+                "queue_deferred_notice",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("notice queue offline")),
+            )
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+
+            with pytest.raises(RuntimeError, match="notice queue offline"):
+                updater._queue_delayed_notification("message", "doc_update", "normal", "pytest")
+
+    def test_load_changelog_logs_corrupt_file(self, tmp_path, monkeypatch, caplog):
         with _adapter_patch(tmp_path):
             import datastore.docsdb.updater as updater
 
             path = updater._changelog_path()
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("{not-json", encoding="utf-8")
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
             caplog.set_level("WARNING", logger="datastore.docsdb.updater")
 
             assert updater._load_changelog() == []
 
             assert "Failed reading docs updater changelog; starting empty" in caplog.text
+
+    def test_load_changelog_raises_corrupt_file_when_fail_hard(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            path = updater._changelog_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{not-json", encoding="utf-8")
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+
+            with pytest.raises(json.JSONDecodeError):
+                updater._load_changelog()
 
     def test_load_changelog_reads_utf8(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):

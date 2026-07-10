@@ -212,7 +212,9 @@ def _linked_projects_for_current_instance() -> tuple[List[str], bool]:
             if current_instance in instances:
                 linked.append(str(project_name))
         return linked, True
-    except InstanceError:
+    except InstanceError as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to resolve current instance project scope for shared docs recall.") from exc
         return [], False
     except Exception as exc:
         if is_fail_hard_enabled():
