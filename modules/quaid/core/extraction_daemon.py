@@ -2573,7 +2573,13 @@ def _live_transcript_for_preserved_mirror(session_id: str, transcript_path: str,
         if session_uuid and filename_uuid and session_uuid.group(0).lower() != filename_uuid.group(0).lower():
             return ""
         return str(live_path)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "session %s live transcript lookup for preserved mirror failed for %s: %s",
+            session_id,
+            transcript_path,
+            exc,
+        )
         if _fail_hard_enabled():
             raise
     return ""
@@ -2592,7 +2598,8 @@ def _adapter_live_transcript_exists(session_id: str, adapter=None) -> bool:
             and os.path.isfile(live_raw)
             and _adapter_owns_transcript_path(adapter, str(session_id), live_raw)
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("session %s live transcript existence check failed: %s", session_id, exc)
         if _fail_hard_enabled():
             raise
     return False
@@ -2608,7 +2615,8 @@ def _adapter_live_transcript_missing(session_id: str, adapter=None) -> bool:
         if not live_raw or _is_daemon_preserved_session_transcript_path(live_raw):
             return True
         return not os.path.isfile(live_raw)
-    except Exception:
+    except Exception as exc:
+        logger.warning("session %s live transcript missing check failed: %s", session_id, exc)
         if _fail_hard_enabled():
             raise
     return False
@@ -2629,7 +2637,13 @@ def _preserved_mirror_for_missing_transcript_cursor(session_id: str, transcript_
         mirror_path = (_instance_root() / "logs" / "quaid" / "sessions" / live_path.name).resolve()
         if mirror_path.is_file() and _transcript_has_jsonl_rows(str(mirror_path)):
             return str(mirror_path)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "session %s preserved mirror lookup for missing transcript cursor failed for %s: %s",
+            session_id,
+            transcript_path,
+            exc,
+        )
         if _fail_hard_enabled():
             raise
     return ""
@@ -3049,7 +3063,7 @@ def _read_processing_lock_payload(lock_path: Path) -> Dict[str, Any]:
     except Exception as exc:
         if _fail_hard_enabled():
             raise
-        logger.debug("[daemon] failed reading processing lock payload %s: %s", lock_path, exc)
+        logger.warning("[daemon] failed reading processing lock payload %s: %s", lock_path, exc)
         return {}
 
 
@@ -3089,7 +3103,10 @@ def _processing_lock_holder_dead(lock_path: Path) -> bool:
     payload = _read_processing_lock_payload(lock_path)
     try:
         pid = int(payload.get("pid") or 0)
-    except Exception:
+    except Exception as exc:
+        logger.warning("[daemon] malformed processing lock pid in %s: %s", lock_path, exc)
+        if _fail_hard_enabled():
+            raise
         return False
     if pid == os.getpid():
         return False
@@ -9946,7 +9963,7 @@ def _retry_missing_embeddings() -> int:
     except Exception as e:
         if _fail_hard_enabled():
             raise RuntimeError("Missing embedding retry failed while failHard is enabled") from e
-        logger.debug("[daemon] embed-retry failed: %s", e)
+        logger.warning("[daemon] embed-retry failed: %s", e)
         return 0
 
 
@@ -10021,7 +10038,7 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 except Exception as e:
                     if _fail_hard_enabled():
                         raise RuntimeError("embed retry failed while failHard is enabled") from e
-                    logger.debug("embed retry failed: %s", e)
+                    logger.warning("embed retry failed: %s", e)
                 last_embed_retry_check = now
 
             try:

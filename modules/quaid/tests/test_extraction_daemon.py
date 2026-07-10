@@ -1104,6 +1104,23 @@ def test_retry_missing_embeddings_helper_reraises_under_failhard(monkeypatch):
         extraction_daemon._retry_missing_embeddings()
 
 
+def test_retry_missing_embeddings_helper_warns_when_fail_open(monkeypatch, caplog):
+    from datastore.memorydb import memory_graph
+
+    class FailingGraph:
+        def retry_missing_embeddings(self, limit=20):
+            raise RuntimeError("embedding backend down")
+
+    monkeypatch.setattr(memory_graph, "MemoryGraph", lambda: FailingGraph())
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level(logging.WARNING, logger="quaid.daemon"):
+        assert extraction_daemon._retry_missing_embeddings() == 0
+
+    assert "embed-retry failed" in caplog.text
+    assert "embedding backend down" in caplog.text
+
+
 def test_daemon_loop_reraises_embedding_retry_failure_under_failhard(monkeypatch):
     def fake_sleep(_seconds):
         raise AssertionError("daemon loop should not sleep after failHard embed retry failure")
@@ -1137,6 +1154,44 @@ def test_daemon_loop_reraises_embedding_retry_failure_under_failhard(monkeypatch
 
     with pytest.raises(RuntimeError, match="embed retry failed while failHard is enabled"):
         extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
+
+
+def test_daemon_loop_warns_on_embedding_retry_failure_when_fail_open(monkeypatch, caplog):
+    def fake_sleep(_seconds):
+        raise _StopDaemonLoop()
+
+    monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
+    monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
+    monkeypatch.setattr("core.compatibility.VersionWatcher", _NoopVersionWatcher)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(extraction_daemon, "_supervisor_alive", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_retry_missing_embeddings",
+        lambda: (_ for _ in ()).throw(RuntimeError("embedding backend down")),
+    )
+    monkeypatch.setattr(extraction_daemon, "check_chunk_ready_sessions", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "check_idle_sessions", lambda _mins: None)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(extraction_daemon, "process_signal", lambda _sig: None)
+    monkeypatch.setattr(
+        "core.compatibility.read_circuit_breaker",
+        lambda _data_dir: types.SimpleNamespace(
+            allows_writes=lambda: True,
+            status="normal",
+            message="",
+        ),
+    )
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: 1_700_000_000.0)
+    monkeypatch.setattr(extraction_daemon.time, "sleep", fake_sleep)
+    monkeypatch.setattr(extraction_daemon.signal, "signal", lambda *_args, **_kwargs: None)
+
+    with caplog.at_level(logging.WARNING, logger="quaid.daemon"), pytest.raises(_StopDaemonLoop):
+        extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
+
+    assert "embed retry failed" in caplog.text
+    assert "embedding backend down" in caplog.text
 
 
 def test_daemon_loop_reraises_chunk_readiness_failure_under_failhard(monkeypatch):
@@ -2350,6 +2405,35 @@ def test_processing_lock_payload_raises_read_failure_when_fail_hard(monkeypatch,
 
     with pytest.raises(FileNotFoundError):
         extraction_daemon._read_processing_lock_payload(tmp_path / "missing.lock")
+
+
+def test_processing_lock_payload_warns_read_failure_when_fail_open(monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level(logging.WARNING, logger="quaid.daemon"):
+        assert extraction_daemon._read_processing_lock_payload(tmp_path / "missing.lock") == {}
+
+    assert "failed reading processing lock payload" in caplog.text
+
+
+def test_processing_lock_holder_dead_warns_malformed_pid_when_fail_open(monkeypatch, tmp_path, caplog):
+    lock_path = tmp_path / "sess.lock"
+    lock_path.write_text(json.dumps({"pid": {"not": "an int"}}), encoding="utf-8")
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level(logging.WARNING, logger="quaid.daemon"):
+        assert extraction_daemon._processing_lock_holder_dead(lock_path) is False
+
+    assert "malformed processing lock pid" in caplog.text
+
+
+def test_processing_lock_holder_dead_raises_malformed_pid_when_fail_hard(monkeypatch, tmp_path):
+    lock_path = tmp_path / "sess.lock"
+    lock_path.write_text(json.dumps({"pid": {"not": "an int"}}), encoding="utf-8")
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(TypeError):
+        extraction_daemon._processing_lock_holder_dead(lock_path)
 
 
 def test_process_signal_registered_subagent_lookup_failure_releases_lock_when_fail_hard(monkeypatch, tmp_path):
@@ -4629,6 +4713,53 @@ def test_adapter_owns_transcript_path_uses_daemon_failhard_helper(monkeypatch, t
             "adapter-session",
             str(transcript_path),
         )
+
+
+def test_live_transcript_helper_failures_warn_when_fail_open(monkeypatch, tmp_path, caplog):
+    class _BrokenAdapter:
+        def get_session_path(self, _session_id):
+            raise RuntimeError("session path unavailable")
+
+    session_id = "rollout-2026-04-26T18-43-04-helper"
+    mirror_path = tmp_path / f"{session_id}.jsonl"
+    mirror_path.write_text('{"role":"user","content":"mirror"}\n', encoding="utf-8")
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(extraction_daemon, "_is_daemon_preserved_session_transcript_path", lambda _path: True)
+
+    with caplog.at_level(logging.WARNING, logger="quaid.daemon"):
+        assert extraction_daemon._live_transcript_for_preserved_mirror(
+            session_id,
+            str(mirror_path),
+            adapter=_BrokenAdapter(),
+        ) == ""
+        assert extraction_daemon._adapter_live_transcript_exists(session_id, adapter=_BrokenAdapter()) is False
+        assert extraction_daemon._adapter_live_transcript_missing(session_id, adapter=_BrokenAdapter()) is False
+
+    assert "live transcript lookup for preserved mirror failed" in caplog.text
+    assert "live transcript existence check failed" in caplog.text
+    assert "live transcript missing check failed" in caplog.text
+    assert "session path unavailable" in caplog.text
+
+
+def test_preserved_mirror_lookup_failure_warns_when_fail_open(monkeypatch, tmp_path, caplog):
+    session_id = "rollout-2026-04-26T18-43-04-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    live_path = tmp_path / f"{session_id}.jsonl"
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_adapter_live_transcript_exists",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("session path unavailable")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="quaid.daemon"):
+        assert extraction_daemon._preserved_mirror_for_missing_transcript_cursor(
+            session_id,
+            str(live_path),
+            adapter=object(),
+        ) == ""
+
+    assert "preserved mirror lookup for missing transcript cursor failed" in caplog.text
+    assert "session path unavailable" in caplog.text
 
 
 def test_process_signal_allows_current_instance_cursor_owned_transcript(monkeypatch, tmp_path):
