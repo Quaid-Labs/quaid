@@ -10496,6 +10496,7 @@ def _expand_selected_session_chunk_rows(
     window_chunk_count = 0
     omitted_for_budget = 0
     support_window_count = 0
+    owner_mismatch_skipped = 0
     for row_index, row in enumerate(rows):
         if not isinstance(row, dict):
             expanded_rows.append(row)
@@ -10521,11 +10522,24 @@ def _expand_selected_session_chunk_rows(
             if chunk_id:
                 chunk = get_graph().get_source_chunk(
                     chunk_id,
-                    owner_id=owner_key if source_type in {"session_chunk", "source_chunk"} else None,
                     fail_hard=_is_fail_hard_mode(),
                 )
                 if isinstance(chunk, dict):
-                    row_owner_key = str(chunk.get("owner_id") or "").strip() or owner_key
+                    stored_owner_key = str(chunk.get("owner_id") or "").strip()
+                    if (
+                        source_type in {"session_chunk", "source_chunk"}
+                        and stored_owner_key
+                        and stored_owner_key != owner_key
+                    ):
+                        owner_mismatch_skipped += 1
+                        logger.warning(
+                            "Skipping session chunk expansion for owner-mismatched chunk %s: expected=%s actual=%s",
+                            chunk_id,
+                            owner_key,
+                            stored_owner_key,
+                        )
+                        continue
+                    row_owner_key = stored_owner_key or owner_key
                 if not microchunk_id and isinstance(chunk, dict):
                     microchunk_id = str(chunk.get("microchunk_id") or "").strip()
             window: List[Dict[str, Any]] = []
@@ -10685,10 +10699,10 @@ def _expand_selected_session_chunk_rows(
                     )
                     if center_item is not None:
                         center_item["session_window_required"] = True
-            if not window and chunk_id:
+            if not window and chunk_id and isinstance(chunk, dict):
                 chunk = get_graph().get_source_chunk(
                     chunk_id,
-                    owner_id=owner_key,
+                    owner_id=row_owner_key,
                     before=before_count,
                     after=after_count,
                     fail_hard=_is_fail_hard_mode(),
@@ -10841,6 +10855,7 @@ def _expand_selected_session_chunk_rows(
         "output_token_count": used_tokens,
         "omitted_for_budget": omitted_for_budget,
         "support_windows": support_window_count,
+        "owner_mismatch_skipped": owner_mismatch_skipped,
     }
 
 

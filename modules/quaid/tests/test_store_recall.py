@@ -24444,6 +24444,56 @@ class TestGraphFactClusterRecall:
         assert expanded[0]["session_window_expansion_source"] == "sessiondb_bridge"
         assert "blue ledger" in expanded[0]["text"]
 
+    def test_session_chunk_expansion_skips_owner_mismatch_under_failhard(self):
+        import datastore.memorydb.memory_graph as mg
+
+        calls = []
+
+        class FakeGraph:
+            def get_source_chunk(self, chunk_id, **kwargs):
+                calls.append((chunk_id, kwargs))
+                assert chunk_id == "source-center"
+                assert kwargs.get("owner_id") is None
+                assert kwargs.get("fail_hard") is True
+                return {
+                    "chunk_id": "source-center",
+                    "owner_id": "other-owner",
+                    "microchunk_id": "micro-center",
+                    "source_id": "transcript-1",
+                    "session_id": "session-1",
+                    "chunk_index": 12,
+                    "text": "Other owner transcript text.",
+                }
+
+        rows = [{
+            "id": "source-center",
+            "category": "session_chunk",
+            "source_type": "session_chunk",
+            "via": "session_chunks",
+            "text": "Other owner transcript text.",
+            "chunk_id": "source-center",
+            "session_chunk_id": "source-center",
+            "output_token_count": 8,
+        }]
+
+        with patch.object(mg, "get_graph", return_value=FakeGraph()), \
+             patch.object(mg, "_sessiondb_bridge_expand_microchunk", side_effect=AssertionError("must not expand")), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            expanded, meta = mg._expand_selected_session_chunk_rows(
+                rows,
+                owner_id="caller-owner",
+                max_chunk_tokens=80,
+                max_total_chunk_tokens=240,
+                before=1,
+                after=1,
+                query="Where was the transcript text?",
+            )
+
+        assert expanded == []
+        assert meta["expanded"] == 0
+        assert meta["owner_mismatch_skipped"] == 1
+        assert len(calls) == 1
+
     def test_final_recall_expands_selected_fact_source_chunk(self):
         import datastore.memorydb.memory_graph as mg
 
