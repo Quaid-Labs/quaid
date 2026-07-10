@@ -358,7 +358,7 @@ class RetrievalConfig:
     hyde_max_retries: int = 1  # Extra retries for HyDE route calls (fail-hard still enforced)
     lexical_anchor_timeout_ms: int = 8_000  # Fast-tier timeout for lexical anchor planning
     lexical_anchor_max_retries: int = 1  # Extra retry for transient lexical planner transport failures
-    injection_timeout_ms: int = 3_000  # Overall wall-clock budget for pre-injection recall
+    injection_timeout_ms: int = 3_000  # Overall wall-clock budget for pre-injection recall; hook injection honors this value
     injection_fanout_max: int = 5  # Max parallel HyDE queries for injection
     injection_fanout_llm_ms: int = 1_500  # LLM budget for query fanout within injection
     auto_inject_graph_depth: int = 2  # Graph traversal depth for fast auto-inject recall

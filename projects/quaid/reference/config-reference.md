@@ -7,7 +7,7 @@ Do not edit manually. Regenerate with:
 python3 modules/quaid/scripts/generate-config-reference.py
 ```
 
-Source hash: `00d6a8ce0b52`
+Source hash: `c5b080bdcfae`
 
 Notes:
 - Keys are documented in `snake_case` (loader also accepts camelCase aliases).
@@ -279,7 +279,7 @@ Notes:
 | `retrieval.hyde_max_retries` | `int` | `1` | Extra retries for HyDE route calls (fail-hard still enforced) |
 | `retrieval.lexical_anchor_timeout_ms` | `int` | `8000` | Fast-tier timeout for lexical anchor planning |
 | `retrieval.lexical_anchor_max_retries` | `int` | `1` | Extra retry for transient lexical planner transport failures |
-| `retrieval.injection_timeout_ms` | `int` | `3000` | Overall wall-clock budget for pre-injection recall; hook injection honors the configured value |
+| `retrieval.injection_timeout_ms` | `int` | `3000` | Overall wall-clock budget for pre-injection recall; hook injection honors this value |
 | `retrieval.injection_fanout_max` | `int` | `5` | Max parallel HyDE queries for injection |
 | `retrieval.injection_fanout_llm_ms` | `int` | `1500` | LLM budget for query fanout within injection |
 | `retrieval.auto_inject_graph_depth` | `int` | `2` | Graph traversal depth for fast auto-inject recall |
