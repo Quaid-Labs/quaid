@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +10,21 @@ import { ensureInstalledQuaidCli } from "../../../lib/install-cli-wrapper.mjs";
 
 function makeTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function buildClaudeWrapperForTest(setupText: string, target: string): string {
+  const start = setupText.indexOf("function _shellQuote");
+  const end = setupText.indexOf("function ensureCliShim");
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  const snippet = setupText.slice(start, end);
+  const fn = new Function(
+    "fs",
+    "path",
+    "process",
+    `${snippet}\nreturn buildClaudeCliWrapper;`,
+  )(fs, path, process) as (targetPath: string) => string;
+  return fn(target);
 }
 
 describe("install daemon policy", () => {
@@ -586,8 +602,72 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("resolveHostBinary(\"claude\"");
     expect(setupText).toContain("if (path.resolve(candidateShimPath) === resolvedTargetPath)");
     expect(setupText).toContain("wrapperScript: buildClaudeCliWrapper(target)");
+    expect(setupText).toContain(".credentials.json.quaid-run.");
+    expect(setupText).toContain("trap 'if [ -n");
+    expect(setupText).toContain("$_quaid_cc_backup");
+    expect(setupText).toContain("restored valid Claude credentials after CLI cleared the access token");
+    expect(setupText).toContain("_quaid_cc_status=$?");
+    expect(setupText).not.toContain("exec ${_shellQuote(process.execPath)} ${_shellQuote(realTarget)}");
     expect(setupText).toContain("Updated Claude Code CLI shim:");
     expect(setupText).toContain("Could not update Claude Code CLI shim automatically.");
+  });
+
+  it("Claude Code shim restores a valid credential cleared by the CLI", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+    const tmp = makeTempDir("quaid-claude-shim-");
+    try {
+      const realCli = path.join(tmp, "cli.js");
+      fs.writeFileSync(
+        realCli,
+        [
+          "const fs = require('fs');",
+          "const path = require('path');",
+          "const creds = path.join(process.env.HOME, '.claude', '.credentials.json');",
+          "fs.writeFileSync(creds, JSON.stringify({ claudeAiOauth: { accessToken: '', refreshToken: 'placeholder-not-used-accesstoken-valid-48h', expiresAt: 0 } }) + '\\n');",
+          "process.exit(7);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const wrapperPath = path.join(tmp, "claude");
+      fs.writeFileSync(wrapperPath, buildClaudeWrapperForTest(setupText, realCli), {
+        encoding: "utf8",
+        mode: 0o755,
+      });
+      fs.chmodSync(wrapperPath, 0o755);
+
+      const home = path.join(tmp, "home");
+      const claudeDir = path.join(home, ".claude");
+      fs.mkdirSync(claudeDir, { recursive: true });
+      const credsPath = path.join(claudeDir, ".credentials.json");
+      const expiresAt = Date.now() + 48 * 60 * 60 * 1000;
+      fs.writeFileSync(
+        credsPath,
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "valid-access-token",
+            refreshToken: "placeholder-not-used-accesstoken-valid-48h",
+            expiresAt,
+          },
+        }) + "\n",
+        "utf8",
+      );
+
+      const result = spawnSync(wrapperPath, ["--fake"], {
+        env: { ...process.env, HOME: home },
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(7);
+      expect(result.stderr).toContain("restored valid Claude credentials");
+      const restored = JSON.parse(fs.readFileSync(credsPath, "utf8"));
+      expect(restored.claudeAiOauth.accessToken).toBe("valid-access-token");
+      expect(restored.claudeAiOauth.expiresAt).toBe(expiresAt);
+      expect(fs.readdirSync(claudeDir).some((name) => name.includes(".quaid-run."))).toBe(false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("Codex install configures hooks via the managed postinstall path", () => {
