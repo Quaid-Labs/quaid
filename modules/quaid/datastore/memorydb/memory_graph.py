@@ -23186,22 +23186,15 @@ def _ensure_fact_subject_edge(
     if str(subject_node.id) == str(fact_node.id):
         return None
 
-    existing = conn.execute(
-        "SELECT id FROM edges WHERE source_id = ? AND target_id = ? AND relation = 'has_fact' LIMIT 1",
-        (subject_node.id, fact_node.id),
-    ).fetchone()
-    if existing:
-        return str(existing[0] or "")
-
     edge = Edge.create(
         source_id=subject_node.id,
         target_id=fact_node.id,
         relation="has_fact",
         source_fact_id=fact_node.id,
     )
-    conn.execute(
+    cursor = conn.execute(
         """
-        INSERT OR REPLACE INTO edges
+        INSERT OR IGNORE INTO edges
         (id, source_id, target_id, relation, attributes, weight,
          valid_from, valid_until, created_at, source_fact_id,
          origin_package_id, origin_version_id)
@@ -23222,6 +23215,13 @@ def _ensure_fact_subject_edge(
             edge.origin_version_id,
         ),
     )
+    if getattr(cursor, "rowcount", 0) == 0:
+        existing = conn.execute(
+            "SELECT id FROM edges WHERE source_id = ? AND target_id = ? AND relation = 'has_fact' LIMIT 1",
+            (subject_node.id, fact_node.id),
+        ).fetchone()
+        if existing:
+            return str(existing[0] or "")
     return edge.id
 
 

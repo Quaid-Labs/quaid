@@ -19331,6 +19331,48 @@ class TestRecallFastHookInjectContract:
         incoming = graph.get_edges(fact_node.id, direction="in")
         assert any(edge.source_id == mei.id and edge.relation == "has_fact" for edge in incoming)
 
+    def test_ensure_fact_subject_edge_ignores_concurrent_existing_edge(self):
+        import datastore.memorydb.memory_graph as mg
+
+        subject = mg.Node.create("Person", "Mei")
+        fact = mg.Node.create("Fact", "Mei runs a ceramics practice")
+
+        class _Cursor:
+            rowcount = 0
+
+            def fetchone(self):
+                return ("existing-edge-id",)
+
+        class _Conn:
+            def __init__(self):
+                self.insert_seen = False
+                self.sql = []
+
+            def execute(self, sql, params=()):
+                del params
+                normalized = " ".join(str(sql).split())
+                self.sql.append(normalized)
+                if normalized.startswith("INSERT OR IGNORE INTO edges"):
+                    self.insert_seen = True
+                    return _Cursor()
+                if normalized.startswith("SELECT id FROM edges"):
+                    assert self.insert_seen, "edge lookup must happen after INSERT OR IGNORE"
+                    return _Cursor()
+                raise AssertionError(f"unexpected SQL: {normalized}")
+
+        conn = _Conn()
+        graph = SimpleNamespace(get_node=lambda _node_id: subject)
+
+        edge_id = mg._ensure_fact_subject_edge(
+            graph,
+            fact_node=fact,
+            conn=conn,
+            subject_entity_id=subject.id,
+        )
+
+        assert edge_id == "existing-edge-id"
+        assert conn.sql[0].startswith("INSERT OR IGNORE INTO edges")
+
     def test_graph_aware_recall_renders_inbound_edge_direction(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
