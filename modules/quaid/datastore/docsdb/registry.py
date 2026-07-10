@@ -1894,6 +1894,10 @@ class DocsRegistry:
                                 "UPDATE doc_registry SET file_path = ? WHERE id = ?",
                                 (new_path, row["id"]),
                             )
+                    chunk_replacements = [(old_prefix, new_prefix)]
+                    if old_dir is not None and new_dir is not None:
+                        chunk_replacements.append((str(old_dir), str(new_dir)))
+                    self._rewrite_doc_chunk_source_prefixes_on_conn(conn, chunk_replacements)
 
                 if db_defn:
                     self._write_project_definition_row_on_conn(conn, new_name, db_defn)
@@ -1948,6 +1952,45 @@ class DocsRegistry:
         result = {"renamed": renamed, "dir_moved": dir_moved}
         print(f"Renamed project '{old_name}' -> '{new_name}': {renamed} docs updated, dir_moved={dir_moved}")
         return result
+
+    def _rewrite_doc_chunk_source_prefixes_on_conn(
+        self,
+        conn: sqlite3.Connection,
+        replacements: List[Tuple[str, str]],
+    ) -> int:
+        """Rewrite docs RAG source paths after a project directory rename."""
+        updated = 0
+        seen: set[Tuple[str, str]] = set()
+        try:
+            for old_prefix, new_prefix in replacements:
+                old_base = str(old_prefix or "").rstrip("/")
+                new_base = str(new_prefix or "").rstrip("/")
+                key = (old_base, new_base)
+                if not old_base or not new_base or key in seen:
+                    continue
+                seen.add(key)
+                exact = conn.execute(
+                    "UPDATE doc_chunks SET source_file = ? WHERE source_file = ?",
+                    (new_base, old_base),
+                )
+                updated += max(exact.rowcount, 0)
+
+                old_with_sep = f"{old_base}/"
+                new_with_sep = f"{new_base}/"
+                cursor = conn.execute(
+                    """
+                    UPDATE doc_chunks
+                    SET source_file = ? || substr(source_file, ?)
+                    WHERE substr(source_file, 1, ?) = ?
+                    """,
+                    (new_with_sep, len(old_with_sep) + 1, len(old_with_sep), old_with_sep),
+                )
+                updated += max(cursor.rowcount, 0)
+        except sqlite3.OperationalError as exc:
+            if "no such table: doc_chunks" in str(exc).lower():
+                return updated
+            raise
+        return updated
 
     def _remove_project_rag_chunks(
         self,

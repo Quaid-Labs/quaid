@@ -1465,6 +1465,54 @@ A test project.
             "projects/renamed-proj/docs",
         ]
 
+    def test_rename_rewrites_doc_chunk_source_files(self, setup_env):
+        """rename_project keeps docs RAG chunk source paths aligned."""
+        from lib.database import get_connection
+
+        r = _get_registry()
+        visible_home = setup_env.parents[1]
+        old_note = visible_home / "projects" / "test-project" / "notes.md"
+        old_note.write_text("# Notes\n", encoding="utf-8")
+        r.register("projects/test-project/notes.md", project="test-project")
+
+        with get_connection(_tmp_db) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS doc_chunks (
+                    id TEXT PRIMARY KEY,
+                    source_file TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    section_header TEXT,
+                    embedding BLOB,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                )
+                """
+            )
+            conn.executemany(
+                """
+                INSERT INTO doc_chunks (id, source_file, chunk_index, content, embedding)
+                VALUES (?, ?, ?, ?, X'00')
+                """,
+                [
+                    ("abs:0", str(old_note), 0, "absolute chunk"),
+                    ("rel:0", "projects/test-project/relative.md", 0, "relative chunk"),
+                    ("other:0", "projects/test-project-other/notes.md", 0, "other chunk"),
+                ],
+            )
+
+        r.rename_project("test-project", "renamed-proj")
+
+        with get_connection(_tmp_db) as conn:
+            rows = {
+                row["id"]: row["source_file"]
+                for row in conn.execute("SELECT id, source_file FROM doc_chunks ORDER BY id").fetchall()
+            }
+        assert rows["abs:0"] == str(visible_home / "projects" / "renamed-proj" / "notes.md")
+        assert rows["rel:0"] == "projects/renamed-proj/relative.md"
+        assert rows["other:0"] == "projects/test-project-other/notes.md"
+
     def test_rename_global_registry_failure_raises_when_fail_hard(self, setup_env, monkeypatch):
         from datastore.docsdb import registry as registry_mod
 
