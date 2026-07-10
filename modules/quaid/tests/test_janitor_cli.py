@@ -221,6 +221,26 @@ def test_write_janitor_stats_fallback_honors_quaid_now(monkeypatch, tmp_path):
     assert stats["last_run"] == "2026-02-03T04:05:06+00:00"
 
 
+def test_atomic_write_text_cleans_temp_file_on_replace_failure(monkeypatch, tmp_path):
+    from core.lifecycle import janitor
+
+    target = tmp_path / "janitor-stats.json"
+    original_replace = os.replace
+
+    def fail_replace(src, dst):
+        if Path(src).parent == tmp_path and Path(dst) == target:
+            raise OSError("replace failed")
+        return original_replace(src, dst)
+
+    monkeypatch.setattr(janitor.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        janitor._atomic_write_text(target, "payload")
+
+    assert not target.exists()
+    assert not list(tmp_path.glob("tmp*"))
+
+
 def test_janitor_main_routes_all_apply_through_supervisor_request(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))

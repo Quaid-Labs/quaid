@@ -856,11 +856,21 @@ def _pending_approvals_md_path() -> Path:
 
 def _atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(path.parent)) as tmp:
-        tmp.write(text)
-        tmp.flush()
-        tmp_path = Path(tmp.name)
-    os.replace(tmp_path, path)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(path.parent)) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(text)
+            tmp.flush()
+        os.replace(tmp_path, path)
+        tmp_path = None
+    except Exception:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
     try:
         os.chmod(path, 0o600)
     except Exception as exc:
