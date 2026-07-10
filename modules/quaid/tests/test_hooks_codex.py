@@ -1,5 +1,6 @@
 """Tests for Codex-specific hook behavior."""
 
+import fcntl
 import io
 import json
 import os
@@ -120,6 +121,40 @@ def test_read_stdin_json_logs_malformed_payload_when_fail_open(monkeypatch, capl
         monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
         with caplog.at_level("WARNING", logger="core.interface.hooks"):
             assert hooks._read_stdin_json() == {}
+    finally:
+        stdin_handle.close()
+
+    assert "Failed reading hook stdin JSON; treating payload as empty" in caplog.text
+
+
+def test_read_stdin_json_restores_blocking_mode_after_unexpected_read_error(monkeypatch, caplog):
+    from core.interface import hooks
+
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, b'{"session_id":"sess"}')
+    finally:
+        os.close(write_fd)
+
+    stdin_handle = os.fdopen(read_fd, "r", encoding="utf-8", closefd=True)
+    try:
+        fd = stdin_handle.fileno()
+        original_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+        fcntl.fcntl(fd, fcntl.F_SETFL, original_flags & ~os.O_NONBLOCK)
+        original_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+
+        def raise_unexpected(_fd, _size):
+            raise RuntimeError("stdin read exploded")
+
+        monkeypatch.setattr(hooks.sys, "stdin", stdin_handle)
+        monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+        monkeypatch.setattr(hooks.os, "read", raise_unexpected)
+
+        with caplog.at_level("WARNING", logger="core.interface.hooks"):
+            assert hooks._read_stdin_json() == {}
+
+        restored_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+        assert restored_flags & os.O_NONBLOCK == original_flags & os.O_NONBLOCK
     finally:
         stdin_handle.close()
 
