@@ -544,6 +544,28 @@ class TestPlatformSchedulerServer:
         with pytest.raises(RuntimeError, match="spawn failed"):
             platform_scheduler.ensure_scheduler_alive(base, "tp")
 
+    def test_ensure_scheduler_alive_returns_child_pid_when_readiness_probe_lags_failhard(
+        self, monkeypatch, caplog
+    ):
+        from core import platform_scheduler
+
+        base = _short_tmp()
+        self._bases.append(base)
+        monkeypatch.setattr(platform_scheduler, "_read_pid", lambda *_args: None)
+        monkeypatch.setattr(platform_scheduler, "start_scheduler", lambda *_args, **_kwargs: 4242)
+        monkeypatch.setattr(
+            platform_scheduler,
+            "_connect_scheduler_socket",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError("not ready yet")),
+        )
+        monkeypatch.setattr(platform_scheduler, "_fail_hard_enabled", lambda: True)
+
+        with caplog.at_level("WARNING"):
+            assert platform_scheduler.ensure_scheduler_alive(base, "tp") == 4242
+
+        assert "readiness probe failed" in caplog.text
+        assert "not ready yet" in caplog.text
+
     def test_ensure_scheduler_alive_handles_lock_open_failure_when_fail_open(self, monkeypatch):
         from core import platform_scheduler
         import builtins

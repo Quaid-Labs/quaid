@@ -485,28 +485,35 @@ def ensure_scheduler_alive(quaid_home: Path, platform: str, total_slots: int = _
         # Double-check after acquiring lock
         pid = _read_pid(quaid_home, platform)
         if pid is not None:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-            fd.close()
             return pid
         child_pid = start_scheduler(quaid_home, platform, total_slots)
         # The socket path appears at bind() before listen(); require a real
         # connection so immediate clients do not fail open without slot gating.
-        ready_sock = _connect_scheduler_socket(quaid_home, platform, timeout_s=5.0)
-        ready_sock.close()
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        fd.close()
-        lock_path.unlink(missing_ok=True)
+        try:
+            ready_sock = _connect_scheduler_socket(quaid_home, platform, timeout_s=5.0)
+            ready_sock.close()
+        except Exception as e:
+            logger.warning("platform scheduler started pid=%s but readiness probe failed: %s", child_pid, e)
         return child_pid
     except Exception as e:
         logger.warning("ensure_scheduler_alive failed: %s", e)
+        if _fail_hard_enabled():
+            raise
+        return -1
+    finally:
         if fd is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except Exception:
+                pass
             try:
                 fd.close()
             except Exception:
                 pass
-        if _fail_hard_enabled():
-            raise
-        return -1
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def get_platform_scheduler_client(quaid_home: Path, platform: str, total_slots: int = _DEFAULT_SLOTS) -> Optional[PlatformSchedulerClient]:
