@@ -243,7 +243,7 @@ def _load_lightweight_config() -> Dict[str, Any]:
                 raise
             logger.warning("Failed to parse lightweight config %s: %s", config_path, exc)
             continue
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             from lib.fail_policy import is_fail_hard_enabled
 
             if is_fail_hard_enabled():

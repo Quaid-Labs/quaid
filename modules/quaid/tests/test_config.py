@@ -2124,6 +2124,41 @@ class TestLightweightLibConfig:
         with patch("lib.fail_policy.is_fail_hard_enabled", return_value=False):
             assert get_ollama_url() == "http://localhost:11434"
 
+    def test_lightweight_config_invalid_utf8_raises_when_failhard_enabled(self, tmp_path, monkeypatch):
+        from lib.config import get_ollama_url
+
+        global_cfg = tmp_path / "shared" / "config" / "global" / "config.json"
+        global_cfg.parent.mkdir(parents=True, exist_ok=True)
+        global_cfg.write_bytes(b"\xff\xfe")
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+        monkeypatch.delenv("OLLAMA_URL", raising=False)
+
+        with patch("lib.fail_policy.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(UnicodeDecodeError):
+                get_ollama_url()
+
+    def test_lightweight_config_invalid_utf8_defaults_when_failhard_disabled(
+        self,
+        tmp_path,
+        monkeypatch,
+        caplog,
+    ):
+        from lib.config import get_ollama_url
+
+        global_cfg = tmp_path / "shared" / "config" / "global" / "config.json"
+        global_cfg.parent.mkdir(parents=True, exist_ok=True)
+        global_cfg.write_bytes(b"\xff\xfe")
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+        monkeypatch.delenv("OLLAMA_URL", raising=False)
+
+        with patch("lib.fail_policy.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="lib.config"):
+            assert get_ollama_url() == "http://localhost:11434"
+
+        assert "Failed to read lightweight config" in caplog.text
+
     def test_lightweight_config_parse_error_uses_valid_failhard_policy(self, tmp_path, monkeypatch):
         from lib.config import get_ollama_url
 
