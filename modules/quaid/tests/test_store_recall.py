@@ -1464,6 +1464,49 @@ class TestStoreValidation:
             assert node is not None
             assert node.owner_id == get_config().users.default_owner
 
+    def test_missing_owner_config_failure_warns_and_defaults(self, tmp_path, caplog):
+        import datastore.memorydb.memory_graph as mg
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+        adapter = SimpleNamespace(data_dir=lambda: tmp_path / "data")
+        breaker = SimpleNamespace(allows_writes=lambda: True, status="ok")
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("lib.adapter.get_adapter", return_value=adapter), \
+             patch("lib.circuit_breaker.check_write_allowed", return_value=breaker), \
+             patch.object(mg, "_get_memory_config", side_effect=RuntimeError("config broken")), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=False), \
+             caplog.at_level("WARNING", logger="datastore.memorydb.memory_graph"):
+            result = store("Quaid keeps the brass compass", owner_id=None, skip_dedup=True)
+
+        node = graph.get_node(result["id"])
+        assert node is not None
+        assert node.owner_id == "default"
+        assert "store failed to read default owner" in caplog.text
+        assert "config broken" in caplog.text
+
+    def test_missing_owner_config_failure_respects_failhard(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+        adapter = SimpleNamespace(data_dir=lambda: tmp_path / "data")
+        breaker = SimpleNamespace(allows_writes=lambda: True, status="ok")
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("lib.adapter.get_adapter", return_value=adapter), \
+             patch("lib.circuit_breaker.check_write_allowed", return_value=breaker), \
+             patch.object(mg, "_get_memory_config", side_effect=RuntimeError("config broken")), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="store failed to read default owner") as excinfo:
+                store("Quaid keeps the brass compass", owner_id=None, skip_dedup=True)
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "config broken" in str(excinfo.value.__cause__)
+
     def test_confidence_above_one_raises(self, tmp_path):
         from datastore.memorydb.memory_graph import store
         with patch("datastore.memorydb.memory_graph.get_graph") as mock_gg:

@@ -23290,7 +23290,13 @@ def store(
     if not owner_id:
         try:
             owner_id = _get_memory_config().users.default_owner
-        except Exception:
+        except Exception as exc:
+            if _is_fail_hard_mode():
+                raise RuntimeError("store failed to read default owner") from exc
+            logger.warning(
+                "store failed to read default owner; using 'default': %s",
+                exc,
+            )
             owner_id = "default"
     owner_id = str(owner_id).strip()
     if not owner_id:
