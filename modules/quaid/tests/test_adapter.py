@@ -3265,6 +3265,35 @@ class TestCodexAdapter:
         assert adapter.owns_session_path(session_file) is False
         assert adapter.get_session_path(session_id) is None
 
+    def test_get_session_path_skips_rollouts_deleted_before_sort(self, tmp_path, monkeypatch):
+        session_id = "019d4367-1794-7fc2-84f3-bb30ba99a24f"
+        project_dir = tmp_path / "cdx-project"
+        project_dir.mkdir()
+        sessions_root = tmp_path / ".codex" / "sessions" / "2026" / "04" / "20"
+        sessions_root.mkdir(parents=True)
+        stale_file = sessions_root / f"rollout-2026-04-20T12-00-00-{session_id}.jsonl"
+        live_file = sessions_root / f"rollout-2026-04-20T12-00-01-{session_id}.jsonl"
+        for path in (stale_file, live_file):
+            path.write_text(
+                json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(project_dir)}}) + "\n",
+                encoding="utf-8",
+            )
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(project_dir))
+        original_stat = Path.stat
+
+        def stat_with_deleted_file(path, *args, **kwargs):
+            if path == stale_file:
+                raise OSError("deleted during scan")
+            return original_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", stat_with_deleted_file)
+        adapter = CodexAdapter()
+
+        assert adapter.get_session_path(session_id) == live_file
+
     def test_get_session_path_from_cursor_logs_failure_when_fail_open(self, tmp_path, monkeypatch, caplog):
         from adaptors.codex import adapter as codex_adapter
 
@@ -3363,7 +3392,49 @@ class TestCodexAdapter:
         adapter._write_last_session_id("new-thread")
 
         assert "Failed to write Codex last session id: disk full" in capsys.readouterr().err
-        assert adapter._read_last_session_id() == ""
+        assert adapter._read_last_session_id() == "new-thread"
+
+    def test_check_session_transition_does_not_repeat_after_fail_open_state_write(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(tmp_path))
+        adapter = CodexAdapter()
+        monkeypatch.setattr(adapter, "data_dir", lambda: tmp_path / "data")
+        adapter._write_last_session_id("old-thread")
+        ended = (
+            tmp_path
+            / ".codex"
+            / "sessions"
+            / "2026"
+            / "04"
+            / "14"
+            / "rollout-2026-04-14T12-00-00-old-thread.jsonl"
+        )
+        ended.parent.mkdir(parents=True)
+        ended.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "old-thread", "cwd": str(tmp_path)}}) + "\n",
+            encoding="utf-8",
+        )
+        original_write_text = Path.write_text
+
+        def failing_write_text(path, *args, **kwargs):
+            if path == adapter._last_session_path():
+                raise OSError("disk full")
+            return original_write_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", failing_write_text)
+        monkeypatch.setattr("adaptors.codex.adapter.is_fail_hard_enabled", lambda: False)
+
+        first = adapter.check_session_transition({"thread_id": "new-thread"})
+        second = adapter.check_session_transition({"thread_id": "new-thread"})
+
+        assert first is not None
+        assert first["ended_session_id"] == "old-thread"
+        assert second is None
+        assert adapter._read_last_session_id() == "new-thread"
+        assert "Failed to write Codex last session id: disk full" in capsys.readouterr().err
 
     def test_read_last_session_id_raises_corrupt_state_when_failhard_enabled(self, tmp_path, monkeypatch):
         adapter = CodexAdapter(home=tmp_path)

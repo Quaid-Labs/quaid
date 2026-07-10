@@ -123,6 +123,7 @@ class CodexAdapter(QuaidAdapter):
 
     def __init__(self, home: Optional[Path] = None):
         self._home = home
+        self._last_session_id_write_fallback = ""
 
     def quaid_home(self) -> Path:
         if self._home is not None:
@@ -506,6 +507,8 @@ class CodexAdapter(QuaidAdapter):
         return self.data_dir() / "codex-last-session.json"
 
     def _read_last_session_id(self) -> str:
+        if self._last_session_id_write_fallback:
+            return self._last_session_id_write_fallback
         try:
             data = json.loads(self._last_session_path().read_text(encoding="utf-8"))
             return str(data.get("session_id") or "").strip()
@@ -522,10 +525,12 @@ class CodexAdapter(QuaidAdapter):
             path = self._last_session_path()
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps({"session_id": session_id}), encoding="utf-8")
+            self._last_session_id_write_fallback = ""
         except OSError as exc:
             print(f"[adapter][WARN] Failed to write Codex last session id: {exc}", file=sys.stderr)
             if is_fail_hard_enabled():
                 raise
+            self._last_session_id_write_fallback = str(session_id or "").strip()
 
     def _extract_hook_session_id(self, hook_input: dict) -> str:
         if not isinstance(hook_input, dict):
@@ -638,8 +643,14 @@ class CodexAdapter(QuaidAdapter):
             elif allow_unclassified and not actual:
                 unclassified_matches.append(path)
         matches = owned_matches or unclassified_matches
-        matches.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-        return matches[0] if matches else None
+        existing_matches: list[tuple[float, Path]] = []
+        for path in matches:
+            try:
+                existing_matches.append((path.stat().st_mtime, path))
+            except OSError:
+                continue
+        existing_matches.sort(key=lambda item: item[0], reverse=True)
+        return existing_matches[0][1] if existing_matches else None
 
     def _get_session_path_from_cursor(self, session_id: str) -> Optional[Path]:
         """Return the transcript path this instance already recorded for a session."""
