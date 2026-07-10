@@ -241,6 +241,15 @@ def _acquire_process_lock(timeout_seconds: Optional[float], pool_kind: str = "fa
             now = time.monotonic()
             remaining = deadline - now
             if remaining <= 0:
+                logger.warning(
+                    "Timed out waiting for cross-process LLM %s worker slot after %.1fs "
+                    "(slots=%d, timeout=%.1fs, lock_dir=%s)",
+                    str(pool_kind or "fast"),
+                    max(0.0, effective_timeout),
+                    len(lock_paths),
+                    effective_timeout,
+                    lock_paths[0].parent,
+                )
                 raise TimeoutError("Timed out waiting for cross-process LLM worker slot") from last_blocked_error
             if now >= next_warn_at:
                 warned = True

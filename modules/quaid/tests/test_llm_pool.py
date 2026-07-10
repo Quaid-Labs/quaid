@@ -414,7 +414,7 @@ class TestProcessLock:
                 fcntl.flock(held_fd, fcntl.LOCK_UN)
 
         assert elapsed < 1.0
-        assert "Still waiting for cross-process LLM fast worker slot" in caplog.text
+        assert "Timed out waiting for cross-process LLM fast worker slot" in caplog.text
         assert "timeout=0.1s" in caplog.text
 
     def test_process_lock_default_timeout_invalid_env_raises_when_failhard(self, monkeypatch):
