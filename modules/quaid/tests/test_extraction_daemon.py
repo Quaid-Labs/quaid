@@ -9918,6 +9918,29 @@ class TestSignalRoundTrip:
         assert extraction_daemon._processing_lock_active("source-empty-lock") is False
         assert not lock_path.exists()
 
+    def test_processing_lock_active_treats_disappeared_file_as_inactive(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        lock_path = extraction_daemon._processing_lock_path("source-vanished-lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text("", encoding="utf-8")
+        old_time = time.time() - 60
+        os.utime(lock_path, (old_time, old_time))
+        real_open = extraction_daemon.os.open
+
+        def delete_before_open(path, flags, mode=0o777, *, dir_fd=None):
+            if Path(path) == lock_path and lock_path.exists():
+                lock_path.unlink()
+            if dir_fd is None:
+                return real_open(path, flags, mode)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        monkeypatch.setattr(extraction_daemon.os, "open", delete_before_open)
+
+        assert extraction_daemon._processing_lock_active("source-vanished-lock") is False
+        assert not lock_path.exists()
+
     def test_processing_lock_active_preserves_locked_file_even_if_pid_dead(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")

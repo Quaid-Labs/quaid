@@ -3034,6 +3034,8 @@ def _processing_lock_unlocked(lock_path: Path) -> bool:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         fcntl.flock(fd, fcntl.LOCK_UN)
         return True
+    except FileNotFoundError:
+        return True
     except (OSError, IOError):
         return False
     finally:
