@@ -444,6 +444,15 @@ class TestSummarizeAllEntities:
             assert stats["generated"] == 0
             assert stats["skipped"] == 0
 
+    def test_empty_entity_type_filter_is_noop(self):
+        from datastore.memorydb.memory_graph import summarize_all_entities
+
+        with patch("datastore.memorydb.memory_graph.get_graph") as mock_get_graph:
+            stats = summarize_all_entities(entity_types=[], use_llm=False)
+
+        assert stats == {"generated": 0, "skipped": 0, "failed": 0, "total": 0}
+        mock_get_graph.assert_not_called()
+
     def test_returns_correct_stats_structure(self, tmp_path):
         from datastore.memorydb.memory_graph import summarize_all_entities
         graph, _ = _make_graph(tmp_path)

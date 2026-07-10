@@ -25207,11 +25207,14 @@ def summarize_all_entities(owner_id: str = None, use_llm: bool = True, entity_ty
     Returns:
         Dict with counts of summaries generated, skipped, and failed.
     """
+    stats = {"generated": 0, "skipped": 0, "failed": 0, "total": 0}
+
     if entity_types is None:
         entity_types = ["Person", "Place", "Concept"]
+    elif not entity_types:
+        return stats
 
     graph = get_graph()
-    stats = {"generated": 0, "skipped": 0, "failed": 0, "total": 0}
 
     with graph._get_conn() as conn:
         query = f"SELECT id, name, type, attributes FROM nodes WHERE type IN ({','.join('?' for _ in entity_types)})"
