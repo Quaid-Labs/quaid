@@ -215,6 +215,21 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
         pass
 
 
+def _write_text_atomic(path: Path, text: str) -> None:
+    _ensure_parent(path)
+    tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+    try:
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp_path.replace(path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+        raise
+
+
 def _state_path() -> Path:
     return get_adapter().data_dir() / _STATE_FILE
 
@@ -482,7 +497,7 @@ def clear_pending_notices_by_source(*, sources: set[str] | list[str] | tuple[str
 
         if kept_entries or malformed_lines:
             rows = [json.dumps(entry, sort_keys=True) for entry in kept_entries] + malformed_lines
-            pending_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            _write_text_atomic(pending_path, "\n".join(rows) + "\n")
         else:
             pending_path.unlink(missing_ok=True)
         total_removed += removed

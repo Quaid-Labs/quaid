@@ -660,6 +660,31 @@ class TestNotifyAgent:
         assert "stale-provider" not in remaining
         assert "nightly summary" in remaining
 
+    def test_clear_pending_notices_by_source_preserves_original_on_replace_failure(self, tmp_path):
+        from adaptors.claude_code.adapter import ClaudeCodeAdapter
+
+        adapter = ClaudeCodeAdapter(home=tmp_path)
+        pending_path = adapter.data_dir() / "cc-pending-notifications.jsonl"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        original = (
+            json.dumps({"message": "[Quaid error] [provider] invalid-model-a"}) + "\n"
+            + json.dumps({"message": "[Quaid warning] [janitor] nightly summary"}) + "\n"
+        )
+        pending_path.write_text(original, encoding="utf-8")
+
+        def fail_replace(self, target):
+            if Path(target) == pending_path and self.name.startswith(f"{pending_path.name}.tmp-"):
+                raise OSError("replace failed")
+            return Path.replace(self, target)
+
+        with patch("lib.agent_notice.get_adapter", return_value=adapter), \
+             patch("lib.agent_notice.Path.replace", fail_replace):
+            with pytest.raises(OSError, match="replace failed"):
+                clear_pending_notices_by_source(sources={"provider"})
+
+        assert pending_path.read_text(encoding="utf-8") == original
+        assert not list(pending_path.parent.glob(f"{pending_path.name}.tmp-*"))
+
 
 class TestDeferredNotifyCli:
     def test_deferred_status_cli_uses_wrapper_with_options(self, monkeypatch, capsys):
