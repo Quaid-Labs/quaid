@@ -2124,6 +2124,18 @@ describe("lifecycle signal detection", () => {
     expect(opts.ranking?.sourceTypeBoosts?.assistant).toBeGreaterThan(1);
   });
 
+  it("does not infer agent-action auto-inject intent from content-domain nouns alone", () => {
+    const opts = __test.buildAutoInjectRecallOptions(
+      "quaid restaurant podcast",
+      6,
+      { all: true },
+      true,
+    );
+
+    expect(opts.intent).toBe("general");
+    expect(opts.ranking).toBeUndefined();
+  });
+
   it("focuses agent recall callback queries on the recalled subject", () => {
     const opts = __test.buildAutoInjectRecallOptions(
       "What did the agent recall about Biscuit that surprised Maya?",

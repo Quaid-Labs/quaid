@@ -5894,7 +5894,7 @@ function _inferAutoInjectIntent(query: string): "general" | "agent_actions" {
   if (!normalized) return "general";
   const agentCue = /\b(?:agent|assistant|ai|alfie|quaid)\b/.test(normalized);
   if (!agentCue) return "general";
-  const actionCue = /\b(?:find|found|suggest|suggested|recommend|recommended|build|built|implement|implemented|recall|recalled|leave|left|decide|decided|create|created|write|wrote|explain|explained|api|alternative|restaurant|podcast|bug|architecture|decision)\b/.test(normalized);
+  const actionCue = /\b(?:find|found|suggest|suggested|recommend|recommended|build|built|implement|implemented|recall|recalled|leave|left|decide|decided|create|created|write|wrote|explain|explained|api|alternative|bug|architecture|decision)\b/.test(normalized);
   return actionCue ? "agent_actions" : "general";
 }
 
