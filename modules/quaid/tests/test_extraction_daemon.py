@@ -9499,8 +9499,32 @@ class TestSignalRoundTrip:
     def test_write_rolling_metric_holds_flock_through_append(self, monkeypatch, tmp_path):
         monkeypatch.setattr(extraction_daemon, "_instance_root", lambda: tmp_path)
         real_flock = extraction_daemon.fcntl.flock
+        real_open = Path.open
         lock_held = {"value": False}
         events = []
+        metric_path = tmp_path / "logs" / "daemon" / "rolling-extraction.jsonl"
+
+        class _TrackingFile:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __enter__(self):
+                self._inner.__enter__()
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return self._inner.__exit__(exc_type, exc, tb)
+
+            def fileno(self):
+                return self._inner.fileno()
+
+            def write(self, data):
+                events.append(("write", lock_held["value"]))
+                return self._inner.write(data)
+
+            def flush(self):
+                events.append(("flush", lock_held["value"]))
+                return self._inner.flush()
 
         def tracking_flock(fd, op):
             if op & extraction_daemon.fcntl.LOCK_EX:
@@ -9511,15 +9535,22 @@ class TestSignalRoundTrip:
                 lock_held["value"] = False
             return real_flock(fd, op)
 
+        def tracking_open(self, *args, **kwargs):
+            opened = real_open(self, *args, **kwargs)
+            mode = args[0] if args else kwargs.get("mode", "r")
+            if self == metric_path and "a" in mode:
+                return _TrackingFile(opened)
+            return opened
+
         monkeypatch.setattr(extraction_daemon.fcntl, "flock", tracking_flock)
+        monkeypatch.setattr(Path, "open", tracking_open)
 
         extraction_daemon.write_rolling_metric("rolling_flush", "sess-lock", payload="x" * 64)
 
-        metric_path = tmp_path / "logs" / "daemon" / "rolling-extraction.jsonl"
         rows = metric_path.read_text(encoding="utf-8").splitlines()
         assert len(rows) == 1
         assert json.loads(rows[0])["session_id"] == "sess-lock"
-        assert events == ["lock", ("unlock", True)]
+        assert events == ["lock", ("write", True), ("flush", True), ("unlock", True)]
 
     def test_processing_lock_active_reaps_old_unlocked_empty_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))

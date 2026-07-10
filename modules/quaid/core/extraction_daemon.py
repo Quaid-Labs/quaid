@@ -4251,6 +4251,7 @@ def write_rolling_metric(event: str, session_id: str, **data: Any) -> None:
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
             try:
                 fh.write(json.dumps(payload) + "\n")
+                fh.flush()
             finally:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
     except OSError as exc:
