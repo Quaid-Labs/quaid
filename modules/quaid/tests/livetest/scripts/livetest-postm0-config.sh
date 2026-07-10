@@ -19,6 +19,7 @@
 #   capture.chunk_tokens: 1500
 #   claude-code only: models.fastReasoning: claude-haiku-4-5-20251001
 #   claude-code only: models.deepReasoning: claude-sonnet-4-6
+#   openclaw only: models.fastReasoning: claude-haiku-4-5
 #   openclaw only: models.deepReasoning: claude-sonnet-4-6
 #   codex only: models.deepReasoning: gpt-5.4
 #
@@ -88,6 +89,8 @@ if platform in {'claude-code', 'openclaw'}:
     models['deepReasoning'] = 'claude-sonnet-4-6'
     if platform == 'claude-code':
         models['fastReasoning'] = 'claude-haiku-4-5-20251001'
+    elif platform == 'openclaw':
+        models['fastReasoning'] = 'claude-haiku-4-5'
 elif platform == 'codex':
     overrides.setdefault('models', {})['deepReasoning'] = 'gpt-5.4'
 def merge(base, over):

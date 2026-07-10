@@ -190,10 +190,12 @@ not a condition to work around with manual signals.
 Run `scripts/livetest-postm0-config.sh <cc|oc|cdx|all>` and verify that
 `capture.chunk_tokens` resolves to `1500` for every installed instance, and
 that CC's `models.fastReasoning` is set to `claude-haiku-4-5-20251001`,
+that OC's `models.fastReasoning` is set to `claude-haiku-4-5`,
 before dispatching any tester to M1. Missing this step makes M2 Part B
 (rolling extraction) impossible to pass because the 1500-token fixture
 cannot cross the production default of 8000 tokens, and makes CC M6 Part B
-miss provider-error coverage because the fast model is unset.
+miss provider-error coverage because the fast model is unset. OC must use
+Claude models because Quaid extraction for OpenClaw runs through Anthropic.
 
 For `oc`/`all`, the same script also registers the VM Codex OAuth access token
 with OpenClaw via `openclaw models auth paste-token --provider openai` before
@@ -226,6 +228,9 @@ Overrides to apply at post-M0 (safe for all platforms, all milestones):
   (production default 8000; smaller so rolling fires inside a test session).
 - CC only: `models.fastReasoning: claude-haiku-4-5-20251001` — explicit
   fast recall model for M6 provider-error validation.
+- OC only: `models.fastReasoning: claude-haiku-4-5` and
+  `models.deepReasoning: claude-sonnet-4-6` — OpenClaw's Quaid extraction
+  uses Anthropic provider credentials.
 
 Do NOT apply `capture.inactivityTimeoutMinutes: 1` globally or run-wide.
 It gets flipped to `1` **only on the platform currently running M4**, and
@@ -244,8 +249,15 @@ overrides = {
     'livetest': {'enableExtractionBufferLog': True},
     'capture': {'chunk_tokens': 1500}
 }
-if "${platform}" == "claude-code":
-    overrides.setdefault('models', {})['fastReasoning'] = 'claude-haiku-4-5-20251001'
+if "${platform}" in ("claude-code", "openclaw"):
+    models = overrides.setdefault('models', {})
+    models['deepReasoning'] = 'claude-sonnet-4-6'
+    if "${platform}" == "claude-code":
+        models['fastReasoning'] = 'claude-haiku-4-5-20251001'
+    else:
+        models['fastReasoning'] = 'claude-haiku-4-5'
+elif "${platform}" == "codex":
+    overrides.setdefault('models', {})['deepReasoning'] = 'gpt-5.4'
 def merge(b, o):
     r = json.loads(json.dumps(b))
     for k, v in o.items():
@@ -254,8 +266,8 @@ def merge(b, o):
 merged = merge(existing, overrides)
 json.dump(merged, open(p, 'w'), indent=2)
 print('merged platform config:', p)
-if "${platform}" == "claude-code":
-    print('models.fastReasoning:', merged.get('models', {}).get('fastReasoning'))
+print('models.fastReasoning:', merged.get('models', {}).get('fastReasoning'))
+print('models.deepReasoning:', merged.get('models', {}).get('deepReasoning'))
 PYEOF
 "
 done
@@ -936,8 +948,9 @@ done
 
 **Apply per-platform livetest overrides** — see the "Post-first-M0: Livetest
 Config Overrides (per-platform)" section above. Write `enableExtractionBufferLog`
-and `chunk_tokens=1500` into each platform's config (OC, CC, CDX), and write
-CC `models.fastReasoning=claude-haiku-4-5-20251001`; do NOT write
+and `chunk_tokens=1500` into each platform's config (OC, CC, CDX), write
+CC `models.fastReasoning=claude-haiku-4-5-20251001`, and write
+OC `models.fastReasoning=claude-haiku-4-5`; do NOT write
 `inactivityTimeoutMinutes` globally. The M4 idle-timeout flip is per-platform
 and only around M4 on the lane running that milestone.
 
