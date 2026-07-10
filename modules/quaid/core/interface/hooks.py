@@ -1216,7 +1216,13 @@ def _collect_project_doc_context_sections(projects_dir: Path, *, hook_cwd: str =
         if _should_inject_full_project_context(project_name):
             for doc_file in [doc for doc in ("TOOLS.md", "AGENTS.md") if (project_dir / doc).is_file()]:
                 fpath = project_dir / doc_file
-                content = _strip_tools_domain_block(doc_file, fpath.read_text(encoding="utf-8").strip())
+                try:
+                    content = _strip_tools_domain_block(doc_file, fpath.read_text(encoding="utf-8").strip())
+                except OSError as exc:
+                    logger.warning("Failed reading project context file %s: %s", fpath, exc)
+                    if _fail_hard_enabled():
+                        raise
+                    continue
                 if content:
                     sections.append(f"--- {project_name}/{doc_file} ---\n{content}")
         else:
@@ -1747,13 +1753,16 @@ def hook_inject(args):
     try:
         turn_refresh_context = _build_turn_based_refresh_context(session_id, prompt=query)
     except Exception as exc:
-        turn_refresh_context = ""
         _write_hook_trace("hook.inject.context_refresh_error", {
             "query": query[:160],
             "session_id": session_id,
             "strategy": _context_refresh_strategy(),
             "error": str(exc)[:500],
         })
+        logger.warning("Failed building hook context refresh: %s", exc)
+        if _fail_hard_enabled():
+            raise
+        turn_refresh_context = ""
 
     # Human-facing notices must be drained before provider/daemon/recall work
     # so a later failure cannot mark them delivered without model-visible text.

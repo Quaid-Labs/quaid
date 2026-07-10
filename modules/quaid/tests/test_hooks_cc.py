@@ -3794,6 +3794,29 @@ class TestHookInjectRecallResilience:
                 monkeypatch=monkeypatch,
             )
 
+    def test_hook_inject_context_refresh_failure_raises_when_fail_hard_enabled(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("core.interface.hooks._fail_hard_enabled", lambda: True)
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+
+        with patch(
+            "core.interface.hooks._build_turn_based_refresh_context",
+            side_effect=OSError("project context unreadable"),
+        ), pytest.raises(OSError, match="project context unreadable"):
+            _run_hook_inject(
+                {
+                    "prompt": "What project context is available?",
+                    "session_id": "sess-context-refresh-failhard",
+                    "cwd": str(tmp_path),
+                },
+                monkeypatch=monkeypatch,
+            )
+
     def test_recall_telemetry_helpers_summarize_meta_and_rows(self):
         from core.interface import hooks
 
@@ -4129,6 +4152,69 @@ class TestHookSessionInitRegistryAugmentation:
         assert content is not None
         assert "quaid/AGENTS.md" in content
         assert "fail-hard rules here" in content
+
+    def test_project_context_file_read_failure_logs_and_skips_when_fail_open(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        from core.interface import hooks
+
+        projects_dir, _identity_dir, _rules_dir = self._make_init_env(tmp_path, monkeypatch)
+
+        proj = projects_dir / "quaid"
+        proj.mkdir()
+        tools_path = proj / "TOOLS.md"
+        tools_path.write_text("# Tools\nunreadable tools", encoding="utf-8")
+        (proj / "AGENTS.md").write_text("# Agents\nreadable agents", encoding="utf-8")
+
+        original_read_text = Path.read_text
+
+        def fake_read_text(path, *args, **kwargs):
+            if path == tools_path:
+                raise OSError("permission denied")
+            return original_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", fake_read_text)
+        monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+
+        with patch("core.project_registry.list_projects", return_value={}):
+            with caplog.at_level("WARNING", logger="core.interface.hooks"):
+                sections = hooks._collect_project_doc_context_sections(projects_dir)
+
+        content = "\n\n".join(sections)
+        assert "quaid/TOOLS.md" not in content
+        assert "quaid/AGENTS.md" in content
+        assert "readable agents" in content
+        assert "Failed reading project context file" in caplog.text
+        assert "permission denied" in caplog.text
+
+    def test_project_context_file_read_failure_raises_when_fail_hard(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        from core.interface import hooks
+
+        projects_dir, _identity_dir, _rules_dir = self._make_init_env(tmp_path, monkeypatch)
+
+        proj = projects_dir / "quaid"
+        proj.mkdir()
+        tools_path = proj / "TOOLS.md"
+        tools_path.write_text("# Tools\nunreadable tools", encoding="utf-8")
+
+        original_read_text = Path.read_text
+
+        def fake_read_text(path, *args, **kwargs):
+            if path == tools_path:
+                raise OSError("permission denied")
+            return original_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", fake_read_text)
+        monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+        with patch("core.project_registry.list_projects", return_value={}):
+            with caplog.at_level("WARNING", logger="core.interface.hooks"):
+                with pytest.raises(OSError, match="permission denied"):
+                    hooks._collect_project_doc_context_sections(projects_dir)
+
+        assert "Failed reading project context file" in caplog.text
 
     def test_identity_generated_user_projection_block_is_stripped_and_snippets_render(self, tmp_path, monkeypatch):
         projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
