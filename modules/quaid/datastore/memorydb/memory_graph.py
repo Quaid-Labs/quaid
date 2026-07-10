@@ -582,7 +582,7 @@ class MemoryGraph:
     def _init_db(self):
         """Initialize database with schema."""
         schema_path = Path(__file__).resolve().parent / "schema.sql"
-        with open(schema_path) as f:
+        with open(schema_path, encoding="utf-8") as f:
             schema = f.read()
 
         with self._get_conn() as conn:

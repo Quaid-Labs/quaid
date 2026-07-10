@@ -6647,6 +6647,23 @@ class TestEntityNameIndexes:
                 ).fetchall()
             }
 
+    def test_memory_graph_reads_schema_as_utf8(self, tmp_path):
+        import builtins
+        from datastore.memorydb import memory_graph as mg
+
+        real_open = builtins.open
+        schema_opens = []
+
+        def tracking_open(file, *args, **kwargs):
+            if Path(file).name == "schema.sql":
+                schema_opens.append(kwargs.get("encoding"))
+            return real_open(file, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=tracking_open):
+            mg.MemoryGraph(db_path=tmp_path / "fresh.db")
+
+        assert schema_opens == ["utf-8"]
+
     def test_entity_name_indexes_created_on_fresh_db(self, tmp_path):
         from datastore.memorydb.memory_graph import MemoryGraph
 
