@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -32,6 +33,20 @@ from lib.fail_policy import is_fail_hard_enabled
 from lib.instance import _legacy_instance_slug_from_project_dir, instance_slug_from_project_dir
 
 logger = logging.getLogger(__name__)
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}-{time.time_ns()}")
+    try:
+        tmp_path.write_text(text, encoding="utf-8")
+        tmp_path.replace(path)
+    except Exception:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def _trace_m15(event: str, **fields) -> None:
@@ -711,18 +726,11 @@ class ClaudeCodeAdapter(QuaidAdapter):
         if not session_id:
             return
         path = self._session_transition_state_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(
-                {
-                    "session_id": session_id,
-                    "transcript_path": str(transcript_path or "").strip(),
-                },
-                indent=2,
-                sort_keys=True,
-            ) + "\n",
-            encoding="utf-8",
-        )
+        payload = {
+            "session_id": session_id,
+            "transcript_path": str(transcript_path or "").strip(),
+        }
+        _write_text_atomic(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
     def _extract_hook_session_id(self, hook_input) -> str:
         if not isinstance(hook_input, dict):

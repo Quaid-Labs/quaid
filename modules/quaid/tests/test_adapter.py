@@ -2324,6 +2324,33 @@ class TestClaudeCodeAdapter:
 
         assert adapter.get_discovery_sessions_dir() == claude_session_dir
 
+    def test_write_session_transition_state_preserves_prior_state_on_replace_failure(self, tmp_path, monkeypatch):
+        adapter = ClaudeCodeAdapter(home=tmp_path)
+        monkeypatch.setattr(adapter, "data_dir", lambda: tmp_path / "data")
+        state_path = adapter._session_transition_state_path()
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps({"session_id": "old-session", "transcript_path": "/old.jsonl"}) + "\n",
+            encoding="utf-8",
+        )
+        original_replace = Path.replace
+
+        def failing_replace(path, *args, **kwargs):
+            if Path(path).name.startswith(f"{state_path.name}.tmp-"):
+                raise OSError("replace failed")
+            return original_replace(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "replace", failing_replace)
+
+        with pytest.raises(OSError, match="replace failed"):
+            adapter._write_session_transition_state("new-session", "/new.jsonl")
+
+        assert json.loads(state_path.read_text(encoding="utf-8")) == {
+            "session_id": "old-session",
+            "transcript_path": "/old.jsonl",
+        }
+        assert not list(state_path.parent.glob(f"{state_path.name}.tmp-*"))
+
     def test_bound_project_dir_logs_bad_binding_when_fail_open(self, tmp_path, monkeypatch, caplog):
         from adaptors.claude_code import adapter as adapter_mod
 
