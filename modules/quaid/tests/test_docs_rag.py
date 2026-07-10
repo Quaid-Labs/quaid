@@ -936,6 +936,7 @@ class TestIndexDocument:
             patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0]),
             patch("datastore.docsdb.rag._lib_unpack_embedding", side_effect=_unpack_embedding),
             patch("datastore.docsdb.rag._lib_cosine_similarity", side_effect=_similarity),
+            patch("datastore.docsdb.rag._lib_has_vec", return_value=False),
             patch.object(
                 rag,
                 "_get_project_paths",
