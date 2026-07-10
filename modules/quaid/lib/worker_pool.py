@@ -71,6 +71,8 @@ def run_callables(
     funcs = list(callables or [])
     if not funcs:
         return []
+    if timeout_seconds is not None and float(timeout_seconds) <= 0:
+        timeout_seconds = None
 
     worker_count = max(1, min(int(max_workers), len(funcs)))
     if worker_count == 1 and timeout_seconds is None:

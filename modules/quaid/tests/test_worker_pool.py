@@ -262,6 +262,15 @@ class TestTimeout:
         )
         assert out == ["done"]
 
+    def test_zero_timeout_is_no_timeout_on_parallel_path(self):
+        out = worker_pool.run_callables(
+            [lambda: "left", lambda: "right"],
+            max_workers=2,
+            pool_name="test-zero-timeout",
+            timeout_seconds=0,
+        )
+        assert out == ["left", "right"]
+
     def test_timeout_retires_pool_so_next_call_does_not_queue_behind_stuck_work(self):
         out = worker_pool.run_callables(
             [lambda: time.sleep(0.3) or "stuck"],
