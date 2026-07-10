@@ -1865,6 +1865,59 @@ def test_compaction_refresh_marker_ttl_honors_quaid_now(tmp_path, mock_adapter, 
     assert not latest_file.exists()
 
 
+def test_consume_compaction_refresh_marker_logs_malformed_latest_fail_open(
+    tmp_path, mock_adapter, monkeypatch, caplog
+):
+    from core.interface import hooks
+
+    mock_adapter.data_dir.return_value = tmp_path / "data"
+    latest_file = tmp_path / "data" / "context-refresh-compaction" / "_latest.json"
+    latest_file.parent.mkdir(parents=True, exist_ok=True)
+    latest_file.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        assert hooks._consume_compaction_refresh_marker("new-session") is True
+
+    assert "Failed reading compaction refresh marker" in caplog.text
+    assert not latest_file.exists()
+
+
+def test_consume_compaction_refresh_marker_raises_malformed_latest_fail_hard(
+    tmp_path, mock_adapter, monkeypatch, caplog
+):
+    from core.interface import hooks
+
+    mock_adapter.data_dir.return_value = tmp_path / "data"
+    latest_file = tmp_path / "data" / "context-refresh-compaction" / "_latest.json"
+    latest_file.parent.mkdir(parents=True, exist_ok=True)
+    latest_file.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"), pytest.raises(json.JSONDecodeError):
+        hooks._consume_compaction_refresh_marker("new-session")
+
+    assert "Failed reading compaction refresh marker" in caplog.text
+    assert latest_file.exists()
+
+
+def test_has_compaction_refresh_marker_raises_malformed_latest_fail_hard(
+    tmp_path, mock_adapter, monkeypatch, caplog
+):
+    from core.interface import hooks
+
+    mock_adapter.data_dir.return_value = tmp_path / "data"
+    latest_file = tmp_path / "data" / "context-refresh-compaction" / "_latest.json"
+    latest_file.parent.mkdir(parents=True, exist_ok=True)
+    latest_file.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"), pytest.raises(json.JSONDecodeError):
+        hooks._has_compaction_refresh_marker("new-session")
+
+    assert "Failed reading compaction refresh marker" in caplog.text
+
+
 def test_store_context_refresh_state_uses_atomic_replace(tmp_path, monkeypatch):
     from core.interface import hooks
 

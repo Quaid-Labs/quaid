@@ -2667,7 +2667,10 @@ def _consume_compaction_refresh_marker(session_id: str) -> bool:
         payload = json.loads(latest_path.read_text(encoding="utf-8"))
         marker_session_id = str(payload.get("session_id") or "").strip()
         created_at = int(payload.get("created_at") or 0)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed reading compaction refresh marker %s: %s", latest_path, exc)
+        if _fail_hard_enabled():
+            raise
         marker_session_id = ""
         created_at = 0
     if created_at and _now_epoch() - created_at > 10 * 60:
@@ -2703,7 +2706,10 @@ def _has_compaction_refresh_marker(session_id: str) -> bool:
     try:
         payload = json.loads(latest_path.read_text(encoding="utf-8"))
         created_at = int(payload.get("created_at") or 0)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed reading compaction refresh marker %s: %s", latest_path, exc)
+        if _fail_hard_enabled():
+            raise
         created_at = 0
     return bool(created_at and _now_epoch() - created_at <= 10 * 60)
 
