@@ -1306,7 +1306,12 @@ _EXTRACTION_ARTIFACT_FACT_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _STRUCTURAL_ANCHOR_TOKEN_RE = re.compile(
-    r"(?<![A-Za-z0-9])(?=[A-Za-z0-9_-]*[A-Za-z])(?:[A-Za-z0-9]+[-_]){1,}[A-Za-z0-9]+(?![A-Za-z0-9])"
+    r"(?<![^\W_])"
+    r"(?=(?:[^\W_]+[-_]){1,}[^\W_]+(?![^\W_]))"
+    r"(?=(?:[^\W_]*[-_])*[^\W_]*[^\W\d_])"
+    r"(?:[^\W_]+[-_]){1,}[^\W_]+"
+    r"(?![^\W_])",
+    re.UNICODE,
 )
 _UUID_ANCHOR_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",

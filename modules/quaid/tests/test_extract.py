@@ -1268,6 +1268,40 @@ class TestExtractFromTranscript:
         assert result["explicit_structural_anchor_facts"] == 1
         assert texts[0] == "Mi marcador de estante es cedro-plantilla-4821"
 
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_explicit_structural_anchor_preserves_unicode_anchor_tokens(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Maya approved the release",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "private",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "User: Maya approved データ-v2 and café-api for the rollout.\n\n"
+                "Assistant: Noted."
+            ),
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        texts = [fact["text"] for fact in result["raw_facts"]]
+        assert result["explicit_structural_anchor_facts"] == 1
+        assert texts[0] == "Maya approved データ-v2 and café-api for the rollout"
+
     def test_prefixed_turn_parser_accepts_codex_row_timestamps(self):
         from ingest import extract as extract_mod
 
