@@ -4413,8 +4413,8 @@ def _format_human_summary(result: Dict[str, Any]) -> str:
         lines.append("")
         lines.append("Facts:")
         for i, f in enumerate(result["facts"], 1):
-            status = f["status"]
-            text = f["text"]
+            status = str(f.get("status") or "unknown")
+            text = str(f.get("text") or "")
             marker = {
                 "stored": "+", "updated": "~", "would_store": "?",
                 "duplicate": "=", "skipped": "-", "failed": "!",

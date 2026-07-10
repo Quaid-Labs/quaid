@@ -8966,6 +8966,23 @@ class TestFormatHumanSummary:
         assert "[DRY RUN]" in summary
         assert "Facts planned:  1" in summary
 
+    def test_missing_fact_fields_do_not_crash_summary(self):
+        from ingest.extract import _format_human_summary
+
+        result = {
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [{"edges": []}, {"status": "failed"}],
+            "snippets": {},
+            "journal": {},
+            "dry_run": False,
+        }
+
+        summary = _format_human_summary(result)
+        assert "[unknown]" in summary
+        assert "[failed]" in summary
+
 
 # ---------------------------------------------------------------------------
 # _load_extraction_prompt tests
