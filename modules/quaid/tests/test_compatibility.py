@@ -468,6 +468,47 @@ class TestVersionWatcher:
 
         assert "Failed to get adapter for compatibility state notification" in caplog.text
 
+    def test_notify_state_change_delivery_failure_raises_when_failhard(self, tmp_path, caplog):
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        caplog.set_level("WARNING")
+        state = CircuitBreakerState(status=SAFE_MODE, message="API changed")
+        adapter = MagicMock()
+        adapter.notify.side_effect = RuntimeError("notify down")
+
+        with patch("lib.adapter.get_adapter", return_value=adapter), \
+             patch("core.compatibility._fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="notify down"):
+                watcher._notify_state_change(NORMAL, state)
+
+        assert "Failed to send compatibility notification: notify down" in caplog.text
+
+    def test_notify_state_change_delivery_failure_warns_when_fail_open(self, tmp_path, caplog):
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        caplog.set_level("WARNING")
+        state = CircuitBreakerState(status=DEGRADED, message="API changed")
+        adapter = MagicMock()
+        adapter.notify.side_effect = RuntimeError("notify down")
+
+        with patch("lib.adapter.get_adapter", return_value=adapter), \
+             patch("core.compatibility._fail_hard_enabled", return_value=False):
+            watcher._notify_state_change(NORMAL, state)
+
+        assert "Failed to send compatibility notification: notify down" in caplog.text
+
+    def test_notify_state_change_recovery_delivery_failure_raises_when_failhard(self, tmp_path, caplog):
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        caplog.set_level("WARNING")
+        state = CircuitBreakerState(status=NORMAL, reason="Recovered")
+        adapter = MagicMock()
+        adapter.notify.side_effect = RuntimeError("recovery notify down")
+
+        with patch("lib.adapter.get_adapter", return_value=adapter), \
+             patch("core.compatibility._fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="recovery notify down"):
+                watcher._notify_state_change(DEGRADED, state)
+
+        assert "Failed to send recovery notification: recovery notify down" in caplog.text
+
 
 class TestAdaptiveCheckInterval:
     def test_normal_state_uses_24h(self, tmp_path):

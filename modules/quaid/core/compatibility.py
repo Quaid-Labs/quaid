@@ -683,6 +683,8 @@ class VersionWatcher:
                 adapter.notify(msg, force=True)
             except Exception as e:
                 logger.warning("Failed to send compatibility notification: %s", e)
+                if _fail_hard_enabled():
+                    raise
 
         elif old_status in (DEGRADED, SAFE_MODE) and new_state.status == NORMAL:
             # Recovery — back to normal
@@ -694,6 +696,8 @@ class VersionWatcher:
                 )
             except Exception as e:
                 logger.warning("Failed to send recovery notification: %s", e)
+                if _fail_hard_enabled():
+                    raise
 
 
 # ---------------------------------------------------------------------------
