@@ -2665,7 +2665,7 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
     return via === "session_chunks" || category === "session_chunk" || category === "source_chunk" || sourceType === "session_chunk" || sourceType === "source_chunk";
   }
   function normalizeClaimText(text) {
-    return String(text || "").toLowerCase().replace(/\[[^\]]+\]/g, " ").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+    return String(text || "").normalize("NFKC").toLowerCase().replace(/\[[^\]]+\]/g, " ").replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
   }
   function sourcePriority(result) {
     const source = String(result.sourceType || "").toLowerCase();

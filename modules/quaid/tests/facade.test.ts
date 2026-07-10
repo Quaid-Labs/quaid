@@ -2694,6 +2694,28 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("prepareAutoInjectionContext keeps non-ASCII claims distinct during dedup", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-auto-inject-unicode-"));
+    await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const baseMemories = [
+      { id: "jp-1", text: "田中さんは医師です", category: "fact", similarity: 0.9 },
+      { id: "jp-2", text: "佐藤さんは教師です", category: "fact", similarity: 0.89 },
+    ];
+
+    const result = facade.prepareAutoInjectionContext({
+      allMemories: baseMemories,
+      eventMessages: [{ role: "user", content: "日本語の記憶を確認して", timestamp: Date.now() }],
+      context: { sessionId: "sess-auto-unicode" },
+      existingPrependContext: "",
+      injectLimit: 5,
+      maxInjectionIdsPerSession: 100,
+    });
+
+    expect(result?.toInject.map((m) => m.id)).toEqual(["jp-1", "jp-2"]);
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("prepareAutoInjectionContext resolves owner from matrix session channel", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-auto-inject-owner-"));
     await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });

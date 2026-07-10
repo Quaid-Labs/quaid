@@ -3552,9 +3552,10 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
   function normalizeClaimText(text: string): string {
     return String(text || "")
+      .normalize("NFKC")
       .toLowerCase()
       .replace(/\[[^\]]+\]/g, " ")
-      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
       .replace(/\s+/g, " ")
       .trim();
   }
