@@ -8090,71 +8090,6 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 json.dumps(fact_bucket_summary["skip_buckets"], sort_keys=True),
             )
 
-        try:
-            from core.runtime.notify import notify_memory_extraction
-            notify_memory_extraction(
-                facts_stored=facts_stored,
-                facts_skipped=facts_skipped,
-                edges_created=edges_created,
-                trigger=signal_type,
-                details=result.get("facts"),
-                snippet_details=result.get("snippets"),
-            )
-        except Exception as e:
-            logger.warning("[%s] session %s: notification failed: %s", label, session_id, e)
-
-        if (
-            signal_type == "timeout"
-            and bool(signal_data.get("supports_compaction_control"))
-            and bool((signal_data.get("meta") or {}).get("compact_on_timeout"))
-        ):
-            try:
-                from core.runtime.events import emit_event
-                emit_event(
-                    name="memory.force_compaction",
-                    payload={"reason": f"inactivity timeout for session {session_id}"},
-                    source="daemon.timeout",
-                )
-                logger.info("[%s] session %s: queued post-timeout compaction request", label, session_id)
-            except Exception as e:
-                logger.warning("[%s] session %s: failed queuing post-timeout compaction: %s", label, session_id, e)
-
-        try:
-            session_logs_transcript_path = _session_logs_ingest_transcript_path_for_signal(
-                str(transcript_path),
-                session_id=session_id,
-                adapter=adapter,
-                signal_meta=signal_meta,
-                cursor_data=cursor_data,
-                staged_state=staged_state,
-            )
-            if session_logs_transcript_path != str(transcript_path):
-                logger.info(
-                    "[%s] session %s: session_logs ingest using current source transcript path: %s "
-                    "(signal path=%s)",
-                    label,
-                    session_id,
-                    session_logs_transcript_path,
-                    transcript_path,
-                )
-            sl_result = _request_session_logs_ingest(
-                session_id=session_id,
-                owner_id=owner,
-                label=label,
-                transcript_path=session_logs_transcript_path,
-                message_count=len(new_lines),
-                topic_hint=result.get("topic_hint", ""),
-            )
-            sl_status = sl_result.get("status", "unknown") if isinstance(sl_result, dict) else str(sl_result)
-            sl_reason = sl_result.get("reason", "") if isinstance(sl_result, dict) else ""
-            logger.info("[%s] session %s: session_logs ingest: %s%s",
-                        label, session_id, sl_status,
-                        f" ({sl_reason})" if sl_reason else "")
-        except Exception as e:
-            logger.warning("[%s] session %s: session_logs ingest failed: %s", label, session_id, e)
-            if _fail_hard_enabled():
-                raise RuntimeError("session_logs ingest failed") from e
-
         _write_extraction_buffer_log(
             session_id,
             phase="final_flush",
@@ -8277,6 +8212,73 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             except Exception as e:
                 logger.warning("[%s] session %s: mark_harvested error: %s", label, session_id, e)
         mark_signal_processed(signal_data)
+        _release_session_processing_lock(lock_owner_key, lock_fd)
+        lock_fd = None
+
+        try:
+            from core.runtime.notify import notify_memory_extraction
+            notify_memory_extraction(
+                facts_stored=facts_stored,
+                facts_skipped=facts_skipped,
+                edges_created=edges_created,
+                trigger=signal_type,
+                details=result.get("facts"),
+                snippet_details=result.get("snippets"),
+            )
+        except Exception as e:
+            logger.warning("[%s] session %s: notification failed: %s", label, session_id, e)
+
+        if (
+            signal_type == "timeout"
+            and bool(signal_data.get("supports_compaction_control"))
+            and bool((signal_data.get("meta") or {}).get("compact_on_timeout"))
+        ):
+            try:
+                from core.runtime.events import emit_event
+                emit_event(
+                    name="memory.force_compaction",
+                    payload={"reason": f"inactivity timeout for session {session_id}"},
+                    source="daemon.timeout",
+                )
+                logger.info("[%s] session %s: queued post-timeout compaction request", label, session_id)
+            except Exception as e:
+                logger.warning("[%s] session %s: failed queuing post-timeout compaction: %s", label, session_id, e)
+
+        try:
+            session_logs_transcript_path = _session_logs_ingest_transcript_path_for_signal(
+                str(transcript_path),
+                session_id=session_id,
+                adapter=adapter,
+                signal_meta=signal_meta,
+                cursor_data=cursor_data,
+                staged_state=staged_state,
+            )
+            if session_logs_transcript_path != str(transcript_path):
+                logger.info(
+                    "[%s] session %s: session_logs ingest using current source transcript path: %s "
+                    "(signal path=%s)",
+                    label,
+                    session_id,
+                    session_logs_transcript_path,
+                    transcript_path,
+                )
+            sl_result = _request_session_logs_ingest(
+                session_id=session_id,
+                owner_id=owner,
+                label=label,
+                transcript_path=session_logs_transcript_path,
+                message_count=len(new_lines),
+                topic_hint=result.get("topic_hint", ""),
+            )
+            sl_status = sl_result.get("status", "unknown") if isinstance(sl_result, dict) else str(sl_result)
+            sl_reason = sl_result.get("reason", "") if isinstance(sl_result, dict) else ""
+            logger.info("[%s] session %s: session_logs ingest: %s%s",
+                        label, session_id, sl_status,
+                        f" ({sl_reason})" if sl_reason else "")
+        except Exception as e:
+            logger.warning("[%s] session %s: session_logs ingest failed: %s", label, session_id, e)
+            if _fail_hard_enabled():
+                raise RuntimeError("session_logs ingest failed") from e
 
         signal_to_publish_seconds = None
         raw_signal_ts = str(signal_data.get("timestamp", "") or "").strip()

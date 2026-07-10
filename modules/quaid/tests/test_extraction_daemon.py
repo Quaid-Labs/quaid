@@ -602,6 +602,90 @@ def test_process_signal_full_flush_records_daemon_lifecycle_observation(monkeypa
     assert extraction_daemon.read_pending_signals() == []
 
 
+def test_process_signal_releases_source_lock_before_post_publish_session_logs(
+    monkeypatch,
+    tmp_path,
+):
+    from ingest import extract as extract_mod
+    from lib.adapter import reset_adapter, set_adapter
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "daemon-inst")
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_record_daemon_lifecycle_observation",
+        lambda *_args, **_kwargs: {"status": "recorded", "persisted": True},
+    )
+
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_text(
+        '{"role":"user","content":"The post-publish lock codeword is amber-fern."}\n',
+        encoding="utf-8",
+    )
+    session_id = "sess-post-publish-lock"
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+    extraction_daemon.write_cursor(session_id, 0, str(transcript_path), source_key=source_key)
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def parse_session_jsonl(self, path):
+            _ = path
+            return "User: The post-publish lock codeword is amber-fern."
+
+    monkeypatch.setattr(
+        extract_mod,
+        "extract_from_transcript",
+        lambda *_args, **_kwargs: {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [],
+            "facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        },
+    )
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda *_args, **_kwargs: {
+            "facts_stored": 1,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [{"text": "The post-publish lock codeword is amber-fern.", "status": "stored"}],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        },
+    )
+
+    def _failing_session_logs_ingest(**_kwargs):
+        assert extraction_daemon._processing_lock_active(source_key) is False
+        raise RuntimeError("session log broker stalled")
+
+    monkeypatch.setattr(extraction_daemon, "_request_session_logs_ingest", _failing_session_logs_ingest)
+
+    set_adapter(_Adapter())
+    try:
+        extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id=session_id,
+            transcript_path=str(transcript_path),
+        )
+        with pytest.raises(RuntimeError, match="session_logs ingest failed"):
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+    finally:
+        reset_adapter()
+
+    assert extraction_daemon._processing_lock_active(source_key) is False
+    assert extraction_daemon.read_pending_signals() == []
+
+
 def test_session_store_connection_entrypoints_use_parent_guard():
     import inspect
     from datastore.sessiondb import session_store
@@ -15375,6 +15459,7 @@ class TestRollingExtraction:
             )
             extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
 
+            assert extraction_daemon._processing_lock_active(source_key) is False
             pending = extraction_daemon.read_pending_signals()
             assert len(pending) == 1
             assert pending[0]["type"] == "session_end"
