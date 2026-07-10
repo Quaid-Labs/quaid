@@ -511,6 +511,30 @@ def test_janitor_main_all_apply_attaches_to_existing_request(monkeypatch, tmp_pa
     assert "Request queued; poll with `quaid janitor --status`." in captured.out
 
 
+def test_janitor_main_all_apply_reports_unusable_existing_request(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+
+    from core import project_docs
+    from core.lifecycle import janitor
+
+    monkeypatch.setattr(project_docs, "ensure_supervisor_alive", lambda: 4321)
+    monkeypatch.setattr(
+        project_docs,
+        "request_janitor_run",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("Janitor request already in progress (req-stale)")),
+    )
+    monkeypatch.setattr(
+        project_docs,
+        "read_janitor_request",
+        lambda: {"request_id": "req-stale", "status": "completed", "errors": []},
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected state .*status='completed'"):
+        janitor.main(["--task", "all", "--apply"])
+
+
 def test_janitor_status_reports_no_supervisor_request(monkeypatch, capsys):
     from core import project_docs
     from core.lifecycle import janitor

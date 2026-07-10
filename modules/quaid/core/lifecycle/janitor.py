@@ -2223,7 +2223,10 @@ def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
         request_id = str(request.get("request_id") or "").strip()
         status = str(request.get("status") or "").strip()
         if not request_id or status not in {"pending", "running"}:
-            raise
+            raise RuntimeError(
+                "Janitor supervisor request file found in unexpected state "
+                f"(request_id={request_id!r}, status={status!r}); cannot attach to or supersede it"
+            ) from exc
         attached_to_existing = True
         print(
             f"[janitor] Supervisor-owned janitor request already in progress for {scope}; "
