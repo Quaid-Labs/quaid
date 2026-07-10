@@ -4256,95 +4256,6 @@ def _guided_relation_chain_prefix_maps(
     return path_by_node, sequence_by_node
 
 
-def _relation_chain_owner_anchor_fallback(
-    graph: "MemoryGraph",
-    *,
-    current_owner_anchor_id: Optional[str],
-    relation_groups: List[str],
-) -> Optional["Node"]:
-    """Find a better owner anchor when the resolved owner cannot satisfy a relation chain."""
-    clean_groups = [str(group or "").strip() for group in list(relation_groups or []) if str(group or "").strip()]
-    if not clean_groups or not hasattr(graph, "_get_conn"):
-        return None
-    try:
-        with graph._get_conn() as conn:
-            rows = conn.execute(
-                """
-                SELECT n.*
-                FROM nodes n
-                WHERE n.type = 'Person'
-                  AND n.deleted_at IS NULL
-                  AND n.superseded_by IS NULL
-                  AND (n.status IS NULL OR n.status IN ('approved', 'pending', 'active'))
-                ORDER BY COALESCE(n.created_at, '') ASC, n.name ASC
-                """
-            ).fetchall()
-    except Exception as exc:
-        logger.warning("Failed to load fallback owner relation-chain anchors: %s", exc)
-        if _is_fail_hard_mode():
-            raise RuntimeError("Failed to load fallback owner relation-chain anchors") from exc
-        return None
-
-    best_node: Optional[Node] = None
-    best_score: Tuple[int, int, int, int, str] = (-1, -1, -1, 0, "")
-    for row in rows:
-        try:
-            node = graph._row_to_node(row)
-        except Exception as exc:
-            logger.warning("Failed to decode fallback owner relation-chain anchor: %s", exc)
-            if _is_fail_hard_mode():
-                raise RuntimeError("Failed to decode fallback owner relation-chain anchor") from exc
-            continue
-        if not node or not node.id or node.id == current_owner_anchor_id:
-            continue
-        try:
-            path_by_node, sequence_by_node = _guided_relation_chain_prefix_maps(
-                graph,
-                owner_anchor_id=node.id,
-                owner_anchor_name=node.name,
-                relation_groups=clean_groups,
-            )
-        except Exception:
-            if _is_fail_hard_mode():
-                raise
-            continue
-        if not path_by_node:
-            continue
-        try:
-            anchor_out_edges = len(list(graph.get_edges(node.id, direction="out")))
-        except Exception as exc:
-            logger.warning("Failed to count fallback owner anchor edges for %s: %s", node.id, exc)
-            if _is_fail_hard_mode():
-                raise RuntimeError("Failed to count fallback owner anchor edges") from exc
-            anchor_out_edges = 0
-        terminal_count = sum(
-            1
-            for sequence in sequence_by_node.values()
-            if _prefix_relation_group_match_length(_relation_groups_for_sequence(sequence), clean_groups) >= len(clean_groups)
-        )
-        direct_terminal_facts = 0
-        for terminal_id, sequence in sequence_by_node.items():
-            if _prefix_relation_group_match_length(_relation_groups_for_sequence(sequence), clean_groups) < len(clean_groups):
-                continue
-            try:
-                direct_terminal_facts += sum(
-                    1
-                    for edge in graph.get_edges(terminal_id, direction="out")
-                    if str(getattr(edge, "relation", "") or "") == "has_fact"
-                )
-            except Exception as exc:
-                logger.warning("Failed to count terminal relation-chain facts for %s: %s", terminal_id, exc)
-                if _is_fail_hard_mode():
-                    raise RuntimeError("Failed to count terminal relation-chain facts") from exc
-        score = (terminal_count, anchor_out_edges, direct_terminal_facts, -len(str(node.name or "")), str(node.name or ""))
-        if score > best_score:
-            best_score = score
-            best_node = node
-    if best_score[0] <= 0:
-        return None
-    return best_node
-
-
 def _relation_groups_for_sequence(sequence: List[str]) -> List[str]:
     groups: List[str] = []
     for relation in sequence or []:
@@ -6017,28 +5928,6 @@ def graph_aware_recall(
             )
             relation_chain_path_by_node.update(guided_path_by_node)
             relation_chain_sequence_by_node.update(guided_sequence_by_node)
-            if not relation_chain_path_by_node and not query_entities:
-                fallback_owner = _relation_chain_owner_anchor_fallback(
-                    graph,
-                    current_owner_anchor_id=owner_anchor_id,
-                    relation_groups=relation_chain_groups,
-                )
-                if fallback_owner:
-                    old_owner_anchor_id = owner_anchor_id
-                    owner_anchor_id = fallback_owner.id
-                    owner_anchor_name = fallback_owner.name
-                    expand_from = [node_id for node_id in expand_from if node_id != old_owner_anchor_id]
-                    expand_from.append(owner_anchor_id)
-                    results["source_breakdown"]["owner_person"] = owner_anchor_name
-                    results["source_breakdown"]["owner_relation_chain_reanchored"] = True
-                    guided_path_by_node, guided_sequence_by_node = _guided_relation_chain_prefix_maps(
-                        graph,
-                        owner_anchor_id=owner_anchor_id,
-                        owner_anchor_name=owner_anchor_name,
-                        relation_groups=relation_chain_groups,
-                    )
-                    relation_chain_path_by_node.update(guided_path_by_node)
-                    relation_chain_sequence_by_node.update(guided_sequence_by_node)
             if not relation_chain_path_by_node:
                 for node, relation, direction, _depth, path in graph.get_related_bidirectional(
                     owner_anchor_id,

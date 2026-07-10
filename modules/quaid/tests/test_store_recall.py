@@ -19949,7 +19949,7 @@ class TestRecallFastHookInjectContract:
         assert payload["direct_results"] == seed_rows
         assert payload["graph_results"] == []
 
-    def test_graph_aware_recall_reanchors_owner_when_resolved_owner_lacks_relation_chain(self, tmp_path):
+    def test_graph_aware_recall_does_not_reanchor_configured_owner_to_unmentioned_person(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
         graph, _ = _make_graph(tmp_path)
@@ -20013,15 +20013,14 @@ class TestRecallFastHookInjectContract:
                 candidate_pool=[],
             )
 
-        attached = [
-            row for row in payload["graph_results"]
-            if row.get("via") == "graph_attached_fact"
-        ]
-        assert payload["source_breakdown"]["owner_relation_chain_reanchored"] is True
-        assert payload["source_breakdown"]["owner_person"] == "Actual Owner"
-        assert attached
-        assert attached[0]["id"] == work.id
-        assert "Actual Owner --spouse_of--> Actual Partner --sibling_of--> Terminal Sibling" in attached[0]["graph_path"]
+        assert "owner_relation_chain_reanchored" not in payload["source_breakdown"]
+        assert payload["source_breakdown"]["owner_person"] == "Contaminated Owner"
+        assert not any(row.get("id") == work.id for row in payload["graph_results"])
+        assert not any(
+            "Actual Owner --spouse_of--> Actual Partner --sibling_of--> Terminal Sibling"
+            in str(row.get("graph_path") or "")
+            for row in payload["graph_results"]
+        )
 
     def test_graph_aware_recall_does_not_reanchor_to_partial_relation_chain(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
