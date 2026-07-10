@@ -9063,6 +9063,46 @@ class TestSignalRoundTrip:
         assert payload["dead_lettered_at"] == "2026-06-14T12:00:00Z"
         assert "moved to dead letter" in caplog.text
 
+    def test_record_signal_process_failure_dead_letter_writes_once(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setenv("QUAID_NOW", "2026-06-14T12:00:00Z")
+        monkeypatch.setattr(extraction_daemon, "MAX_SIGNAL_PROCESS_ATTEMPTS", 2)
+
+        sig_path = extraction_daemon.write_signal(
+            signal_type="reset",
+            session_id="sess-dead-letter-write-once",
+            transcript_path="/tmp/crashing.jsonl",
+        )
+        payload = json.loads(sig_path.read_text(encoding="utf-8"))
+        payload["process_attempts"] = 1
+        sig_path.write_text(json.dumps(payload), encoding="utf-8")
+        signal_data = extraction_daemon.read_pending_signals()[0]
+
+        real_atomic_write = extraction_daemon._atomic_write
+        writes = []
+
+        def tracking_atomic_write(path, content):
+            writes.append((Path(path), json.loads(content)))
+            return real_atomic_write(path, content)
+
+        monkeypatch.setattr(extraction_daemon, "_atomic_write", tracking_atomic_write)
+
+        preserved = extraction_daemon._record_signal_process_failure_for_retry(
+            signal_data,
+            RuntimeError("process boom"),
+            label="test",
+        )
+
+        assert preserved is False
+        assert not sig_path.exists()
+        assert len(writes) == 1
+        assert writes[0][0] == sig_path
+        assert writes[0][1]["process_attempts"] == 2
+        assert writes[0][1]["dead_letter_reason"] == "process_attempts_exhausted"
+
     def test_preserve_missing_transcript_signal_write_failure_respects_failhard(
         self, monkeypatch, tmp_path, caplog
     ):

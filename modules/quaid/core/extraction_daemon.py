@@ -1238,11 +1238,12 @@ def _record_signal_process_failure_for_retry(
         payload["last_process_failure"] = str(exc)
         payload["last_process_failure_at"] = _now_datetime().isoformat().replace("+00:00", "Z")
 
-        _atomic_write(sig_path, json.dumps(payload))
         if attempts >= int(MAX_SIGNAL_PROCESS_ATTEMPTS):
             payload["dead_lettered_at"] = _now_datetime().isoformat().replace("+00:00", "Z")
             payload["dead_letter_reason"] = "process_attempts_exhausted"
-            _atomic_write(sig_path, json.dumps(payload))
+        _atomic_write(sig_path, json.dumps(payload))
+
+        if attempts >= int(MAX_SIGNAL_PROCESS_ATTEMPTS):
             dead_letter_path = _signal_dead_letter_dir() / sig_path.name
             if dead_letter_path.exists():
                 dead_letter_path = dead_letter_path.with_name(
