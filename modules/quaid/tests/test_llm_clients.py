@@ -256,7 +256,7 @@ class TestTokenUsage:
         finally:
             llm_clients.reset_token_budget()
 
-    def test_load_pricing_warns_once_and_allows_retry_when_failhard_disabled(self):
+    def test_load_pricing_warns_once_and_uses_defaults_when_failhard_disabled(self):
         import core.llm.clients as llm_clients
         old_loaded = llm_clients._pricing_loaded
         old_error_logged = llm_clients._pricing_error_logged
@@ -268,7 +268,7 @@ class TestTokenUsage:
                  patch("core.llm.clients.logger.warning") as log_warning:
                 llm_clients._load_pricing()
                 llm_clients._load_pricing()
-            assert llm_clients._pricing_loaded is False
+            assert llm_clients._pricing_loaded is True
             assert llm_clients._pricing_error_logged is True
             assert log_warning.call_count == 1
         finally:
@@ -486,21 +486,43 @@ class TestCallLlmProvider:
         assert payload["duration_ms"] >= 0
         assert isinstance(payload["model_usage"], dict)
 
-    def test_usage_event_rejects_malformed_quaid_now(self, tmp_path, monkeypatch):
-        """Malformed benchmark clocks must not be swallowed by best-effort usage logging."""
+    def test_usage_event_logs_malformed_quaid_now_when_failhard_disabled(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """Malformed benchmark clocks should not turn usage logging into provider failure."""
         import core.llm.clients as llm_clients
         usage_log = tmp_path / "logs" / "llm-usage.jsonl"
         monkeypatch.setenv("QUAID_LLM_USAGE_LOG_PATH", str(usage_log))
         monkeypatch.setenv("QUAID_NOW", "not-a-date")
         result = LLMResult("ok", 0.01, input_tokens=1, output_tokens=2, model="mock-model")
 
-        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=False), caplog.at_level("WARNING"):
             llm_clients._append_usage_event(
                 result,
                 tier="deep",
                 provider_name="TestProvider",
                 requested_model="mock-model",
             )
+
+        assert usage_log.is_file()
+        assert "Invalid QUAID_NOW='not-a-date'; using wall clock for LLM timestamp" in caplog.text
+
+    def test_usage_event_raises_malformed_quaid_now_when_failhard_enabled(self, tmp_path, monkeypatch):
+        """Malformed benchmark clocks still surface under failHard."""
+        import core.llm.clients as llm_clients
+        usage_log = tmp_path / "logs" / "llm-usage.jsonl"
+        monkeypatch.setenv("QUAID_LLM_USAGE_LOG_PATH", str(usage_log))
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        result = LLMResult("ok", 0.01, input_tokens=1, output_tokens=2, model="mock-model")
+
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+                llm_clients._append_usage_event(
+                    result,
+                    tier="deep",
+                    provider_name="TestProvider",
+                    requested_model="mock-model",
+                )
 
         assert not usage_log.exists()
 
@@ -511,7 +533,9 @@ class TestCallLlmProvider:
         monkeypatch.setenv("QUAID_LLM_USAGE_LOG_PATH", str(usage_log))
         result = LLMResult("ok", 0.01, input_tokens=1, output_tokens=2, model="mock-model")
 
-        with patch.object(Path, "open", side_effect=OSError("disk full")), caplog.at_level("WARNING"):
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=False), \
+             patch.object(Path, "open", side_effect=OSError("disk full")), \
+             caplog.at_level("WARNING"):
             llm_clients._append_usage_event(
                 result,
                 tier="deep",
@@ -537,16 +561,32 @@ class TestCallLlmProvider:
         assert payload["ts"] == "2026-03-11T05:06:07+00:00"
         assert payload["status"] == "ok"
 
-    def test_trace_event_rejects_malformed_quaid_now(self, tmp_path, monkeypatch):
-        """Malformed benchmark clocks must not be swallowed by best-effort tracing."""
+    def test_trace_event_logs_malformed_quaid_now_when_failhard_disabled(self, tmp_path, monkeypatch, caplog):
+        """Malformed benchmark clocks should not turn tracing into provider failure."""
         import core.llm.clients as llm_clients
         workspace = tmp_path / "runs" / "quaid-trace"
         monkeypatch.setenv("BENCHMARK_LLM_TRACE", "1")
         monkeypatch.setenv("QUAID_WORKSPACE", str(workspace))
         monkeypatch.setenv("QUAID_NOW", "not-a-date")
 
-        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=False), caplog.at_level("WARNING"):
             llm_clients._append_trace({"status": "ok"})
+
+        trace_log = workspace / "logs" / "llm-call-trace.jsonl"
+        assert trace_log.is_file()
+        assert "Invalid QUAID_NOW='not-a-date'; using wall clock for LLM timestamp" in caplog.text
+
+    def test_trace_event_raises_malformed_quaid_now_when_failhard_enabled(self, tmp_path, monkeypatch):
+        """Malformed benchmark clocks still surface under failHard."""
+        import core.llm.clients as llm_clients
+        workspace = tmp_path / "runs" / "quaid-trace"
+        monkeypatch.setenv("BENCHMARK_LLM_TRACE", "1")
+        monkeypatch.setenv("QUAID_WORKSPACE", str(workspace))
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+                llm_clients._append_trace({"status": "ok"})
 
         assert not (workspace / "logs" / "llm-call-trace.jsonl").exists()
 
@@ -557,7 +597,9 @@ class TestCallLlmProvider:
         monkeypatch.setenv("BENCHMARK_LLM_TRACE", "1")
         monkeypatch.setenv("QUAID_WORKSPACE", str(workspace))
 
-        with patch.object(Path, "open", side_effect=OSError("trace locked")), caplog.at_level("WARNING"):
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=False), \
+             patch.object(Path, "open", side_effect=OSError("trace locked")), \
+             caplog.at_level("WARNING"):
             llm_clients._append_trace({"status": "ok"})
 
         assert "LLM trace append failed" in caplog.text

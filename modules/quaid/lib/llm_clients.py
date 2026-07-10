@@ -247,6 +247,7 @@ def _load_pricing():
             if not _pricing_error_logged:
                 logger.warning("Pricing config load failed; using built-in defaults: %s", exc)
                 _pricing_error_logged = True
+            _pricing_loaded = True
 
 
 def reset_token_usage():
@@ -413,8 +414,11 @@ def _now_datetime() -> datetime:
     if raw:
         try:
             value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        except ValueError as exc:
+            logger.warning("Invalid QUAID_NOW=%r; using wall clock for LLM timestamp: %s", raw, exc)
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Invalid QUAID_NOW={raw!r}") from exc
+            return datetime.now(timezone.utc)
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
@@ -505,8 +509,8 @@ def _append_trace(payload: Dict[str, object]) -> None:
     path = _trace_path()
     if path is None:
         return
-    timestamp = _now_iso()
     try:
+        timestamp = _now_iso()
         path.parent.mkdir(parents=True, exist_ok=True)
         row = dict(payload or {})
         row["ts"] = timestamp
@@ -514,7 +518,9 @@ def _append_trace(payload: Dict[str, object]) -> None:
             with path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, ensure_ascii=True) + "\n")
     except Exception as exc:
-        # Never let tracing alter runtime behavior.
+        if is_fail_hard_enabled():
+            raise
+        # In fail-open mode, tracing must not alter runtime behavior.
         logger.warning("LLM trace append failed for %s: %s", path, exc)
         return
 
@@ -537,8 +543,8 @@ def _append_usage_event(
     path = _usage_log_path()
     if path is None:
         return
-    timestamp = _now_iso()
     try:
+        timestamp = _now_iso()
         path.parent.mkdir(parents=True, exist_ok=True)
         model_usage = {}
         if result.model_usage:
@@ -575,6 +581,8 @@ def _append_usage_event(
             with path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, ensure_ascii=True) + "\n")
     except Exception as exc:
+        if is_fail_hard_enabled():
+            raise
         logger.warning("LLM usage event append failed for %s: %s", path, exc)
         return
 
