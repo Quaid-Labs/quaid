@@ -104,6 +104,58 @@ def test_global_project_cleanup_paths_normalize_mixed_case_input(project_registr
     assert lookup("mixed-cleanup") is None
 
 
+def test_global_project_registry_instance_resolution_failure_warns_when_fail_open(
+    project_registry_env,
+    monkeypatch,
+    caplog,
+):
+    from lib import instance as instance_mod
+    from lib import project_registry
+
+    project_dir = project_registry_env["visible_home"] / "projects" / "fallback-owner"
+    project_dir.mkdir(parents=True)
+
+    def _broken_instance_id():
+        raise RuntimeError("instance unavailable")
+
+    monkeypatch.setattr(instance_mod, "instance_id", _broken_instance_id)
+    monkeypatch.setattr(project_registry, "is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level(logging.WARNING, logger="lib.project_registry"):
+        entry = project_registry.register(
+            name="fallback-owner",
+            canonical_path=str(project_dir),
+        )
+
+    assert entry["instances"] == ["standalone"]
+    assert "Failed to resolve current adapter instance" in caplog.text
+
+
+def test_global_project_registry_instance_resolution_failure_raises_when_failhard(
+    project_registry_env,
+    monkeypatch,
+):
+    from lib import instance as instance_mod
+    from lib import project_registry
+
+    project_dir = project_registry_env["visible_home"] / "projects" / "failhard-owner"
+    project_dir.mkdir(parents=True)
+
+    def _broken_instance_id():
+        raise RuntimeError("instance unavailable")
+
+    monkeypatch.setattr(instance_mod, "instance_id", _broken_instance_id)
+    monkeypatch.setattr(project_registry, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="instance unavailable"):
+        project_registry.register(
+            name="failhard-owner",
+            canonical_path=str(project_dir),
+        )
+
+    assert not (project_registry_env["quaid_home"] / "project-registry.json").exists()
+
+
 def test_global_project_registry_corrupt_file_warns_when_fail_open(project_registry_env, monkeypatch, caplog):
     from lib import project_registry
 

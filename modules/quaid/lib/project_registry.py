@@ -107,7 +107,10 @@ def _adapter_name() -> str:
     try:
         from lib.instance import instance_id
         return instance_id()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to resolve current adapter instance; using standalone: %s", exc)
+        if is_fail_hard_enabled():
+            raise
         return "standalone"
 
 
