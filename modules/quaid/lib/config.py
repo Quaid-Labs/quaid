@@ -172,7 +172,11 @@ def _fail_hard_from_raw_lightweight_config() -> bool:
                 continue
             if isinstance(parsed, dict):
                 data = _deep_merge_dicts(data, _normalize_config_keys(parsed))
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Failed to read raw lightweight failHard config; defaulting failHard to enabled: %s",
+            exc,
+        )
         return True
     retrieval = data.get("retrieval", {})
     if not isinstance(retrieval, dict):

@@ -461,6 +461,22 @@ class TestConfigPathResolution:
 
         assert lib_config._fail_hard_from_raw_lightweight_config() is True
 
+    def test_raw_lightweight_fail_hard_logs_outer_read_failure(self, monkeypatch, caplog):
+        from lib import config as lib_config
+        from lib import instance as lib_instance
+
+        monkeypatch.setattr(
+            lib_instance,
+            "quaid_home",
+            lambda: (_ for _ in ()).throw(RuntimeError("home unavailable")),
+        )
+
+        with caplog.at_level("WARNING", logger="lib.config"):
+            assert lib_config._fail_hard_from_raw_lightweight_config() is True
+
+        assert "Failed to read raw lightweight failHard config" in caplog.text
+        assert "home unavailable" in caplog.text
+
     def test_load_from_json_file_reads_utf8(self, tmp_path):
         import config
         old_config = config._config
