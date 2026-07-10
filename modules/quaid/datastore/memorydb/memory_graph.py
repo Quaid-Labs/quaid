@@ -2020,8 +2020,18 @@ class MemoryGraph:
         if normalized_project:
             clauses.append("project = ?")
             params.append(normalized_project)
+        requested_domains = _normalize_domains(domains)
+        if requested_domains:
+            placeholders = ", ".join("?" for _ in requested_domains)
+            clauses.append(
+                "EXISTS ("
+                "SELECT 1 FROM json_each("
+                "CASE WHEN json_valid(COALESCE(domains, '[]')) THEN COALESCE(domains, '[]') ELSE '[]' END"
+                f") WHERE value IN ({placeholders})"
+                ")"
+            )
+            params.extend(requested_domains)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-        requested_domains = set(_normalize_domains(domains))
         try:
             normalized_limit = max(1, min(int(limit), 1000))
         except Exception:
@@ -2042,13 +2052,7 @@ class MemoryGraph:
                 """,
                 [*params, normalized_limit],
             ).fetchall()
-        out = [self._row_to_source_chunk(row) for row in rows]
-        if requested_domains:
-            out = [
-                row for row in out
-                if requested_domains.intersection(set(_normalize_domains(row.get("domains"))))
-            ]
-        return out
+        return [self._row_to_source_chunk(row) for row in rows]
 
     def list_session_chunks(self, **kwargs: Any) -> List[Dict[str, Any]]:
         """List public session chunks."""

@@ -6800,6 +6800,38 @@ class TestSourceChunkStorage:
         assert "v.node_id IS NULL" in select_sql
         assert "NOT IN" not in select_sql
 
+    def test_list_source_chunks_domain_filter_runs_before_limit(self, tmp_path):
+        """Domain-filtered chunk listing must not drop matches beyond the first page."""
+        graph, _db_file = _make_graph(tmp_path)
+        for idx in range(6):
+            graph.store_source_chunk(
+                f"User: personal chunk {idx}",
+                owner_id="domain-owner",
+                session_id="domain-session",
+                chunk_index=idx,
+                domains=["personal"],
+                embed=False,
+            )
+        for idx in range(6, 9):
+            graph.store_source_chunk(
+                f"User: technical chunk {idx}",
+                owner_id="domain-owner",
+                session_id="domain-session",
+                chunk_index=idx,
+                domains=["technical"],
+                embed=False,
+            )
+
+        rows = graph.list_source_chunks(
+            owner_id="domain-owner",
+            session_id="domain-session",
+            domains=["technical"],
+            limit=2,
+        )
+
+        assert [row["chunk_index"] for row in rows] == [6, 7]
+        assert all(row["domains"] == ["technical"] for row in rows)
+
     def test_retry_missing_embeddings_indexes_pending_nodes(self, tmp_path):
         """Daemon retry repairs fresh pending facts stored while embeddings were unavailable."""
         import datastore.memorydb.memory_graph as mg
