@@ -690,13 +690,31 @@ def test_build_docsdb_system_context_metadata(monkeypatch, tmp_path):
 
 def test_docsdb_system_context_current_instance_logs_adapter_failure(monkeypatch, caplog):
     import lib.adapter as adapter_mod
+    import datastore.docsdb.system_context as system_context
     from datastore.docsdb.system_context import current_instance_id
 
     monkeypatch.delenv("QUAID_INSTANCE", raising=False)
     monkeypatch.setattr(adapter_mod, "get_adapter", lambda: _raise(RuntimeError("adapter unavailable")))
+    monkeypatch.setattr(system_context, "is_fail_hard_enabled", lambda: False)
 
-    with caplog.at_level(logging.DEBUG, logger="datastore.docsdb.system_context"):
+    with caplog.at_level(logging.WARNING, logger="datastore.docsdb.system_context"):
         assert current_instance_id() == ""
 
     assert "Failed resolving docsdb system-context adapter instance id" in caplog.text
     assert "adapter unavailable" in caplog.text
+
+
+def test_docsdb_system_context_current_instance_raises_adapter_failure_when_failhard(monkeypatch, caplog):
+    import lib.adapter as adapter_mod
+    import datastore.docsdb.system_context as system_context
+    from datastore.docsdb.system_context import current_instance_id
+
+    monkeypatch.setenv("QUAID_INSTANCE", "env-fallback-should-not-be-used")
+    monkeypatch.setattr(adapter_mod, "get_adapter", lambda: _raise(RuntimeError("adapter unavailable")))
+    monkeypatch.setattr(system_context, "is_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level(logging.WARNING, logger="datastore.docsdb.system_context"):
+        with pytest.raises(RuntimeError, match="adapter unavailable"):
+            current_instance_id()
+
+    assert "Failed resolving docsdb system-context adapter instance id" in caplog.text

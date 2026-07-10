@@ -7,6 +7,7 @@ import os
 from typing import Any
 
 from core.project_registry import list_projects
+from lib.fail_policy import is_fail_hard_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,9 @@ def current_instance_id() -> str:
         if instance:
             return instance
     except Exception as exc:
-        logger.debug("Failed resolving docsdb system-context adapter instance id: %s", exc)
+        logger.warning("Failed resolving docsdb system-context adapter instance id: %s", exc)
+        if is_fail_hard_enabled():
+            raise
     return str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
 
 
