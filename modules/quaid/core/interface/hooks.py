@@ -688,12 +688,16 @@ def _reset_runtime_resolution_caches() -> None:
 
         reset_embeddings_provider()
     except Exception:
+        if _fail_hard_enabled():
+            raise
         pass
     try:
         from lib.llm_clients import reset_model_config_cache
 
         reset_model_config_cache()
     except Exception:
+        if _fail_hard_enabled():
+            raise
         try:
             import lib.llm_clients as llm_clients
 
@@ -702,6 +706,8 @@ def _reset_runtime_resolution_caches() -> None:
             llm_clients._deep_reasoning_model = ""
             llm_clients._pricing_loaded = False
         except Exception:
+            if _fail_hard_enabled():
+                raise
             pass
 
 

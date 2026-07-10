@@ -920,6 +920,56 @@ def test_refresh_runtime_config_if_changed_reloads_and_resets_caches(monkeypatch
     assert cleared == [{"provider", "llm_config", "embeddings"}]
 
 
+def test_reset_runtime_resolution_caches_raises_embedding_reset_failure_when_fail_hard(monkeypatch):
+    from core.interface import hooks
+
+    monkeypatch.setattr(
+        "lib.embeddings.reset_embeddings_provider",
+        lambda: (_ for _ in ()).throw(RuntimeError("embedding reset failed")),
+    )
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="embedding reset failed"):
+        hooks._reset_runtime_resolution_caches()
+
+
+def test_reset_runtime_resolution_caches_raises_model_reset_failure_when_fail_hard(monkeypatch):
+    from core.interface import hooks
+
+    monkeypatch.setattr("lib.embeddings.reset_embeddings_provider", lambda: None)
+    monkeypatch.setattr(
+        "lib.llm_clients.reset_model_config_cache",
+        lambda: (_ for _ in ()).throw(RuntimeError("model reset failed")),
+    )
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="model reset failed"):
+        hooks._reset_runtime_resolution_caches()
+
+
+def test_reset_runtime_resolution_caches_falls_back_to_llm_flags_when_fail_open(monkeypatch):
+    from core.interface import hooks
+    import lib.llm_clients as llm_clients
+
+    monkeypatch.setattr("lib.embeddings.reset_embeddings_provider", lambda: None)
+    monkeypatch.setattr(
+        "lib.llm_clients.reset_model_config_cache",
+        lambda: (_ for _ in ()).throw(RuntimeError("model reset failed")),
+    )
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(llm_clients, "_models_loaded", True, raising=False)
+    monkeypatch.setattr(llm_clients, "_fast_reasoning_model", "stale-fast", raising=False)
+    monkeypatch.setattr(llm_clients, "_deep_reasoning_model", "stale-deep", raising=False)
+    monkeypatch.setattr(llm_clients, "_pricing_loaded", True, raising=False)
+
+    hooks._reset_runtime_resolution_caches()
+
+    assert llm_clients._models_loaded is False
+    assert llm_clients._fast_reasoning_model == ""
+    assert llm_clients._deep_reasoning_model == ""
+    assert llm_clients._pricing_loaded is False
+
+
 def test_refresh_runtime_config_if_changed_initializes_baseline_without_clearing_active_notices(
     monkeypatch, tmp_path
 ):
