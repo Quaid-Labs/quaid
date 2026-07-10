@@ -6193,6 +6193,92 @@ class TestExtractFromTranscript:
                 dry_run=False,
             )
 
+    @patch("ingest.extract.is_fail_hard_enabled", return_value=False)
+    @patch("ingest.extract._session_bridge.list_session_chunks", return_value=[])
+    @patch("ingest.extract._session_bridge.store_session_source_text")
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_advances_source_chunk_offset_after_store_failure(
+        self,
+        mock_store,
+        mock_store_source_chunks,
+        _mock_list_source_chunks,
+        _mock_fail_hard,
+    ):
+        from ingest.extract import apply_extracted_payloads
+
+        mock_store.return_value = {"id": "node-after-failure", "status": "created", "dedup_telemetry": {}}
+        mock_store_source_chunks.side_effect = [
+            RuntimeError("chunk store failed"),
+            [
+                {
+                    "chunk_id": "sch_second",
+                    "status": "created",
+                    "text": "User: Berto keeps the rover manual in cabinet seven.",
+                    "chunk_index": 1,
+                }
+            ],
+        ]
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Ada keeps the launch checklist in the red binder.",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                    "_source_chunk_ref": "chunk:first",
+                },
+                {
+                    "text": "Berto keeps the rover manual in cabinet seven.",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                    "_source_chunk_ref": "chunk:second",
+                },
+            ],
+            "raw_source_chunks": [
+                {
+                    "source_chunk_ref": "chunk:first",
+                    "text": "User: Ada keeps the launch checklist in the red binder.",
+                    "source_id": "sess-offset-failure",
+                    "session_id": "sess-offset-failure",
+                },
+                {
+                    "source_chunk_ref": "chunk:second",
+                    "text": "User: Berto keeps the rover manual in cabinet seven.",
+                    "source_id": "sess-offset-failure",
+                    "session_id": "sess-offset-failure",
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        applied = apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="flush",
+            session_id="sess-offset-failure",
+            dry_run=False,
+        )
+
+        assert applied["source_chunks_failed"] == 1
+        assert applied["source_chunks_stored"] == 1
+        assert [call.kwargs["start_index"] for call in mock_store_source_chunks.call_args_list] == [0, 1]
+        assert [call.kwargs["chunk_index"] for call in mock_store_source_chunks.call_args_list] == [0, 1]
+        assert any(call.kwargs.get("source_chunk_id") == "sch_second" for call in mock_store.call_args_list)
+
     @patch("ingest.extract.is_fail_hard_enabled", return_value=True)
     @patch("ingest.extract._session_bridge.list_session_chunks", return_value=[])
     @patch("ingest.extract._session_bridge.store_session_source_text", return_value=[{"status": "created"}])

@@ -345,6 +345,7 @@ def _store_payload_source_chunks(
             if fail_hard_enabled():
                 raise RuntimeError("Failed to store extraction source chunk") from exc
             result["source_chunks_failed"] = int(result.get("source_chunks_failed", 0) or 0) + 1
+            session_chunk_offsets[owner_session_key] = next_chunk_index + 1
             continue
         stored_chunks = [row for row in list(stored_rows or []) if isinstance(row, dict)]
         if not stored_chunks or any(not str(row.get("chunk_id") or "").strip() for row in stored_chunks):
@@ -356,6 +357,7 @@ def _store_payload_source_chunks(
             )
             if fail_hard_enabled():
                 raise RuntimeError("Source chunk store returned no chunk_id")
+            session_chunk_offsets[owner_session_key] = next_chunk_index + 1
             continue
         session_chunk_offsets[owner_session_key] = next_chunk_index + len(stored_chunks)
         ref_to_chunks[ref] = stored_chunks
