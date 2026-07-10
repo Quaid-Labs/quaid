@@ -185,6 +185,23 @@ def _docs_index_timeout_seconds() -> float:
     return _positive_env_timeout_seconds("QUAID_DOCS_INDEX_TIMEOUT_SECONDS", 120.0)
 
 
+def _docs_update_timeout_seconds() -> float:
+    raw_default = getattr(get_config().docs, "update_timeout_seconds", 480.0)
+    try:
+        default_seconds = float(raw_default)
+    except (TypeError, ValueError) as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Invalid docs.update_timeout_seconds") from exc
+        logger.warning("Invalid docs.update_timeout_seconds=%r; using default 480s", raw_default)
+        default_seconds = 480.0
+    if default_seconds <= 0:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Non-positive docs.update_timeout_seconds={raw_default!r}")
+        logger.warning("Non-positive docs.update_timeout_seconds=%r; using minimum 1s", raw_default)
+        default_seconds = 1.0
+    return _positive_env_timeout_seconds("QUAID_DOCS_UPDATE_TIMEOUT_SECONDS", default_seconds)
+
+
 def _positive_env_timeout_seconds(env_name: str, default_seconds: float) -> float:
     raw = str(os.environ.get(env_name, str(default_seconds)) or "").strip()
     if not raw:
@@ -1374,7 +1391,7 @@ def update_doc_from_diffs(
     )
 
     print(f"  Calling Deep Reasoning to update {doc_path}...")
-    doc_update_timeout = _positive_env_timeout_seconds("QUAID_DOCS_UPDATE_TIMEOUT_SECONDS", 300.0)
+    doc_update_timeout = _docs_update_timeout_seconds()
     response, duration = call_deep_reasoning(
         prompt=user_message,
         system_prompt=system_prompt,

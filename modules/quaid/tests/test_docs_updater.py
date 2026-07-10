@@ -2005,6 +2005,51 @@ class TestCmdUpdateStaleNeverIndexed:
         assert captured["timeout"] == 1.0
         assert "Non-positive QUAID_DOCS_UPDATE_TIMEOUT_SECONDS='0'; using minimum 1s" in caplog.text
 
+    def test_update_doc_from_diffs_uses_configured_llm_timeout(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path) as iroot:
+            from datastore.docsdb import updater
+
+            doc = iroot / "docs" / "doc.md"
+            doc.parent.mkdir(parents=True, exist_ok=True)
+            doc.write_text("# Doc\n\nExisting details.\n", encoding="utf-8")
+
+            captured = {}
+
+            def _fake_deep(**kwargs):
+                captured["timeout"] = kwargs.get("timeout")
+                return "# Doc\n\nUpdated safely.\n<!-- CHANGE_SUMMARY: timeout -->", 0.1
+
+            monkeypatch.delenv("QUAID_DOCS_UPDATE_TIMEOUT_SECONDS", raising=False)
+            monkeypatch.setattr(
+                updater,
+                "get_config",
+                lambda: SimpleNamespace(docs=SimpleNamespace(update_timeout_seconds=612)),
+            )
+            monkeypatch.setattr(updater, "get_git_diff", lambda *_args, **_kwargs: "+meaningful change\n")
+            monkeypatch.setattr(
+                updater,
+                "classify_doc_change",
+                lambda _diff: {
+                    "classification": "significant",
+                    "confidence": 0.95,
+                    "reasons": ["meaningful"],
+                    "lines_changed": 1,
+                    "trivial_signals": 0,
+                    "significant_signals": 1,
+                },
+            )
+            monkeypatch.setattr(updater, "call_deep_reasoning", _fake_deep)
+
+            ok = updater.update_doc_from_diffs(
+                "docs/doc.md",
+                "test purpose",
+                ["src/meaningful.py"],
+                dry_run=True,
+            )
+
+        assert ok is False
+        assert captured["timeout"] == 612.0
+
     def test_update_doc_from_diffs_gate_skip_does_not_count_as_written(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path) as iroot:
             from datastore.docsdb import updater
