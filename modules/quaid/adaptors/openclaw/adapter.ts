@@ -6170,43 +6170,6 @@ const quaidPlugin = {
       return api.registerHttpRoute(route as any);
     };
 
-    const mainProvisioned = ensureAgentInstanceProvisioned("main", "plugin_bootstrap", { wakeDaemon: false });
-    if (!mainProvisioned) {
-      const err = new Error("failed to provision primary OpenClaw instance before datastore init");
-      console.error("[quaid] Primary instance provisioning failed before plugin bootstrap");
-      if (isFailHardEnabled()) {
-        throw err;
-      }
-    }
-
-    // Ensure database exists (facade owns the init policy; adapter supplies callback).
-    try {
-      const initialized = facade.initializeDatastoreIfMissing();
-      if (initialized) {
-        console.log("[quaid] Datastore initialization complete");
-      }
-    } catch (err: unknown) {
-      console.error("[quaid] Datastore initialization failed:", (err as Error).message);
-      if (isFailHardEnabled()) {
-        throw err;
-      }
-    }
-
-    // Log stats
-    void facade.getStatsParsed()
-      .then((stats) => {
-        if (stats) {
-          console.log(
-            `[quaid] Database ready: ${stats.total_nodes} nodes, ${stats.edges} edges`
-          );
-        }
-      })
-      .catch((err: unknown) => {
-        console.warn(
-          `[quaid] stats probe failed: ${String((err as Error)?.message || err)}`
-        );
-      });
-
     let timeoutManager: SessionTimeoutManager | null = null;
     type HookContextResult = {
       prependContext?: string;
@@ -6224,8 +6187,50 @@ const quaidPlugin = {
     const embeddedPromptBuildFallbackTurnKeysBySession = new Map<string, { turnKey: string; expiresAtMs: number }>();
     const embeddedPromptBuildFallbackStartRuns = new Map<string, EmbeddedPromptBuildFallbackStartRun>();
     const embeddedFallbackLifecycleSignalSizes = new Map<string, number>();
+    let mainBootstrapAttempted = false;
     const EMBEDDED_PROMPT_BUILD_FALLBACK_TTL_MS = 30_000;
     const EMBEDDED_PROMPT_BUILD_FALLBACK_START_TTL_MS = 5_000;
+    const ensureMainDatastoreBootstrapOnHookCall = (): void => {
+      if (mainBootstrapAttempted) return;
+      mainBootstrapAttempted = true;
+
+      const mainProvisioned = ensureAgentInstanceProvisioned("main", "before_agent_start_bootstrap", { wakeDaemon: false });
+      if (!mainProvisioned) {
+        const err = new Error("failed to provision primary OpenClaw instance during hook bootstrap");
+        console.error("[quaid] Primary instance provisioning failed during hook bootstrap");
+        if (isFailHardEnabled()) {
+          throw err;
+        }
+      }
+
+      // Ensure database exists on first hook use. Registration must stay side-effect
+      // free for silo creation; before_agent_start is the earliest platform hook.
+      try {
+        const initialized = facade.initializeDatastoreIfMissing();
+        if (initialized) {
+          console.log("[quaid] Datastore initialization complete");
+        }
+      } catch (err: unknown) {
+        console.error("[quaid] Datastore initialization failed:", (err as Error).message);
+        if (isFailHardEnabled()) {
+          throw err;
+        }
+      }
+
+      void facade.getStatsParsed()
+        .then((stats) => {
+          if (stats) {
+            console.log(
+              `[quaid] Database ready: ${stats.total_nodes} nodes, ${stats.edges} edges`
+            );
+          }
+        })
+        .catch((err: unknown) => {
+          console.warn(
+            `[quaid] stats probe failed: ${String((err as Error)?.message || err)}`
+          );
+        });
+    };
     const readOptionalOpenClawDeviceJson = (filePath: string): Record<string, any> => {
       if (!fs.existsSync(filePath)) return {};
       try {
@@ -6530,6 +6535,7 @@ const quaidPlugin = {
       }
       const startAgentLabel = resolveHookAgentLabel(event, ctx);
       const startInstanceId = getInstanceId(startAgentLabel);
+      ensureMainDatastoreBootstrapOnHookCall();
       ensureAgentInstanceProvisioned(startAgentLabel, "before_agent_start", { wakeDaemon: false });
       maybeScheduleOpenClawGatewayRestartForIdentityChange(startInstanceId, "before_agent_start");
       try {

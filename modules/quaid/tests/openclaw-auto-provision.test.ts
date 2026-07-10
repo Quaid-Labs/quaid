@@ -267,6 +267,91 @@ describe("openclaw auto-provision", () => {
     fs.rmSync(home, { recursive: true, force: true });
   });
 
+  it("defers main silo provisioning and datastore bootstrap until before_agent_start", async () => {
+    const home = makeTempDir("quaid-oc-main-bootstrap-hook-home-");
+    const hiddenHome = path.join(home, ".quaid");
+    const visibleHome = path.join(home, "quaid");
+    const openClawRoot = path.join(home, ".openclaw");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const repoModulesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const linkedModulesRoot = path.join(hiddenHome, "modules", "quaid");
+    const mainConfigPath = path.join(hiddenHome, "instances", "openclaw-main", "config.json");
+
+    fs.mkdirSync(path.dirname(linkedModulesRoot), { recursive: true });
+    fs.symlinkSync(repoModulesRoot, linkedModulesRoot, "dir");
+    fs.mkdirSync(path.join(visibleHome, "projects", "quaid"), { recursive: true });
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "SOUL.md"), "# SOUL\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "USER.md"), "# USER\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "ENVIRONMENT.md"), "# ENVIRONMENT\n", "utf8");
+    writeJson(path.join(hiddenHome, "shared", "config", "openclaw", "config.json"), {
+      adapter: { type: "openclaw" },
+      retrieval: { failHard: false, maxLimit: 20, autoInject: false },
+      models: {
+        llmProvider: "openai-codex",
+        deepReasoningProvider: "openai-codex",
+        fastReasoningProvider: "openai-codex",
+        deepReasoning: "gpt-5.1-codex",
+        fastReasoning: "gpt-5.1-codex",
+      },
+      plugins: { strict: false },
+    });
+    writeJson(openClawConfigPath, {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+      env: {
+        vars: {
+          QUAID_INSTANCE: "openclaw-main",
+        },
+      },
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { plugin } = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath);
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    expect(fs.existsSync(mainConfigPath)).toBe(false);
+    expect(childProcessState.datastoreStatsSyncCalls).toHaveLength(0);
+    expect(childProcessState.datastoreStatsSpawnCalls).toHaveLength(0);
+
+    const beforeAgentStartCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_agent_start" && call?.[2]?.name === "memory-injection"
+    );
+    expect(beforeAgentStartCall).toBeTruthy();
+    const beforeAgentStartHandler = beforeAgentStartCall?.[1];
+    await beforeAgentStartHandler(
+      { prependContext: "" },
+      {
+        sessionId: "1cc9f44f-94fa-49eb-b243-0ecddc1019ae",
+        sessionKey: "agent:main:tui-main-bootstrap",
+      },
+    );
+
+    expect(fs.existsSync(mainConfigPath)).toBe(true);
+    await vi.waitFor(() => {
+      expect(childProcessState.datastoreStatsSpawnCalls).toHaveLength(2);
+    });
+    await beforeAgentStartHandler(
+      { prependContext: "" },
+      {
+        sessionId: "1cc9f44f-94fa-49eb-b243-0ecddc1019ae",
+        sessionKey: "agent:main:tui-main-bootstrap",
+      },
+    );
+    await vi.waitFor(() => {
+      expect(childProcessState.datastoreStatsSpawnCalls).toHaveLength(3);
+    });
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
   it("does not fail plugin register when boot daemon warmup misses under failHard", async () => {
     const home = makeTempDir("quaid-oc-boot-daemon-soft-home-");
     const hiddenHome = path.join(home, ".quaid");
@@ -521,7 +606,7 @@ describe("openclaw auto-provision", () => {
     ).toHaveLength(0);
     expect(childProcessState.datastoreStatsSyncCalls).toHaveLength(0);
     await vi.waitFor(() => {
-      expect(childProcessState.datastoreStatsSpawnCalls).toHaveLength(1);
+      expect(childProcessState.datastoreStatsSpawnCalls).toHaveLength(2);
     });
     expect(
       readTraceEvents(hiddenHome, "openclaw-main").some(

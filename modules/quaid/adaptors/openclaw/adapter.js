@@ -5014,36 +5014,6 @@ const quaidPlugin = {
       }
       return api.registerHttpRoute(route);
     };
-    const mainProvisioned = ensureAgentInstanceProvisioned("main", "plugin_bootstrap", { wakeDaemon: false });
-    if (!mainProvisioned) {
-      const err = new Error("failed to provision primary OpenClaw instance before datastore init");
-      console.error("[quaid] Primary instance provisioning failed before plugin bootstrap");
-      if (isFailHardEnabled2()) {
-        throw err;
-      }
-    }
-    try {
-      const initialized = facade.initializeDatastoreIfMissing();
-      if (initialized) {
-        console.log("[quaid] Datastore initialization complete");
-      }
-    } catch (err) {
-      console.error("[quaid] Datastore initialization failed:", err.message);
-      if (isFailHardEnabled2()) {
-        throw err;
-      }
-    }
-    void facade.getStatsParsed().then((stats) => {
-      if (stats) {
-        console.log(
-          `[quaid] Database ready: ${stats.total_nodes} nodes, ${stats.edges} edges`
-        );
-      }
-    }).catch((err) => {
-      console.warn(
-        `[quaid] stats probe failed: ${String(err?.message || err)}`
-      );
-    });
     let timeoutManager = null;
     let beforePromptBuildHandler = async () => void 0;
     const identityOnlyRefreshResults = /* @__PURE__ */ new WeakSet();
@@ -5052,8 +5022,43 @@ const quaidPlugin = {
     const embeddedPromptBuildFallbackTurnKeysBySession = /* @__PURE__ */ new Map();
     const embeddedPromptBuildFallbackStartRuns = /* @__PURE__ */ new Map();
     const embeddedFallbackLifecycleSignalSizes = /* @__PURE__ */ new Map();
+    let mainBootstrapAttempted = false;
     const EMBEDDED_PROMPT_BUILD_FALLBACK_TTL_MS = 3e4;
     const EMBEDDED_PROMPT_BUILD_FALLBACK_START_TTL_MS = 5e3;
+    const ensureMainDatastoreBootstrapOnHookCall = () => {
+      if (mainBootstrapAttempted) return;
+      mainBootstrapAttempted = true;
+      const mainProvisioned = ensureAgentInstanceProvisioned("main", "before_agent_start_bootstrap", { wakeDaemon: false });
+      if (!mainProvisioned) {
+        const err = new Error("failed to provision primary OpenClaw instance during hook bootstrap");
+        console.error("[quaid] Primary instance provisioning failed during hook bootstrap");
+        if (isFailHardEnabled2()) {
+          throw err;
+        }
+      }
+      try {
+        const initialized = facade.initializeDatastoreIfMissing();
+        if (initialized) {
+          console.log("[quaid] Datastore initialization complete");
+        }
+      } catch (err) {
+        console.error("[quaid] Datastore initialization failed:", err.message);
+        if (isFailHardEnabled2()) {
+          throw err;
+        }
+      }
+      void facade.getStatsParsed().then((stats) => {
+        if (stats) {
+          console.log(
+            `[quaid] Database ready: ${stats.total_nodes} nodes, ${stats.edges} edges`
+          );
+        }
+      }).catch((err) => {
+        console.warn(
+          `[quaid] stats probe failed: ${String(err?.message || err)}`
+        );
+      });
+    };
     const readOptionalOpenClawDeviceJson = (filePath) => {
       if (!fs.existsSync(filePath)) return {};
       try {
@@ -5340,6 +5345,7 @@ ${sessionScope}` : "";
       }
       const startAgentLabel = resolveHookAgentLabel(event, ctx);
       const startInstanceId = getInstanceId(startAgentLabel);
+      ensureMainDatastoreBootstrapOnHookCall();
       ensureAgentInstanceProvisioned(startAgentLabel, "before_agent_start", { wakeDaemon: false });
       maybeScheduleOpenClawGatewayRestartForIdentityChange(startInstanceId, "before_agent_start");
       try {
