@@ -285,6 +285,42 @@ class TestEmbeddingsProviderSelection:
         finally:
             reset_embeddings_provider()
 
+    def test_get_embeddings_embed_many_failure_warns_when_returning_empty_batch(self, caplog):
+        class _FailingBatchProvider(MockEmbeddingsProvider):
+            def embed(self, text):
+                raise AssertionError("per-item fallback must not run when return_exceptions=True")
+
+            def embed_many(self, texts, *, timeout_s=None):
+                raise RuntimeError("embedding backend unavailable")
+
+        reset_embeddings_provider()
+        set_embeddings_provider(_FailingBatchProvider())
+
+        try:
+            with patch("lib.embeddings.is_fail_hard_enabled", return_value=False), \
+                 caplog.at_level("WARNING", logger="lib.embeddings"):
+                assert get_embeddings(["alpha", "beta"], return_exceptions=True) == [None, None]
+        finally:
+            reset_embeddings_provider()
+
+        assert "get_embeddings embed_many failed" in caplog.text
+        assert "embedding backend unavailable" in caplog.text
+
+    def test_get_embeddings_embed_many_failure_raises_when_failhard_enabled(self):
+        class _FailingBatchProvider(MockEmbeddingsProvider):
+            def embed_many(self, texts, *, timeout_s=None):
+                raise RuntimeError("embedding backend unavailable")
+
+        reset_embeddings_provider()
+        set_embeddings_provider(_FailingBatchProvider())
+
+        try:
+            with patch("lib.embeddings.is_fail_hard_enabled", return_value=True):
+                with pytest.raises(RuntimeError, match="embedding backend unavailable"):
+                    get_embeddings(["alpha", "beta"], return_exceptions=True)
+        finally:
+            reset_embeddings_provider()
+
     def test_embedding_workers_use_separate_parallel_setting(self, monkeypatch):
         class _Cfg:
             core = type(

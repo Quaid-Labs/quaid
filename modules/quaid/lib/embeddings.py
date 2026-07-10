@@ -299,8 +299,15 @@ def get_embeddings(
     if callable(embed_many):
         try:
             out = _call_embed_many(provider, unique_items, timeout_s)
-        except Exception:
+        except Exception as exc:
             if not return_exceptions:
+                raise
+            logger.warning(
+                "get_embeddings embed_many failed; returning empty batch: %s",
+                exc,
+                exc_info=True,
+            )
+            if is_fail_hard_enabled():
                 raise
             return [None] * len(items)
         if len(out) == len(unique_items):
