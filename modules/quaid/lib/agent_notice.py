@@ -139,7 +139,10 @@ def _uses_turn_scoped_provider_notices(adapter: Any, *, severity: str, source: s
         return False
     try:
         return adapter.get_capability("turn_scoped_provider_notices", False) is True
-    except Exception:
+    except Exception as exc:
+        logger.debug("_uses_turn_scoped_provider_notices failed: %s", exc)
+        if is_fail_hard_enabled():
+            raise
         return False
 
 
@@ -187,7 +190,7 @@ def _file_lock(path: Path):
 
             fcntl.flock(handle, fcntl.LOCK_UN)
         except Exception as exc:
-            logger.debug("Deferred-notices file lock release failed for %s: %s", path, exc)
+            logger.warning("Deferred-notices file lock release failed for %s: %s", path, exc)
         handle.close()
 
 

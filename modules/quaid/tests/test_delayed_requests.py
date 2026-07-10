@@ -58,6 +58,27 @@ def test_deferred_file_lock_logs_acquire_failure(tmp_path, monkeypatch, caplog):
     assert "lock unavailable" in caplog.text
 
 
+def test_deferred_file_lock_logs_release_failure(tmp_path, monkeypatch, caplog):
+    import lib.agent_notice as agent_notice
+
+    class FakeFcntl:
+        LOCK_EX = 1
+        LOCK_UN = 2
+
+        def flock(self, _handle, operation):
+            if operation == self.LOCK_UN:
+                raise OSError("unlock unavailable")
+
+    monkeypatch.setitem(sys.modules, "fcntl", FakeFcntl())
+
+    with caplog.at_level("WARNING", logger="lib.agent_notice"):
+        with agent_notice._file_lock(tmp_path / "deferred.lock"):
+            pass
+
+    assert "Deferred-notices file lock release failed" in caplog.text
+    assert "unlock unavailable" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # Basic write
 # ---------------------------------------------------------------------------
