@@ -995,9 +995,10 @@ class JanitorMetrics:
                 self._thread_task.pop(tid, None)
     
     def task_duration(self, task_name: str) -> float:
-        if task_name in self.task_times and self.task_times[task_name]["end"]:
-            return self.task_times[task_name]["end"] - self.task_times[task_name]["start"]
-        return 0.0
+        with self._lock:
+            if task_name in self.task_times and self.task_times[task_name]["end"]:
+                return self.task_times[task_name]["end"] - self.task_times[task_name]["start"]
+            return 0.0
     
     def total_duration(self) -> float:
         return time.monotonic() - self.start_time

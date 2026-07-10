@@ -100,6 +100,26 @@ def test_janitor_metrics_elapsed_time_uses_monotonic(monkeypatch):
     assert summary["task_durations"]["demo"] == pytest.approx(3.5)
 
 
+def test_janitor_metrics_task_duration_uses_lock():
+    class _TrackingLock:
+        def __init__(self):
+            self.entered = False
+
+        def __enter__(self):
+            self.entered = True
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    metrics = maintenance_ops.JanitorMetrics()
+    lock = _TrackingLock()
+    metrics.task_times["demo"] = {"start": 10.0, "end": 13.5}
+    metrics._lock = lock
+
+    assert metrics.task_duration("demo") == pytest.approx(3.5)
+    assert lock.entered is True
+
+
 def test_maintenance_diagnostic_fallbacks_log(monkeypatch, caplog):
     class _BrokenUsers:
         identities = {}
