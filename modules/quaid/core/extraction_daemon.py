@@ -6886,6 +6886,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         cursor_processed_signal_type = str(cursor_data.get("processed_signal_type") or "").strip()
         cursor_marks_processed_extraction = cursor_processed_signal_type in VALID_SIGNAL_TYPES
         reset_staged_state_for_full_reextract = False
+        relocated_smaller_preserved_pending_flush = False
 
         # Write a preliminary cursor entry before extraction begins so that
         # check_idle_sessions() can discover this session even if the daemon is
@@ -6981,6 +6982,31 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 and not _is_daemon_preserved_session_transcript_path(cursor_transcript)
                 and _is_daemon_preserved_session_transcript_path(str(transcript_path))
             )
+            _relocated_staged_source_path = str(
+                staged_state.get("source_transcript_path")
+                or staged_state.get("buffer_transcript_path")
+                or staged_state.get("transcript_path")
+                or ""
+            ).strip()
+            _relocated_staged_source_size_bytes = (
+                _transcript_size_bytes(_relocated_staged_source_path)
+                if _relocated_staged_source_path and os.path.isfile(_relocated_staged_source_path)
+                else 0
+            )
+            relocated_smaller_preserved_pending_flush = bool(
+                _is_dir_relocation
+                and signal_type in ("compaction", "reset", "session_end", "timeout")
+                and _relocated_content_changed
+                and _relocated_cursor_size_bytes
+                and _relocated_current_size_bytes
+                and _relocated_current_size_bytes < _relocated_cursor_size_bytes
+                and _is_daemon_preserved_session_transcript_path(str(transcript_path))
+                and _rolling_state_has_pending_content(staged_state)
+                and _relocated_staged_source_path
+                and os.path.isfile(_relocated_staged_source_path)
+                and not _is_daemon_preserved_session_transcript_path(_relocated_staged_source_path)
+                and _relocated_staged_source_size_bytes > _relocated_current_size_bytes
+            )
             # Cross-directory reset rename: cursor is at a relocated path (dir2/X.jsonl)
             # and the new transcript is the .reset.* backup in the original directory
             # (dir1/X.jsonl.reset.<ts>).  The directory-level _is_reset_rename check
@@ -7041,6 +7067,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 and os.path.isfile(cursor_transcript)
                 and not _is_daemon_preserved_session_transcript_path(cursor_transcript)
                 and _is_daemon_preserved_session_transcript_path(str(transcript_path))
+                and not relocated_smaller_preserved_pending_flush
                 and _preserved_mirror_user_turns_are_covered_by_live(adapter, cursor_transcript, str(transcript_path))
             ):
                 # OpenClaw can emit session_end against the preserved mirror while
@@ -7085,6 +7112,13 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     "past cursor offset %d (%s -> %s); continuing from cursor",
                     label, session_id, _relocated_total_lines - cursor_offset, cursor_offset,
                     cursor_transcript, transcript_path,
+                )
+            elif relocated_smaller_preserved_pending_flush:
+                logger.info(
+                    "[%s] session %s: smaller preserved transcript mirror arrived while staged rolling "
+                    "payload is pending (%s -> %s, cursor_size=%d, current_size=%d); preserving staged flush",
+                    label, session_id, cursor_transcript, transcript_path,
+                    _relocated_cursor_size_bytes, _relocated_current_size_bytes,
                 )
             elif (
                 _is_dir_relocation
@@ -7232,6 +7266,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             staged_source_path = str(
                 staged_state.get("source_transcript_path")
                 or staged_state.get("buffer_transcript_path")
+                or staged_state.get("transcript_path")
                 or ""
             ).strip()
             if (
@@ -7285,7 +7320,18 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 and current_size_bytes
                 and current_size_bytes < prior_size_bytes
             )
-            if same_source_rebased_smaller:
+            if relocated_smaller_preserved_pending_flush:
+                logger.warning(
+                    "[%s] session %s: cursor offset %d > preserved mirror length %d during staged "
+                    "relocation flush; clamping to EOF without clearing staged payload",
+                    label,
+                    session_id,
+                    cursor_offset,
+                    total_lines,
+                )
+                cursor_offset = total_lines
+                cursor_clamped_to_eof = True
+            elif same_source_rebased_smaller:
                 logger.warning(
                     "[%s] session %s: cursor offset %d > file length %d on same path, "
                     "but transcript shrank from %d to %d bytes; resetting cursor for rebased content",
