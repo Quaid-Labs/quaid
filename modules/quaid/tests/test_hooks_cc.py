@@ -1740,6 +1740,70 @@ def test_store_context_refresh_state_logs_merge_failures_when_fail_open(tmp_path
     assert json.loads(state_path.read_text(encoding="utf-8"))["sessions"]["sess-1"]["turn_count"] == 2
 
 
+def test_turn_based_refresh_increment_reads_state_under_lock(tmp_path, monkeypatch):
+    from core.interface import hooks
+
+    state_path = tmp_path / "data" / "context-refresh-state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "sessions": {
+                    "race-session": {
+                        "turn_count": 5,
+                        "last_refresh_turn": 0,
+                        "last_refresh_at": 1000,
+                    }
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def capability(key, default=None):
+        if key == "context_refresh_strategy":
+            return "turn_based"
+        if key == "context_refresh_guard":
+            return {"min_turns": 50, "min_interval_minutes": 999}
+        return default
+
+    injected = {"done": False}
+    real_flock = hooks.fcntl.flock
+
+    def fake_flock(fd, op):
+        if op == hooks.fcntl.LOCK_EX and not injected["done"]:
+            injected["done"] = True
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "sessions": {
+                            "race-session": {
+                                "turn_count": 6,
+                                "last_refresh_turn": 0,
+                                "last_refresh_at": 1000,
+                            }
+                        }
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        return real_flock(fd, op)
+
+    monkeypatch.setattr(hooks, "_context_refresh_state_path", lambda: state_path)
+    monkeypatch.setattr(hooks, "_adapter_capability", capability)
+    monkeypatch.setattr(hooks, "_identity_context_signature", lambda: "")
+    monkeypatch.setattr(hooks, "_now_epoch", lambda: 1000)
+    monkeypatch.setattr(hooks.fcntl, "flock", fake_flock)
+
+    assert hooks._should_emit_turn_based_refresh("race-session", prompt="ordinary prompt") is False
+
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert injected["done"] is True
+    assert payload["sessions"]["race-session"]["turn_count"] == 7
+
+
 def test_hook_extract_precompact_resolves_cc_transcript_and_flushes_staged_payload(
     tmp_path, sessions_dir, mock_adapter, monkeypatch
 ):

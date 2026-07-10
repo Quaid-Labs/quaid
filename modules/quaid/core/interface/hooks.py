@@ -2767,6 +2767,67 @@ def _store_context_refresh_state(state: Dict[str, Any]) -> None:
                 pass
 
 
+def _update_context_refresh_state_locked(update_func):
+    path = _context_refresh_state_path()
+    if path is None:
+        return update_func({})
+
+    tmp_path: Path | None = None
+    lock_file = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = path.with_suffix(path.suffix + ".lock")
+        lock_file = lock_path.open("a+", encoding="utf-8")
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+    except Exception:
+        if lock_file is not None:
+            try:
+                lock_file.close()
+            except OSError:
+                pass
+        if _fail_hard_enabled():
+            raise
+        return update_func({})
+
+    try:
+        state: Dict[str, Any] = {}
+        try:
+            if path.is_file():
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    state = payload
+        except Exception as load_exc:
+            logger.warning("Failed merging context refresh state before write: %s", load_exc)
+            if _fail_hard_enabled():
+                raise
+
+        result = update_func(state)
+        try:
+            tmp_path = path.with_suffix(f".tmp.{os.getpid()}.{time.time_ns()}")
+            tmp_path.write_text(json.dumps(state, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+            os.replace(tmp_path, path)
+            tmp_path = None
+        except Exception:
+            if _fail_hard_enabled():
+                raise
+        return result
+    finally:
+        if lock_file is not None:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            try:
+                lock_file.close()
+            except OSError:
+                pass
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
 def _path_within(root: Path, candidate: Path) -> bool:
     try:
         candidate.resolve().relative_to(root.resolve())
@@ -2864,107 +2925,103 @@ def _should_emit_turn_based_refresh(session_id: str, *, prompt: str = "") -> boo
     min_turns = int(guard.get("min_turns", 50))
     min_interval_seconds = int(guard.get("min_interval_minutes", 30)) * 60
 
-    state = _load_context_refresh_state()
-    sessions = state.setdefault("sessions", {})
-    if not isinstance(sessions, dict):
-        sessions = {}
-        state["sessions"] = sessions
-    entry = sessions.get(sid)
-    if not isinstance(entry, dict):
-        entry = {}
-        sessions[sid] = entry
+    def update_state(state: Dict[str, Any]) -> bool:
+        sessions = state.setdefault("sessions", {})
+        if not isinstance(sessions, dict):
+            sessions = {}
+            state["sessions"] = sessions
+        entry = sessions.get(sid)
+        if not isinstance(entry, dict):
+            entry = {}
+            sessions[sid] = entry
 
-    now = _now_epoch()
-    turn_count = int(entry.get("turn_count", 0) or 0) + 1
-    entry["turn_count"] = turn_count
+        now = _now_epoch()
+        turn_count = int(entry.get("turn_count", 0) or 0) + 1
+        entry["turn_count"] = turn_count
 
-    last_refresh_turn = int(entry.get("last_refresh_turn", 0) or 0)
-    last_refresh_at = int(entry.get("last_refresh_at", 0) or 0)
-    identity_signature = _identity_context_signature()
-    last_identity_signature = str(entry.get("last_identity_signature") or "").strip()
-    prompt_hash = _turn_refresh_prompt_hash(prompt)
-    last_prompt_hash = str(entry.get("last_refresh_prompt_hash") or "").strip()
-    last_reason = str(entry.get("last_refresh_reason") or "").strip()
+        last_refresh_turn = int(entry.get("last_refresh_turn", 0) or 0)
+        last_refresh_at = int(entry.get("last_refresh_at", 0) or 0)
+        identity_signature = _identity_context_signature()
+        last_identity_signature = str(entry.get("last_identity_signature") or "").strip()
+        prompt_hash = _turn_refresh_prompt_hash(prompt)
+        last_prompt_hash = str(entry.get("last_refresh_prompt_hash") or "").strip()
+        last_reason = str(entry.get("last_refresh_reason") or "").strip()
 
-    # Codex CLI 0.125.0 can run duplicate UserPromptSubmit hooks in parallel for
-    # one user turn. The first process may mark the refresh as delivered before
-    # the host chooses which hook output reaches the model. Re-emit the same
-    # refresh for a short same-prompt window so a racing duplicate cannot suppress
-    # identity/context delivery.
-    if (
-        prompt_hash
-        and prompt_hash == last_prompt_hash
-        and last_reason in {"identity_changed", "first_turn", "timeout_marker", "turn_guard", "time_guard"}
-        and last_refresh_at > 0
-        and (now - last_refresh_at) <= _TURN_REFRESH_PARALLEL_REPLAY_SECONDS
-        and (not identity_signature or identity_signature == last_identity_signature)
-    ):
-        _store_context_refresh_state(state)
-        return True
+        # Codex CLI 0.125.0 can run duplicate UserPromptSubmit hooks in parallel for
+        # one user turn. The first process may mark the refresh as delivered before
+        # the host chooses which hook output reaches the model. Re-emit the same
+        # refresh for a short same-prompt window so a racing duplicate cannot suppress
+        # identity/context delivery.
+        if (
+            prompt_hash
+            and prompt_hash == last_prompt_hash
+            and last_reason in {"identity_changed", "first_turn", "timeout_marker", "turn_guard", "time_guard"}
+            and last_refresh_at > 0
+            and (now - last_refresh_at) <= _TURN_REFRESH_PARALLEL_REPLAY_SECONDS
+            and (not identity_signature or identity_signature == last_identity_signature)
+        ):
+            return True
 
-    # Idle-timeout extraction path (used by adapters without compaction hooks)
-    # writes a one-shot marker after timeout processing. Consume it on the next
-    # turn and force a context refresh regardless of turn/time guard thresholds.
-    if _consume_timeout_refresh_marker(sid):
-        _mark_turn_based_refresh(
-            entry,
-            turn_count=turn_count,
-            refreshed_at=now,
-            identity_signature=identity_signature,
-            reason="timeout_marker",
-            prompt_hash=prompt_hash,
-        )
-        _store_context_refresh_state(state)
-        return True
-
-    if identity_signature and identity_signature != last_identity_signature:
-        _mark_turn_based_refresh(
-            entry,
-            turn_count=turn_count,
-            refreshed_at=now,
-            identity_signature=identity_signature,
-            reason="identity_changed",
-            prompt_hash=prompt_hash,
-        )
-        _store_context_refresh_state(state)
-        return True
-
-    # First prompt after a CDX session starts is the first refresh point we can
-    # trust for /new-created in-process threads. SessionStart is not guaranteed
-    # to fire for those threads, so do not suppress this as a duplicate.
-    if last_refresh_at <= 0:
-        if identity_signature:
+        # Idle-timeout extraction path (used by adapters without compaction hooks)
+        # writes a one-shot marker after timeout processing. Consume it on the next
+        # turn and force a context refresh regardless of turn/time guard thresholds.
+        if _consume_timeout_refresh_marker(sid):
             _mark_turn_based_refresh(
                 entry,
                 turn_count=turn_count,
                 refreshed_at=now,
                 identity_signature=identity_signature,
-                reason="first_turn",
+                reason="timeout_marker",
                 prompt_hash=prompt_hash,
             )
-            _store_context_refresh_state(state)
             return True
-        entry["last_refresh_turn"] = turn_count
-        entry["last_refresh_at"] = now
-        entry["last_refresh_reason"] = "first_turn_no_identity"
-        _store_context_refresh_state(state)
-        return False
 
-    due_turns = min_turns > 0 and (turn_count - last_refresh_turn) >= min_turns
-    due_time = min_interval_seconds > 0 and (now - last_refresh_at) >= min_interval_seconds
-    should_emit = bool(due_turns or due_time)
-    if should_emit:
-        reason = "turn_guard" if due_turns else "time_guard"
-        _mark_turn_based_refresh(
-            entry,
-            turn_count=turn_count,
-            refreshed_at=now,
-            identity_signature=identity_signature,
-            reason=reason,
-            prompt_hash=prompt_hash,
-        )
-    _store_context_refresh_state(state)
-    return should_emit
+        if identity_signature and identity_signature != last_identity_signature:
+            _mark_turn_based_refresh(
+                entry,
+                turn_count=turn_count,
+                refreshed_at=now,
+                identity_signature=identity_signature,
+                reason="identity_changed",
+                prompt_hash=prompt_hash,
+            )
+            return True
+
+        # First prompt after a CDX session starts is the first refresh point we can
+        # trust for /new-created in-process threads. SessionStart is not guaranteed
+        # to fire for those threads, so do not suppress this as a duplicate.
+        if last_refresh_at <= 0:
+            if identity_signature:
+                _mark_turn_based_refresh(
+                    entry,
+                    turn_count=turn_count,
+                    refreshed_at=now,
+                    identity_signature=identity_signature,
+                    reason="first_turn",
+                    prompt_hash=prompt_hash,
+                )
+                return True
+            entry["last_refresh_turn"] = turn_count
+            entry["last_refresh_at"] = now
+            entry["last_refresh_reason"] = "first_turn_no_identity"
+            return False
+
+        due_turns = min_turns > 0 and (turn_count - last_refresh_turn) >= min_turns
+        due_time = min_interval_seconds > 0 and (now - last_refresh_at) >= min_interval_seconds
+        should_emit = bool(due_turns or due_time)
+        if should_emit:
+            reason = "turn_guard" if due_turns else "time_guard"
+            _mark_turn_based_refresh(
+                entry,
+                turn_count=turn_count,
+                refreshed_at=now,
+                identity_signature=identity_signature,
+                reason=reason,
+                prompt_hash=prompt_hash,
+            )
+        return should_emit
+
+    return bool(_update_context_refresh_state_locked(update_state))
 
 
 def _collect_context_file_sections(files: Any, *, section_prefix: str, default_max_lines: int = 120) -> List[str]:
