@@ -59,10 +59,6 @@ def _now_datetime() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _is_invalid_quaid_now_error(exc: BaseException) -> bool:
-    return isinstance(exc, ValueError) and str(exc).startswith("Invalid QUAID_NOW=")
-
-
 class CodexAdapter(QuaidAdapter):
     """Adapter for Codex CLI/app sessions."""
 
@@ -255,7 +251,7 @@ class CodexAdapter(QuaidAdapter):
             )
             return True
         except Exception as exc:
-            if _is_invalid_quaid_now_error(exc) or is_fail_hard_enabled():
+            if is_fail_hard_enabled():
                 raise
             _trace_m15("adapter.codex.notify.error", message=message, error=str(exc))
             print(f"[notify] Failed to queue Codex notification: {exc}", file=sys.stderr)
@@ -356,7 +352,7 @@ class CodexAdapter(QuaidAdapter):
                 messages=messages,
             )
         except Exception as exc:
-            if _is_invalid_quaid_now_error(exc) or is_fail_hard_enabled():
+            if is_fail_hard_enabled():
                 raise
             _trace_m15("adapter.codex.pending.error", path=str(pending), error=str(exc))
             print(f"[notify] Failed to drain Codex notifications: {exc}", file=sys.stderr)
