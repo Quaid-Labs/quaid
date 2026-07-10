@@ -10,9 +10,21 @@ datastore plugin contracts; for now a static list.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+        return bool(is_fail_hard_enabled())
+    except Exception:
+        return True
+
 
 COMMAND_REGISTRY: list[dict] = [
     {
@@ -90,8 +102,10 @@ def resolve_command_registry(
             )
             if found:
                 instance = found.removeprefix("misc--")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to scan misc project directory %s: %s", projects_dir, exc)
+            if _fail_hard_enabled():
+                raise
 
     misc_path = (
         str(Path(workspace) / "projects" / f"misc--{instance}")

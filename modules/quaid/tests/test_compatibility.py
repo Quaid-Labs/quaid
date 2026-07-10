@@ -445,6 +445,34 @@ class TestVersionWatcher:
         raw = json.loads((tmp_path / "quaid-update-notified.json").read_text(encoding="utf-8"))
         assert raw == {"version": "999.0.0", "notified_at": datetime(2026, 3, 11, 5, 6, 7, tzinfo=timezone.utc).timestamp()}
 
+    def test_check_quaid_update_notify_failure_raises_when_failhard(self, tmp_path, caplog):
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        matrix = {"latest_quaid": "999.0.0", "update_message": "Update now"}
+        adapter = MagicMock()
+        adapter.notify.side_effect = RuntimeError("notify down")
+
+        with patch("lib.adapter.get_adapter", return_value=adapter), \
+             patch("core.compatibility._fail_hard_enabled", return_value=True), \
+             caplog.at_level("WARNING", logger="core.compatibility"):
+            with pytest.raises(RuntimeError, match="notify down"):
+                watcher._check_quaid_update(matrix)
+
+        assert "Failed to send update notification: notify down" in caplog.text
+
+    def test_check_quaid_update_notify_failure_warns_when_fail_open(self, tmp_path, caplog):
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        matrix = {"latest_quaid": "999.0.0", "update_message": "Update now"}
+        adapter = MagicMock()
+        adapter.notify.side_effect = RuntimeError("notify down")
+
+        with patch("lib.adapter.get_adapter", return_value=adapter), \
+             patch("core.compatibility._fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="core.compatibility"):
+            watcher._check_quaid_update(matrix)
+
+        assert "Failed to send update notification: notify down" in caplog.text
+        assert (tmp_path / "quaid-update-notified.json").exists()
+
     def test_notify_state_change_get_adapter_failure_raises_when_failhard(self, tmp_path, caplog):
         watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
         caplog.set_level("WARNING")

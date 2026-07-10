@@ -276,6 +276,29 @@ class TestResolveCommandRegistry:
         misc_entry = next(c for c in resolved if c["id"] == "misc_project")
         assert "misc--my-instance" in misc_entry["hint"]
 
+    def test_directory_scan_failure_warns_and_leaves_template_when_fail_open(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+
+        with patch("pathlib.Path.iterdir", side_effect=OSError("scan denied")), \
+             patch("lib.command_registry._fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="lib.command_registry"):
+            resolved = resolve_command_registry()
+
+        misc_entry = next(c for c in resolved if c["id"] == "misc_project")
+        assert "{misc_path}" in misc_entry["hint"]
+        assert "Failed to scan misc project directory" in caplog.text
+        assert "scan denied" in caplog.text
+
+    def test_directory_scan_failure_raises_when_fail_hard(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+
+        with patch("pathlib.Path.iterdir", side_effect=OSError("scan denied")), \
+             patch("lib.command_registry._fail_hard_enabled", return_value=True):
+            with pytest.raises(OSError, match="scan denied"):
+                resolve_command_registry()
+
     def test_unresolved_template_when_no_instance(self, monkeypatch):
         """Without instance info, {misc_path} stays as-is in the hint."""
         monkeypatch.delenv("QUAID_HOME", raising=False)

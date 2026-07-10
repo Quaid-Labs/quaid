@@ -626,7 +626,9 @@ class VersionWatcher:
             from lib.adapter import get_adapter
             get_adapter().notify(f"[Quaid] {update_msg}", force=True)
         except Exception as e:
-            logger.debug("Failed to send update notification: %s", e)
+            logger.warning("Failed to send update notification: %s", e)
+            if _fail_hard_enabled():
+                raise
 
         # Record that we notified
         try:

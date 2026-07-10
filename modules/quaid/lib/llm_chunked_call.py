@@ -54,8 +54,10 @@ def _get_configured_chunk_tokens() -> int:
             raw = getattr(capture, attr, 0) if capture is not None else 0
             if raw and int(raw) > 0:
                 return max(1000, int(raw))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to read configured LLM chunk token budget: %s", exc)
+        if _fail_hard_enabled():
+            raise
     return _DEFAULT_LLM_CHUNK_TOKENS
 
 

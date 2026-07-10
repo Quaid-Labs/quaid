@@ -45,6 +45,20 @@ class TestConfiguredChunkTokens:
             mock_get_config.return_value = MagicMock(capture=MagicMock(chunk_tokens=0, chunk_size=8000))
             assert _get_configured_chunk_tokens() == 8000
 
+    def test_config_failure_warns_and_uses_default_when_fail_open(self, caplog):
+        with patch("config.get_config", side_effect=RuntimeError("config boom")), \
+             patch("lib.llm_chunked_call._fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="lib.llm_chunked_call"):
+            assert _get_configured_chunk_tokens() == _DEFAULT_LLM_CHUNK_TOKENS
+
+        assert "Failed to read configured LLM chunk token budget: config boom" in caplog.text
+
+    def test_config_failure_raises_when_fail_hard(self):
+        with patch("config.get_config", side_effect=RuntimeError("config boom")), \
+             patch("lib.llm_chunked_call._fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="config boom"):
+                _get_configured_chunk_tokens()
+
 
 class TestParallelLlmCall:
     def test_explicit_zero_chunk_tokens_does_not_fall_back_to_config(self, monkeypatch):
