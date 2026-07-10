@@ -76,6 +76,10 @@ logger = logging.getLogger(__name__)
 _ADAPTIVE_LLM_WORKERS_LOCK = threading.Lock()
 _ADAPTIVE_LLM_WORKERS: Dict[str, int] = {}
 
+
+class _VecEmbeddingSyncSkipped(RuntimeError):
+    """Raised inside a transaction so node and vec embedding writes roll back together."""
+
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
 
@@ -384,16 +388,16 @@ def _upsert_vec_embedding(
     packed_embedding: Optional[bytes],
     *,
     context: str,
-) -> None:
+) -> bool:
     """Resilient vec_nodes upsert with delete+insert fallback on constraint conflicts."""
     if not packed_embedding:
-        return
+        return True
     try:
         conn.execute(
             "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
             (node_id, packed_embedding),
         )
-        return
+        return True
     except Exception as first_exc:
         try:
             conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node_id,))
@@ -407,7 +411,7 @@ def _upsert_vec_embedding(
                 context,
                 first_exc,
             )
-            return
+            return True
         except Exception as retry_exc:
             if is_fail_hard_enabled():
                 raise RuntimeError(
@@ -420,6 +424,7 @@ def _upsert_vec_embedding(
                 first_exc,
                 retry_exc,
             )
+            return False
 
 
 def _merge_nodes_into(
@@ -1482,25 +1487,26 @@ def backfill_embeddings(graph: MemoryGraph, metrics: JanitorMetrics,
             emb = _get_emb(name, timeout_s=embed_timeout_s)
             if emb:
                 packed = _pack_emb(emb)
-                with graph._get_conn() as conn:
-                    conn.execute(
-                        "UPDATE nodes SET embedding = ? WHERE id = ?",
-                        (packed, node_id)
-                    )
-                    try:
-                        _upsert_vec_embedding(
+                try:
+                    with graph._get_conn() as conn:
+                        conn.execute(
+                            "UPDATE nodes SET embedding = ? WHERE id = ?",
+                            (packed, node_id)
+                        )
+                        if _upsert_vec_embedding(
                             conn,
                             node_id,
                             packed,
                             context="backfill",
-                        )
+                        ) is False:
+                            raise _VecEmbeddingSyncSkipped(
+                                f"vec_nodes sync skipped during backfill for node {node_id}"
+                            )
                         embedded += 1
-                    except Exception as exc:
-                        msg = f"vec_nodes sync skipped during backfill for node {node_id}: {exc}"
-                        logger.warning(msg)
-                        if is_fail_hard_enabled():
-                            raise
-                        metrics.add_warning(msg)
+                except _VecEmbeddingSyncSkipped as exc:
+                    msg = str(exc)
+                    logger.warning(msg)
+                    metrics.add_warning(msg)
             else:
                 metrics.add_error(f"Failed to embed node {node_id}: {name[:50]}")
 

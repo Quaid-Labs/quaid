@@ -1353,13 +1353,38 @@ def test_backfill_embeddings_vec_upsert_failure_warns_and_continues(monkeypatch)
     with patch("lib.embeddings.get_embedding", return_value=[0.1, 0.2]) as get_embedding, \
          patch("lib.embeddings.pack_embedding", return_value=b"emb"), \
          patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False), \
-         patch.object(maintenance_ops, "_upsert_vec_embedding", side_effect=RuntimeError("vec write failed")):
+         patch.object(maintenance_ops, "_upsert_vec_embedding", return_value=False):
         out = maintenance_ops.backfill_embeddings(graph, metrics, dry_run=False)
 
     assert out["found"] == 1
     assert out["embedded"] == 0
     assert metrics.summary()["warnings"] >= 1
     get_embedding.assert_called_once_with("alpha node", timeout_s=120.0)
+
+
+def test_backfill_embeddings_rolls_back_node_embedding_when_vec_sync_skips(monkeypatch, tmp_path):
+    monkeypatch.delenv("QUAID_JANITOR_EMBED_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("OLLAMA_EMBED_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("QUAID_JANITOR_EMBED_BACKFILL_LIMIT", raising=False)
+
+    graph = maintenance_ops.MemoryGraph(db_path=tmp_path / "memory.db")
+    node = maintenance_ops.Node.create(type="Fact", name="alpha node")
+    graph.add_node(node, embed=False)
+
+    metrics = maintenance_ops.JanitorMetrics()
+    with patch("lib.embeddings.get_embedding", return_value=[0.1, 0.2]), \
+         patch("lib.embeddings.pack_embedding", return_value=b"emb"), \
+         patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False), \
+         patch.object(maintenance_ops, "_upsert_vec_embedding", return_value=False):
+        out = maintenance_ops.backfill_embeddings(graph, metrics, dry_run=False)
+
+    assert out["found"] == 1
+    assert out["embedded"] == 0
+    assert metrics.summary()["warnings"] >= 1
+    with graph._get_conn() as conn:
+        row = conn.execute("SELECT embedding FROM nodes WHERE id = ?", (node.id,)).fetchone()
+    assert row is not None
+    assert row["embedding"] is None
 
 
 def test_backfill_embeddings_vec_upsert_failure_raises_under_failhard(monkeypatch):
