@@ -170,29 +170,38 @@ class TestConfigReloadPolicy:
         with pytest.raises(RuntimeError, match="Config update failed"):
             r._update_config(lambda _data: (_ for _ in ()).throw(RuntimeError("mutator failed")))
 
-    def test_update_config_cleanup_failure_raises_when_fail_hard(self, setup_env, monkeypatch, caplog):
+    def test_update_config_reads_config_under_write_lock(self, setup_env, monkeypatch):
         from datastore.docsdb import registry as registry_mod
 
         r = _get_registry()
-        workspace = setup_env
-        tmp_config = workspace / "config.tmp"
-        tmp_config.write_text("{}")
+        config_path = setup_env / "config.json"
 
-        def fail_unlink(path):
-            if path == tmp_config:
-                raise OSError("unlink failed")
-            return original_unlink(path)
+        @contextmanager
+        def _race_during_lock(path):
+            assert path == config_path
+            data = json.loads(config_path.read_text())
+            data["projects"]["definitions"]["racing-project"] = {
+                "label": "Racing Project",
+                "homeDir": "projects/racing-project/",
+            }
+            registry_mod._atomic_write_text_unlocked(config_path, json.dumps(data, indent=2) + "\n")
+            yield
 
-        original_unlink = Path.unlink
-        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
-        monkeypatch.setattr(Path, "unlink", fail_unlink)
+        def _add_target_project(data):
+            data["projects"]["definitions"]["target-project"] = {
+                "label": "Target Project",
+                "homeDir": "projects/target-project/",
+            }
 
-        with caplog.at_level(logging.WARNING, logger="datastore.docsdb.registry"):
-            with pytest.raises(RuntimeError, match="Failed cleaning config temp file") as excinfo:
-                r._update_config(lambda _data: (_ for _ in ()).throw(RuntimeError("mutator failed")))
+        monkeypatch.setattr(registry_mod, "_config_write_lock", _race_during_lock)
 
-        assert isinstance(excinfo.value.__cause__, OSError)
-        assert "Failed cleaning config temp file" in caplog.text
+        assert r._update_config(_add_target_project) is True
+
+        updated = json.loads(config_path.read_text())
+        definitions = updated["projects"]["definitions"]
+        assert "racing-project" in definitions
+        assert "target-project" in definitions
+        assert not (setup_env / "config.tmp").exists()
 
 
 class TestEnsureTable:

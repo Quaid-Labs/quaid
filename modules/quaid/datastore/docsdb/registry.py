@@ -152,6 +152,36 @@ def _project_md_write_lock(path: Path):
         handle.close()
 
 
+@contextlib.contextmanager
+def _config_write_lock(path: Path):
+    lock_path = path.with_name(f".{path.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(lock_path, "a+", encoding="utf-8")
+    locked = False
+    try:
+        try:
+            import fcntl  # type: ignore
+
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            locked = True
+        except (ImportError, OSError) as exc:
+            logger.warning("config.json lock unavailable for %s; proceeding without lock: %s", path, exc)
+            if _fail_hard_enabled():
+                raise RuntimeError(f"Failed to acquire config.json lock: {path}") from exc
+        yield
+    finally:
+        if locked:
+            try:
+                import fcntl  # type: ignore
+
+                fcntl.flock(handle, fcntl.LOCK_UN)
+            except OSError as exc:
+                logger.warning("Failed to release config.json lock for %s: %s", path, exc)
+                if _fail_hard_enabled():
+                    raise RuntimeError(f"Failed to release config.json lock: {path}") from exc
+        handle.close()
+
+
 def _atomic_write_text_unlocked(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     """Write text via a same-directory temp file and atomic replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2327,15 +2357,13 @@ class DocsRegistry:
     def _update_config(self, mutator_fn) -> bool:
         """Apply a mutation to config.json atomically. Returns True if updated."""
         config_path = _workspace() / "config.json"
-        if not config_path.exists():
-            return False
         try:
-            config_data = json.loads(config_path.read_text())
-            mutator_fn(config_data)
-            # Atomic write: temp file then rename
-            tmp_path = config_path.with_suffix(".tmp")
-            tmp_path.write_text(json.dumps(config_data, indent=2) + "\n")
-            tmp_path.replace(config_path)
+            with _config_write_lock(config_path):
+                if not config_path.exists():
+                    return False
+                config_data = json.loads(config_path.read_text())
+                mutator_fn(config_data)
+                _atomic_write_text_unlocked(config_path, json.dumps(config_data, indent=2) + "\n")
             # Reload cached config
             try:
                 from config import reload_config
@@ -2348,15 +2376,6 @@ class DocsRegistry:
             return True
         except Exception as e:
             print(f"  Warning: config update failed: {e}", file=sys.stderr)
-            # Clean up temp file if it exists
-            tmp_path = config_path.with_suffix(".tmp")
-            if tmp_path.exists():
-                try:
-                    tmp_path.unlink()
-                except Exception as cleanup_exc:
-                    logger.warning("Failed cleaning config temp file %s: %s", tmp_path, cleanup_exc)
-                    if _fail_hard_enabled():
-                        raise RuntimeError(f"Failed cleaning config temp file {tmp_path}") from cleanup_exc
             if _fail_hard_enabled():
                 raise RuntimeError("Config update failed") from e
             return False
