@@ -289,6 +289,22 @@ class TestCreateProject:
         tracking = tmp_path / ".git-tracking" / "my-app"
         assert tracking.is_dir()
 
+    def test_create_shadow_git_failure_raises_when_failhard(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        src = tmp_path / "user-code"
+        src.mkdir()
+
+        with patch("core.shadow_git.ShadowGit.init", side_effect=RuntimeError("shadow broken")), \
+             patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="shadow broken"):
+            create_project("my-app", source_root=str(src))
+
+    def test_create_docs_sync_failure_raises_when_failhard(self, mock_adapter):
+        with patch("core.project_registry._sync_docs_registry_project", side_effect=RuntimeError("sync broken")), \
+             patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="sync broken"):
+            create_project("my-app")
+
 
 class TestUpdateProject:
     def test_updates_fields(self, mock_adapter):
@@ -298,6 +314,15 @@ class TestUpdateProject:
             updated = update_project("my-app", description="v2")
         assert updated["description"] == "v2"
         sync_docs.assert_called_once()
+
+    def test_update_docs_sync_failure_raises_when_failhard(self, mock_adapter):
+        with patch("core.project_registry._sync_docs_registry_project"):
+            create_project("my-app", description="v1")
+
+        with patch("core.project_registry._sync_docs_registry_project", side_effect=RuntimeError("sync broken")), \
+             patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="sync broken"):
+            update_project("my-app", description="v2")
 
     def test_rejects_unknown_project(self, mock_adapter):
         with pytest.raises(KeyError):
@@ -335,6 +360,45 @@ class TestDeleteProject:
             delete_project("my-app")
 
         assert (tmp_path / "projects" / "my-app").exists()
+
+    def test_delete_shadow_git_failure_raises_when_failhard(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        src = tmp_path / "user-code"
+        src.mkdir()
+        with patch("core.project_registry._sync_docs_registry_project"):
+            create_project("my-app", source_root=str(src))
+
+        with patch("core.shadow_git.ShadowGit.destroy", side_effect=RuntimeError("destroy broken")), \
+             patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="destroy broken"):
+            delete_project("my-app")
+
+    def test_delete_project_dir_failure_raises_when_failhard(self, mock_adapter):
+        with patch("core.project_registry._sync_docs_registry_project"):
+            create_project("my-app")
+
+        with patch("core.project_registry._safe_remove_project_dir", side_effect=RuntimeError("remove broken")), \
+             patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="remove broken"):
+            delete_project("my-app")
+
+    def test_delete_project_docs_cleanup_failure_raises_when_failhard(self, mock_adapter):
+        with patch("core.project_registry._sync_docs_registry_project"):
+            create_project("my-app")
+
+        with patch("core.project_docs.cleanup_project_state", side_effect=RuntimeError("worker broken")), \
+             patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="worker broken"):
+            delete_project("my-app")
+
+    def test_delete_docs_db_cleanup_failure_raises_when_failhard(self, mock_adapter):
+        with patch("core.project_registry._sync_docs_registry_project"):
+            create_project("my-app")
+
+        with patch("core.project_registry._delete_docs_db_project_rows", side_effect=RuntimeError("db broken")), \
+             patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="db broken"):
+            delete_project("my-app")
 
     def test_rejects_unknown(self, mock_adapter):
         with pytest.raises(KeyError):

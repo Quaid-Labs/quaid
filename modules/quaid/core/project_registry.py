@@ -659,6 +659,8 @@ def create_project(
                 logger.info("Initialized shadow git for %s at %s", name, source_root)
             except Exception as e:
                 logger.warning("Failed to init shadow git for %s: %s", name, e)
+                if _fail_hard_enabled():
+                    raise
 
         registry["projects"][name] = entry
         _save_registry(registry)
@@ -671,6 +673,8 @@ def create_project(
         )
     except Exception as e:
         logger.warning("Failed to sync docs registry for %s: %s", name, e)
+        if _fail_hard_enabled():
+            raise
 
     logger.info("Created project: %s", name)
     return entry
@@ -711,6 +715,8 @@ def update_project(name: str, **updates: Any) -> Dict[str, Any]:
         )
     except Exception as e:
         logger.warning("Failed to sync docs registry update for %s: %s", name, e)
+        if _fail_hard_enabled():
+            raise
     return registry["projects"][name]
 
 
@@ -952,6 +958,8 @@ def delete_project(name: str) -> None:
             sg.destroy()
     except Exception as e:
         logger.warning("Failed to destroy shadow git for %s: %s", name, e)
+        if _fail_hard_enabled():
+            raise
 
     # Clean up project directories (canonical + standard fallbacks).
     allowed_roots = [
@@ -977,6 +985,8 @@ def delete_project(name: str) -> None:
             _safe_remove_project_dir(candidate, allowed_roots)
         except Exception as e:
             logger.warning("Failed to remove project directory for %s (%s): %s", name, candidate, e)
+            if _fail_hard_enabled():
+                raise
 
     # Project docs workers are supervisor-owned. Deleting a project must stop
     # the worker and remove queued force-update state so deleted projects do
@@ -988,6 +998,8 @@ def delete_project(name: str) -> None:
         project_docs.cleanup_project_state(name)
     except Exception as e:
         logger.warning("Failed to clean up project docs worker state for %s: %s", name, e)
+        if _fail_hard_enabled():
+            raise
 
     # Clean up shared docs DB: project definitions, registry rows, and RAG chunks.
     try:
@@ -1011,6 +1023,8 @@ def delete_project(name: str) -> None:
     except Exception as e:
         rag_cleanup_clear = False
         logger.warning("Failed to clean up DB entries for project %s: %s", name, e)
+        if _fail_hard_enabled():
+            raise
 
     # A live supervisor/list call can reconcile from project_definitions/doc_registry
     # in the small window between the first JSON removal and DB cleanup. A stale
