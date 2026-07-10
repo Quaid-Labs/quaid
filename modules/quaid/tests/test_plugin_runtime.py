@@ -980,19 +980,16 @@ def test_run_plugin_contract_surface_collect_strict_stops_after_first_hook_failu
     import sys
     sys.path.insert(0, str(tmp_path))
     try:
-        errs, warns, results = run_plugin_contract_surface_collect(
-            registry=registry,
-            slots={"ingest": ["ingest.fail", "ingest.later"]},
-            surface="config",
-            config={},
-            plugin_config={},
-            workspace_root=str(tmp_path),
-            strict=True,
-        )
-        assert len(errs) == 1
-        assert "ingest.fail" in errs[0]
-        assert warns == []
-        assert results == []
+        with pytest.raises(ValueError, match="ingest.fail"):
+            run_plugin_contract_surface_collect(
+                registry=registry,
+                slots={"ingest": ["ingest.fail", "ingest.later"]},
+                surface="config",
+                config={},
+                plugin_config={},
+                workspace_root=str(tmp_path),
+                strict=True,
+            )
         mod = __import__("failfastpkg.impl", fromlist=["CALLS"])
         assert mod.CALLS == ["ingest.fail"]
     finally:
@@ -1041,18 +1038,16 @@ def test_run_plugin_contract_surface_rejects_missing_base_contract(tmp_path: Pat
     import sys
     sys.path.insert(0, str(tmp_path))
     try:
-        errs, warns = run_plugin_contract_surface(
-            registry=registry,
-            slots={"adapter": "adapter.bad"},
-            surface="config",
-            config={},
-            plugin_config={"adapter.bad": {}},
-            workspace_root=str(tmp_path),
-            strict=True,
-        )
-        assert warns == []
-        assert len(errs) == 1
-        assert "_CONTRACT implementing PluginContractBase" in errs[0]
+        with pytest.raises(ValueError, match="_CONTRACT implementing PluginContractBase"):
+            run_plugin_contract_surface(
+                registry=registry,
+                slots={"adapter": "adapter.bad"},
+                surface="config",
+                config={},
+                plugin_config={"adapter.bad": {}},
+                workspace_root=str(tmp_path),
+                strict=True,
+            )
     finally:
         if str(tmp_path) in sys.path:
             sys.path.remove(str(tmp_path))
@@ -1690,17 +1685,14 @@ def test_run_plugin_contract_surface_collect_missing_handler_strict_errors():
     )
     registry = PluginRegistry(api_version=1)
     registry.register(manifest)
-    errs, warns, results = run_plugin_contract_surface_collect(
-        registry=registry,
-        slots={"adapter": "adapter.missing_handler"},
-        surface="status",
-        config={},
-        strict=True,
-    )
-    assert results == []
-    assert len(errs) == 1
-    assert "hook missing handler declaration" in errs[0]
-    assert warns == []
+    with pytest.raises(ValueError, match="hook missing handler declaration"):
+        run_plugin_contract_surface_collect(
+            registry=registry,
+            slots={"adapter": "adapter.missing_handler"},
+            surface="status",
+            config={},
+            strict=True,
+        )
 
 
 def test_run_plugin_contract_surface_collect_missing_handler_non_strict_warns():
@@ -1963,16 +1955,14 @@ def test_colon_handler_rejects_modules_outside_manifest_namespace(tmp_path: Path
     )
     registry = PluginRegistry(api_version=1)
     registry.register(manifest)
-    errors, warnings, _ = run_plugin_contract_surface_collect(
-        registry=registry,
-        slots={"adapter": "plugpkg2.adapter", "ingest": [], "datastores": []},
-        surface="init",
-        config=SimpleNamespace(),
-        strict=True,
-    )
-    assert warnings == []
-    assert len(errors) == 1
-    assert "outside" in errors[0]
+    with pytest.raises(ValueError, match="outside"):
+        run_plugin_contract_surface_collect(
+            registry=registry,
+            slots={"adapter": "plugpkg2.adapter", "ingest": [], "datastores": []},
+            surface="init",
+            config=SimpleNamespace(),
+            strict=True,
+        )
 
 
 def test_run_plugin_contract_surface_reports_missing_active_plugin_non_strict():
@@ -1992,14 +1982,11 @@ def test_run_plugin_contract_surface_reports_missing_active_plugin_non_strict():
 
 def test_run_plugin_contract_surface_reports_missing_active_plugin_strict():
     registry = PluginRegistry(api_version=1)
-    errors, warnings, results = run_plugin_contract_surface_collect(
-        registry=registry,
-        slots={"adapter": "missing.plugin", "ingest": [], "datastores": []},
-        surface="init",
-        config=SimpleNamespace(),
-        strict=True,
-    )
-    assert warnings == []
-    assert len(errors) == 1
-    assert "missing.plugin" in errors[0]
-    assert results == []
+    with pytest.raises(ValueError, match="missing.plugin"):
+        run_plugin_contract_surface_collect(
+            registry=registry,
+            slots={"adapter": "missing.plugin", "ingest": [], "datastores": []},
+            surface="init",
+            config=SimpleNamespace(),
+            strict=True,
+        )

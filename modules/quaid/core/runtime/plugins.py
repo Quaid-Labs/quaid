@@ -817,6 +817,9 @@ def run_plugin_contract_surface_collect(
             else:
                 warnings.append(msg)
 
+    if strict and errors:
+        raise ValueError("Plugin contract surface failures: " + "; ".join(errors))
+
     return errors, warnings, results
 
 
