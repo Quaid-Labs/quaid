@@ -877,6 +877,8 @@ def _run_llm_batches_parallel(
                     had_any_success = True
                 out.append(row)
             except Exception as exc:
+                if is_fail_hard_enabled():
+                    raise
                 had_any_errors = True
                 if _timeout_like_error(exc):
                     timeout_events += 1
@@ -914,6 +916,8 @@ def _run_llm_batches_parallel(
     had_any_success = False
     for idx, item in enumerate(results, 1):
         if isinstance(item, Exception):
+            if is_fail_hard_enabled():
+                raise item
             had_any_errors = True
             if _timeout_like_error(item):
                 timeout_events += 1
@@ -2091,15 +2095,26 @@ Respond with a JSON array of {len(batch)} objects:
 
 JSON array only:"""
 
-        return {
-            "batch_num": batch_num,
-            "batch": batch,
-            "prompt_tag": f"[prompt:{_prompt_hash(prompt)}] ",
-            "response_duration": call_deep_reasoning(
+        prompt_tag = f"[prompt:{_prompt_hash(prompt)}] "
+        started = time.monotonic()
+        try:
+            response_duration = call_deep_reasoning(
                 prompt,
                 max_tokens=300 * len(batch),
                 timeout=_effective_llm_timeout(llm_timeout_seconds, DEEP_REASONING_TIMEOUT),
-            ),
+            )
+            error = None
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise
+            response_duration = (None, time.monotonic() - started)
+            error = str(exc)
+        return {
+            "batch_num": batch_num,
+            "batch": batch,
+            "prompt_tag": prompt_tag,
+            "response_duration": response_duration,
+            "error": error,
         }
 
     llm_results = _run_llm_batches_parallel(batches, "contradiction_resolution", _invoke_batch)
@@ -2998,15 +3013,26 @@ Respond with a JSON array of {len(batch)} objects:
 
 JSON array only:"""
 
-        return {
-            "batch_num": batch_num,
-            "batch": batch,
-            "prompt_tag": f"[prompt:{_prompt_hash(prompt)}] ",
-            "response_duration": call_deep_reasoning(
+        prompt_tag = f"[prompt:{_prompt_hash(prompt)}] "
+        started = time.monotonic()
+        try:
+            response_duration = call_deep_reasoning(
                 prompt,
                 max_tokens=200 * len(batch),
                 timeout=_effective_llm_timeout(llm_timeout_seconds, DEEP_REASONING_TIMEOUT),
-            ),
+            )
+            error = None
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise
+            response_duration = (None, time.monotonic() - started)
+            error = str(exc)
+        return {
+            "batch_num": batch_num,
+            "batch": batch,
+            "prompt_tag": prompt_tag,
+            "response_duration": response_duration,
+            "error": error,
         }
 
     llm_results = _run_llm_batches_parallel(batches, "dedup_review", _invoke_batch)
@@ -3187,15 +3213,26 @@ Respond with a JSON array of {len(batch)} objects:
 
 JSON array only:"""
 
-        return {
-            "batch_num": batch_num,
-            "batch": batch,
-            "prompt_tag": f"[prompt:{_prompt_hash(prompt)}] ",
-            "response_duration": call_deep_reasoning(
+        prompt_tag = f"[prompt:{_prompt_hash(prompt)}] "
+        started = time.monotonic()
+        try:
+            response_duration = call_deep_reasoning(
                 prompt,
                 max_tokens=200 * len(batch),
                 timeout=_effective_llm_timeout(llm_timeout_seconds, DEEP_REASONING_TIMEOUT),
-            ),
+            )
+            error = None
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise
+            response_duration = (None, time.monotonic() - started)
+            error = str(exc)
+        return {
+            "batch_num": batch_num,
+            "batch": batch,
+            "prompt_tag": prompt_tag,
+            "response_duration": response_duration,
+            "error": error,
         }
 
     llm_results = _run_llm_batches_parallel(batches, "decay_review", _invoke_batch)

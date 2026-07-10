@@ -25,6 +25,21 @@ class _DummyResult:
         return self._rows
 
 
+def _monotonic_sequence(*values):
+    iterator = iter(values)
+    last = values[-1]
+
+    def _next():
+        nonlocal last
+        try:
+            last = next(iterator)
+        except StopIteration:
+            pass
+        return last
+
+    return _next
+
+
 def test_default_owner_fallback_and_fail_hard():
     with patch.object(maintenance_ops, "_cfg", SimpleNamespace()), \
          patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False):
@@ -797,6 +812,106 @@ def test_contradiction_merge_failure_leaves_contradiction_pending(monkeypatch):
             maintenance_ops.resolve_contradictions_with_opus(_Graph(), metrics, dry_run=False, max_items=1)
 
 
+def test_contradiction_failed_llm_batch_records_elapsed_time(monkeypatch):
+    monkeypatch.setattr(maintenance_ops, "CONTRADICTION_ENABLED", True)
+    metrics = maintenance_ops.JanitorMetrics()
+    monkeypatch.setattr(maintenance_ops.time, "monotonic", _monotonic_sequence(10.0, 20.0, 23.5, 30.0))
+    pending = [{
+        "id": "c1",
+        "node_a_id": "na",
+        "node_b_id": "nb",
+        "text_a": "A",
+        "text_b": "B",
+        "conf_a": 0.9,
+        "conf_b": 0.8,
+        "created_a": "2026-01-01",
+        "created_b": "2026-01-02",
+        "source_a": "user",
+        "source_b": "user",
+        "speaker_a": "alice",
+        "speaker_b": "alice",
+        "access_a": 1,
+        "access_b": 1,
+        "explanation": "conflict",
+    }]
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            if "SELECT COUNT(*) FROM contradictions" in sql:
+                return _DummyResult(rows=[(1,)])
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    with patch.object(maintenance_ops, "get_pending_contradictions", return_value=pending), \
+         patch.object(maintenance_ops, "_llm_parallel_workers", return_value=1), \
+         patch.object(maintenance_ops, "call_deep_reasoning", side_effect=TimeoutError("llm timeout")), \
+         patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False):
+        out = maintenance_ops.resolve_contradictions_with_opus(
+            _Graph(),
+            metrics,
+            dry_run=False,
+            max_items=1,
+        )
+
+    assert out["resolved"] == 0
+    assert out["merged"] == 0
+    assert metrics.llm_calls == 1
+    assert metrics.llm_time == pytest.approx(3.5)
+    assert metrics.task_meta["contradiction_resolution"]["llm_time_seconds"] == pytest.approx(3.5)
+    assert any("Contradiction resolution batch 1 failed" in item["error"] for item in metrics.errors)
+
+
+def test_contradiction_failed_llm_batch_raises_when_failhard(monkeypatch):
+    monkeypatch.setattr(maintenance_ops, "CONTRADICTION_ENABLED", True)
+    metrics = maintenance_ops.JanitorMetrics()
+    monkeypatch.setattr(maintenance_ops.time, "monotonic", _monotonic_sequence(10.0, 20.0))
+    pending = [{
+        "id": "c1",
+        "node_a_id": "na",
+        "node_b_id": "nb",
+        "text_a": "A",
+        "text_b": "B",
+        "conf_a": 0.9,
+        "conf_b": 0.8,
+        "created_a": "2026-01-01",
+        "created_b": "2026-01-02",
+        "source_a": "user",
+        "source_b": "user",
+        "speaker_a": "alice",
+        "speaker_b": "alice",
+        "access_a": 1,
+        "access_b": 1,
+        "explanation": "conflict",
+    }]
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            if "SELECT COUNT(*) FROM contradictions" in sql:
+                return _DummyResult(rows=[(1,)])
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    with patch.object(maintenance_ops, "get_pending_contradictions", return_value=pending), \
+         patch.object(maintenance_ops, "_llm_parallel_workers", return_value=1), \
+         patch.object(maintenance_ops, "call_deep_reasoning", side_effect=TimeoutError("llm timeout")), \
+         patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=True):
+        with pytest.raises(TimeoutError, match="llm timeout"):
+            maintenance_ops.resolve_contradictions_with_opus(
+                _Graph(),
+                metrics,
+                dry_run=False,
+                max_items=1,
+            )
+
+
 def test_quaid_now_rejects_malformed_override_when_failhard_enabled(monkeypatch):
     monkeypatch.setenv("QUAID_NOW", "not-a-date")
 
@@ -1038,6 +1153,49 @@ def test_review_dedup_rejections_uses_quaid_now_for_sql_timestamps(monkeypatch):
     assert ("2026-03-10T00:00:00",) in [params for _sql, params in graph.conn.calls]
 
 
+def test_review_dedup_failed_llm_batch_records_elapsed_time(monkeypatch):
+    metrics = maintenance_ops.JanitorMetrics()
+    monkeypatch.setattr(maintenance_ops.time, "monotonic", _monotonic_sequence(10.0, 40.0, 44.25, 50.0))
+    pending = [{
+        "id": "d1",
+        "new_text": "Alex keeps a repair log",
+        "existing_text": "Alex maintains a repair log",
+        "similarity": 0.92,
+        "decision": "llm_duplicate",
+        "llm_reasoning": "same fact",
+        "owner_id": "default",
+        "source": "unit",
+    }]
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            text = str(sql).strip().upper()
+            if text.startswith("UPDATE DEDUP_LOG"):
+                return _DummyResult(rowcount=0)
+            if text.startswith("SELECT COUNT(*) FROM DEDUP_LOG"):
+                return _DummyResult(rows=[(1,)])
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    with patch.object(maintenance_ops, "get_recent_dedup_rejections", return_value=pending), \
+         patch.object(maintenance_ops, "_llm_parallel_workers", return_value=1), \
+         patch.object(maintenance_ops, "call_deep_reasoning", side_effect=TimeoutError("llm timeout")), \
+         patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False):
+        out = maintenance_ops.review_dedup_rejections(_Graph(), metrics, dry_run=False, max_items=1)
+
+    assert out["reviewed"] == 0
+    assert out["confirmed"] == 0
+    assert out["reversed"] == 0
+    assert metrics.llm_calls == 1
+    assert metrics.llm_time == pytest.approx(4.25)
+    assert metrics.task_meta["dedup_review"]["llm_time_seconds"] == pytest.approx(4.25)
+    assert any("Dedup review batch 1 failed" in item["error"] for item in metrics.errors)
+
+
 def test_review_decayed_memories_uses_quaid_now_for_queue_review(monkeypatch):
     monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
     metrics = maintenance_ops.JanitorMetrics()
@@ -1090,6 +1248,48 @@ def test_review_decayed_memories_uses_quaid_now_for_queue_review(monkeypatch):
     assert "datetime('now')" not in sql_text
     flat_params = [item for _sql, params in graph.conn.calls for item in params]
     assert flat_params.count("2026-03-11T00:00:00") == 2
+
+
+def test_review_decayed_failed_llm_batch_records_elapsed_time(monkeypatch):
+    metrics = maintenance_ops.JanitorMetrics()
+    monkeypatch.setattr(maintenance_ops.time, "monotonic", _monotonic_sequence(10.0, 70.0, 75.75, 80.0))
+    pending = [{
+        "id": "q1",
+        "node_id": "n1",
+        "node_text": "Alex keeps old travel notes",
+        "node_type": "Fact",
+        "confidence_at_queue": 0.2,
+        "access_count": 0,
+        "last_accessed": "2026-01-01T00:00:00",
+        "created_at_node": "2025-01-01T00:00:00",
+        "verified": 0,
+    }]
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            if "SELECT COUNT(*) FROM decay_review_queue" in sql:
+                return _DummyResult(rows=[(1,)])
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    with patch.object(maintenance_ops, "get_pending_decay_reviews", return_value=pending), \
+         patch.object(maintenance_ops, "_llm_parallel_workers", return_value=1), \
+         patch.object(maintenance_ops, "call_deep_reasoning", side_effect=TimeoutError("llm timeout")), \
+         patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False):
+        out = maintenance_ops.review_decayed_memories(_Graph(), metrics, dry_run=False, max_items=1)
+
+    assert out["reviewed"] == 0
+    assert out["deleted"] == 0
+    assert out["extended"] == 0
+    assert out["pinned"] == 0
+    assert metrics.llm_calls == 1
+    assert metrics.llm_time == pytest.approx(5.75)
+    assert metrics.task_meta["decay_review"]["llm_time_seconds"] == pytest.approx(5.75)
+    assert any("Decay review batch 1 failed" in item["error"] for item in metrics.errors)
 
 
 def test_find_stale_memories_includes_old_never_accessed_nodes(monkeypatch):
