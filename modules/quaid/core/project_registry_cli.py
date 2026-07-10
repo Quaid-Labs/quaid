@@ -287,8 +287,8 @@ def cmd_archive(args):
         _require_project_visible(args.name, get_project(args.name))
         ans = input(f"Archive project '{args.name}'? [y/N] ").strip().lower()
         if ans not in ("y", "yes"):
-            print("Aborted.")
-            return
+            print("Aborted.", file=sys.stderr)
+            sys.exit(1)
     else:
         _require_project_visible(args.name, get_project(args.name))
     try:
@@ -431,8 +431,8 @@ def cmd_restore(args):
         if not args.yes:
             ans = input(f"Restore '{args.file}' in project '{args.name}' from {args.rev}? [y/N] ").strip().lower()
             if ans not in ("y", "yes"):
-                print("Aborted.")
-                return
+                print("Aborted.", file=sys.stderr)
+                sys.exit(1)
         restored = sg.restore_file(args.rev, args.file)
     except (ValueError, KeyError, FileNotFoundError) as e:
         print(f"Error: {e}", file=sys.stderr)

@@ -464,6 +464,21 @@ class TestCmdDelete:
         assert "Cannot delete reserved project: quaid" in capsys.readouterr().err
 
 
+class TestCmdArchive:
+    def test_abort_exits_one_on_stderr_without_archiving(self, capsys):
+        with patch("core.project_registry.get_project", return_value={"instances": []}), \
+             patch("builtins.input", return_value="n"), \
+             patch("core.project_registry.archive_project") as archive_project:
+            with pytest.raises(SystemExit) as exc_info:
+                cli.cmd_archive(_args(name="proj", yes=False, json=False))
+
+        assert exc_info.value.code == 1
+        archive_project.assert_not_called()
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "Aborted." in captured.err
+
+
 class TestCmdStatus:
     def test_status_prints_project_docs_status(self, capsys):
         status = {"project": "proj", "status": "fresh"}
@@ -546,6 +561,20 @@ class TestCmdShadowGitRecovery:
         assert exc_info.value.code == 1
         sg.restore_file.assert_not_called()
         assert "--yes is required" in capsys.readouterr().err
+
+    def test_restore_abort_exits_one_on_stderr_without_restoring(self, capsys):
+        sg = MagicMock()
+        with patch("core.project_registry_cli._shadow_git_for_visible_project", return_value=sg), \
+             patch("sys.stdin.isatty", return_value=True), \
+             patch("builtins.input", return_value="no"):
+            with pytest.raises(SystemExit) as exc_info:
+                cli.cmd_restore(_args(name="proj", rev="abc123", file="notes.md", yes=False, json=False))
+
+        assert exc_info.value.code == 1
+        sg.restore_file.assert_not_called()
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "Aborted." in captured.err
 
     def test_restore_with_yes_calls_shadow_restore(self, tmp_path, capsys):
         restored = tmp_path / "notes.md"
