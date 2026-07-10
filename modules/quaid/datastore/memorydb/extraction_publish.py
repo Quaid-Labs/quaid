@@ -804,14 +804,12 @@ def run_extraction_publish_payload(
         status = store_result.get("status")
         if status == "created":
             fact_entry["status"] = "stored"
-            result["facts_stored"] += 1
         elif status == "duplicate":
             fact_entry["status"] = "duplicate"
             fact_entry["reason"] = store_result.get("existing_text", "")
             result["facts_skipped"] += 1
         elif status == "updated":
             fact_entry["status"] = "updated"
-            result["facts_stored"] += 1
         elif status == "blocked":
             fact_entry["status"] = "blocked"
             result["facts_skipped"] += 1
@@ -864,6 +862,8 @@ def run_extraction_publish_payload(
                         )
                         if fail_hard_enabled():
                             raise
+        if status in ("created", "updated"):
+            result["facts_stored"] += 1
         return fact_entry["status"] == "blocked"
 
     def _begin_publish_batch_write(write_conn: Any, *, batch_index: int) -> None:

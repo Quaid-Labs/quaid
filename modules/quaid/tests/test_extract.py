@@ -5899,6 +5899,7 @@ class TestExtractFromTranscript:
 
         with pytest.raises(RuntimeError, match="edge write failed"):
             self._run_direct_extraction_publish(payload, _MemoryService(), fail_hard_enabled=lambda: True)
+        assert payload["facts_stored"] == 0
 
     def test_extraction_publish_edge_failure_logs_and_continues_when_fail_open(self, monkeypatch, caplog):
         monkeypatch.setattr(
