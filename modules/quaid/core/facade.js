@@ -659,8 +659,7 @@ function createQuaidFacade(deps) {
   }
   function writeObjectFile(filePath, state) {
     try {
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, JSON.stringify(state, null, 2), { mode: 384 });
+      writeFileAtomicSync(filePath, JSON.stringify(state, null, 2));
     } catch (err) {
       const detail = `[quaid][facade] failed writing JSON state ${filePath}: ${String(err?.message || err)}`;
       console.warn(detail);

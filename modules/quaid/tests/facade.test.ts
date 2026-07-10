@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createQuaidFacade } from "../core/facade.js";
 import type { QuaidFacadeDeps, LLMCallResult } from "../core/facade.js";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -3418,6 +3418,30 @@ describe("QuaidFacade", () => {
     expect(typeof state.lastJanitorHealthIssue).toBe("string");
     expect(Number(state.lastJanitorHealthAlertAt)).toBe(1_700_000_000_000);
     await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("maybeQueueJanitorHealthAlert atomically replaces readonly state files", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-janitor-health-atomic-"));
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const statePath = path.join(workspace, "runtime", "notes", "janitor-nudge-state.json");
+    await mkdir(path.dirname(statePath), { recursive: true });
+    await writeFile(statePath, "{}", { encoding: "utf8", mode: 0o400 });
+    await chmod(statePath, 0o400);
+
+    try {
+      const queued = facade.maybeQueueJanitorHealthAlert({
+        statePath,
+        nowMs: 1_700_000_000_000,
+      });
+
+      expect(queued).toBe(true);
+      expect((await readdir(path.dirname(statePath))).some((file) => file.includes(".tmp-"))).toBe(false);
+      const state = JSON.parse(await readFile(statePath, "utf8"));
+      expect(Number(state.lastJanitorHealthAlertAt)).toBe(1_700_000_000_000);
+    } finally {
+      await chmod(statePath, 0o600).catch(() => undefined);
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   it("collectJanitorNudges raises malformed state when failHard is enabled", async () => {
