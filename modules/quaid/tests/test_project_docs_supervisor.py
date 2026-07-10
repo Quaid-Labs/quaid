@@ -422,6 +422,7 @@ def test_read_instance_daemon_pid_parse_failure_logs(monkeypatch, tmp_path, capl
     from core import project_docs_supervisor as supervisor
 
     monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)
     pid_path = tmp_path / "instances" / "alpha" / "data" / "extraction-daemon.pid"
     pid_path.parent.mkdir(parents=True)
     pid_path.write_text("not-a-pid", encoding="utf-8")
@@ -429,6 +430,23 @@ def test_read_instance_daemon_pid_parse_failure_logs(monkeypatch, tmp_path, capl
     with caplog.at_level("WARNING", logger=supervisor.__name__):
         assert supervisor._read_instance_daemon_pid("alpha") is None
 
+    assert "failed to read daemon pid for alpha" in caplog.text
+
+
+def test_read_instance_daemon_pid_parse_failure_raises_when_failhard(monkeypatch, tmp_path, caplog):
+    from core import project_docs_supervisor as supervisor
+
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
+    pid_path = tmp_path / "instances" / "alpha" / "data" / "extraction-daemon.pid"
+    pid_path.parent.mkdir(parents=True)
+    pid_path.write_text("not-a-pid", encoding="utf-8")
+
+    with caplog.at_level("WARNING", logger=supervisor.__name__):
+        with pytest.raises(ValueError):
+            supervisor._read_instance_daemon_pid("alpha")
+
+    assert pid_path.exists()
     assert "failed to read daemon pid for alpha" in caplog.text
 
 

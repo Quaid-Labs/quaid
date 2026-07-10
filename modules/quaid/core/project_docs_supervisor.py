@@ -262,6 +262,8 @@ def _read_instance_daemon_pid(instance: str) -> int | None:
         pid = int(path.read_text(encoding="utf-8").strip())
     except Exception as exc:
         _LOGGER.warning("failed to read daemon pid for %s, treating as dead: %s", instance, exc)
+        if _fail_hard_enabled():
+            raise
         pid = 0
     if pid > 0 and _pid_alive(pid):
         command = _process_command(pid)
