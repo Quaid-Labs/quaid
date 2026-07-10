@@ -58,7 +58,10 @@ def _default_archive_path() -> Path:
         from lib.config import get_archive_db_path
 
         return get_archive_db_path()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving archive db path from config: %s", exc)
+        if is_fail_hard_enabled():
+            raise
         from lib.adapter import get_adapter
 
         return get_adapter().data_dir() / "memory_archive.db"
