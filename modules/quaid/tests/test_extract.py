@@ -1,6 +1,7 @@
 """Tests for extract.py — Memory extraction from conversation transcripts."""
 
 import argparse
+import io
 import importlib
 import json
 import logging
@@ -9554,6 +9555,25 @@ class TestCLI:
         assert len(calls) == 1
         assert calls[0]["memory_publish_mode"] == "direct"
         assert calls[0]["snippet_journal_write_mode"] == "direct"
+
+    def test_stdin_transcript_decodes_utf8_bytes(self, monkeypatch, capsys):
+        from ingest import extract as extract_mod
+
+        calls = []
+
+        def fake_extract_from_transcript(**kwargs):
+            calls.append(kwargs)
+            return {"status": "ok"}
+
+        monkeypatch.setattr(extract_mod, "_get_owner_id", lambda _owner: "owner-1")
+        monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+        monkeypatch.setattr(sys, "argv", ["extract.py", "-", "--json"])
+        monkeypatch.setattr(sys, "stdin", SimpleNamespace(buffer=io.BytesIO("User: café\n".encode("utf-8"))))
+
+        extract_mod.main()
+
+        assert json.loads(capsys.readouterr().out) == {"status": "ok"}
+        assert calls[0]["transcript"] == "User: café\n"
 
     @pytest.mark.parametrize(
         ("flag", "bad_value"),

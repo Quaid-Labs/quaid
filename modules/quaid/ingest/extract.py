@@ -4473,7 +4473,7 @@ def main():
 
     # Read transcript
     if args.transcript == "-":
-        raw = sys.stdin.read()
+        raw = sys.stdin.buffer.read().decode("utf-8")
     else:
         path = Path(args.transcript)
         if not path.exists():
