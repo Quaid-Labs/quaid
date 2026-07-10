@@ -621,6 +621,29 @@ class TestFindProjectForPath:
         project = r.find_project_for_path("src/utils.py")
         assert project == "test-project"
 
+    def test_db_backed_project_definition_paths(self, setup_env):
+        """Runtime-created DB definitions participate in path ownership."""
+        from config import ProjectDefinition
+
+        r = _get_registry()
+        assert "runtime-proj" not in r._get_config().projects.definitions
+
+        r.save_project_definition(
+            "runtime-proj",
+            ProjectDefinition(
+                label="Runtime Project",
+                home_dir="projects/runtime-proj/",
+                source_roots=["runtime-src/"],
+                auto_index=True,
+                patterns=["*.md"],
+                exclude=[],
+                description="Runtime-created project.",
+            ),
+        )
+
+        assert r.find_project_for_path("projects/runtime-proj/notes.md") == "runtime-proj"
+        assert r.find_project_for_path("runtime-src/handler.py") == "runtime-proj"
+
     def test_source_file_reverse_lookup(self, setup_env):
         """Files tracked as source_files found via reverse lookup."""
         r = _get_registry()

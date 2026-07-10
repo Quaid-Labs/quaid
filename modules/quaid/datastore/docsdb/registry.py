@@ -1455,11 +1455,11 @@ class DocsRegistry:
         3. Under a project's sourceRoots
         4. Tracked as source_file by a registered doc (reverse lookup)
         """
-        cfg = self._get_config()
         abs_path = str(self._resolve_path(file_path))
+        project_definitions = self.get_all_project_definitions()
 
         # 1. Inside a project's homeDir
-        for name, defn in cfg.projects.definitions.items():
+        for name, defn in project_definitions.items():
             if not _docs_project_visible_to_current_instance(name):
                 continue
             home = str(self._resolve_path(defn.home_dir)).rstrip("/") + "/"
@@ -1472,7 +1472,7 @@ class DocsRegistry:
             return entry["project"]
 
         # 3. Under a project's sourceRoots
-        for name, defn in cfg.projects.definitions.items():
+        for name, defn in project_definitions.items():
             if not _docs_project_visible_to_current_instance(name):
                 continue
             for root in defn.source_roots:
