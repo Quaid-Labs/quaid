@@ -1622,6 +1622,7 @@ class MemoryGraph:
         normalized_text = _normalize_source_chunk_text(text)
         if not normalized_text:
             raise ValueError("Session chunk text cannot be empty")
+        session_id = str(session_id or "").strip() or None
         if not session_id:
             raise ValueError("session_id is required for session chunks")
         try:
@@ -1657,7 +1658,6 @@ class MemoryGraph:
                 owner_id = "default"
         owner_id = str(owner_id).strip() or "default"
         source_id = str(source_id or session_id or "").strip() or None
-        session_id = str(session_id or "").strip() or None
         chunk_kind = str(chunk_kind or "session").strip().lower() or "session"
         parent_chunk_id = str(parent_chunk_id or "").strip() or None
         next_chunk_id = str(next_chunk_id or "").strip() or None

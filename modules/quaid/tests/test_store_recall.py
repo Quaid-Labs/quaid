@@ -6481,6 +6481,8 @@ class TestSourceChunkStorage:
             graph.store_source_chunk("   ", owner_id="douglas", session_id="session-4")
         with pytest.raises(ValueError, match="session_id is required"):
             graph.store_source_chunk("A valid source chunk body", owner_id="douglas")
+        with pytest.raises(ValueError, match="session_id is required"):
+            graph.store_source_chunk("A valid source chunk body", owner_id="douglas", session_id="   ")
         with pytest.raises(ValueError, match="non-negative"):
             graph.store_source_chunk(
                 "A valid source chunk body",
