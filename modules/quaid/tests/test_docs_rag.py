@@ -1560,7 +1560,7 @@ class TestDocsSearchFiltering:
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
-    def test_search_docs_filters_project_log_lines_by_date_and_excludes_undated_docs(
+    def test_search_docs_filters_project_log_lines_by_date_and_keeps_undated_docs(
         self,
         _sim,
         _unpack,
@@ -1621,10 +1621,14 @@ class TestDocsSearchFiltering:
         )
 
         by_source = {Path(result["source"]).name: result for result in results}
-        assert set(by_source) == {"PROJECT.log"}
+        assert set(by_source) == {"PROJECT.log", "PROJECT.md", "examples.md"}
         assert "Added legacy recall mode" in by_source["PROJECT.log"]["content"]
         assert "Switched recall planner to hybrid" not in by_source["PROJECT.log"]["content"]
         assert by_source["PROJECT.log"]["source_date"] == "2026-03-05"
+        assert by_source["PROJECT.md"]["content"] == "Current recall planner summary"
+        assert by_source["PROJECT.md"]["source_date"] is None
+        assert by_source["examples.md"]["content"] == "Current recall examples should not answer dated docs recall."
+        assert by_source["examples.md"]["source_date"] is None
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
