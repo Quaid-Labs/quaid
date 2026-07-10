@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import importlib
@@ -66,6 +67,7 @@ _RUNTIME_ERRORS: List[str] = []
 _RUNTIME_WARNINGS: List[str] = []
 _CONTRACT_VALIDATION_LOCK = Lock()
 _CONTRACT_VALIDATION_CACHE: set[Tuple[str, str]] = set()
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -815,6 +817,7 @@ def run_plugin_contract_surface_collect(
                 errors.append(msg)
                 break
             else:
+                logger.warning(msg)
                 warnings.append(msg)
 
     if strict and errors:
@@ -868,6 +871,7 @@ def collect_datastore_system_context_metadata(
             if strict:
                 errors.append(msg)
                 break
+            logger.warning(msg)
             warnings.append(msg)
 
     return errors, warnings, results

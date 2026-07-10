@@ -1425,6 +1425,89 @@ def test_collect_datastore_system_context_metadata_returns_results(tmp_path: Pat
             sys.path.remove(str(tmp_path))
 
 
+def test_collect_datastore_system_context_metadata_non_strict_logs_warnings(
+    tmp_path: Path,
+    caplog,
+):
+    pkg = tmp_path / "ctxwarn"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "impl.py").write_text(
+        "from core.contracts.plugin_contract import PluginContractBase\n"
+        "from core.runtime.plugins import PluginHookContext\n"
+        "class _Contract(PluginContractBase):\n"
+        "    def on_init(self, ctx: PluginHookContext) -> None:\n"
+        "        return None\n"
+        "    def on_config(self, ctx: PluginHookContext) -> None:\n"
+        "        return None\n"
+        "    def on_status(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {}\n"
+        "    def on_dashboard(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {}\n"
+        "    def on_maintenance(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"handled\": False}\n"
+        "    def on_tool_runtime(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"ready\": True}\n"
+        "    def on_health(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"healthy\": True}\n"
+        "    def get_system_context_metadata(self, ctx: PluginHookContext) -> dict:\n"
+        "        raise RuntimeError('metadata boom')\n"
+        "_CONTRACT = _Contract()\n",
+        encoding="utf-8",
+    )
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "datastore.ctxwarn",
+            "plugin_type": "datastore",
+            "module": "ctxwarn.impl",
+            "capabilities": {
+                **_datastore_caps("Context Warn DS"),
+                "contract": {
+                    "init": {"mode": "hook"},
+                    "config": {"mode": "hook"},
+                    "status": {"mode": "hook"},
+                    "dashboard": {"mode": "hook"},
+                    "maintenance": {"mode": "hook"},
+                    "tool_runtime": {"mode": "hook"},
+                    "health": {"mode": "hook"},
+                    "tools": {"mode": "declared", "exports": []},
+                    "api": {"mode": "declared", "exports": []},
+                    "events": {"mode": "declared", "exports": []},
+                    "ingest_triggers": {"mode": "declared", "exports": []},
+                    "auth_requirements": {"mode": "declared", "exports": []},
+                    "migrations": {"mode": "declared", "exports": []},
+                    "notifications": {"mode": "declared", "exports": []},
+                },
+            },
+        }
+    )
+    registry = PluginRegistry(api_version=1)
+    registry.register(manifest)
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        from core.runtime.plugins import collect_datastore_system_context_metadata
+
+        with caplog.at_level("WARNING", logger="core.runtime.plugins"):
+            errs, warns, results = collect_datastore_system_context_metadata(
+                registry=registry,
+                slots={"datastores": ["datastore.ctxwarn"]},
+                config={},
+                plugin_config={},
+                workspace_root=str(tmp_path),
+                strict=False,
+            )
+        assert errs == []
+        assert results == []
+        assert len(warns) == 1
+        assert "metadata boom" in warns[0]
+        assert "Plugin 'datastore.ctxwarn' system-context metadata failed" in caplog.text
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+
+
 def test_run_plugin_contract_surface_collect_dashboard_returns_results(tmp_path: Path):
     pkg = tmp_path / "dashpkg"
     pkg.mkdir(parents=True)
@@ -1579,7 +1662,7 @@ def test_run_plugin_contract_surface_collect_tool_runtime_returns_results(tmp_pa
             sys.path.remove(str(tmp_path))
 
 
-def test_run_plugin_contract_surface_collect_non_strict_emits_warnings(tmp_path: Path):
+def test_run_plugin_contract_surface_collect_non_strict_emits_warnings(tmp_path: Path, caplog):
     pkg = tmp_path / "hookwarn"
     pkg.mkdir(parents=True)
     (pkg / "__init__.py").write_text("", encoding="utf-8")
@@ -1639,17 +1722,19 @@ def test_run_plugin_contract_surface_collect_non_strict_emits_warnings(tmp_path:
     import sys
     sys.path.insert(0, str(tmp_path))
     try:
-        errs, warns, results = run_plugin_contract_surface_collect(
-            registry=registry,
-            slots={"adapter": "adapter.warn"},
-            surface="status",
-            config={},
-            strict=False,
-        )
+        with caplog.at_level("WARNING", logger="core.runtime.plugins"):
+            errs, warns, results = run_plugin_contract_surface_collect(
+                registry=registry,
+                slots={"adapter": "adapter.warn"},
+                surface="status",
+                config={},
+                strict=False,
+            )
         assert results == []
         assert errs == []
         assert len(warns) == 1
         assert "status hook failed" in warns[0]
+        assert "Plugin 'adapter.warn' status hook failed" in caplog.text
     finally:
         if str(tmp_path) in sys.path:
             sys.path.remove(str(tmp_path))
