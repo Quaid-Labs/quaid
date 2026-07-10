@@ -126,6 +126,8 @@ CREATE INDEX IF NOT EXISTS idx_nodes_privacy ON nodes(privacy);
 CREATE INDEX IF NOT EXISTS idx_nodes_verified ON nodes(verified);
 CREATE INDEX IF NOT EXISTS idx_nodes_pinned ON nodes(pinned);
 CREATE INDEX IF NOT EXISTS idx_nodes_source ON nodes(source);
+CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name);
+CREATE INDEX IF NOT EXISTS idx_nodes_name_lower ON nodes(LOWER(name));
 CREATE INDEX IF NOT EXISTS idx_nodes_source_chunk ON nodes(source_chunk_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_origin_package_id ON nodes(origin_package_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_owner ON nodes(owner_id);

@@ -676,6 +676,8 @@ class MemoryGraph:
                     pass  # Column already exists
 
             for stmt in [
+                "CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name)",
+                "CREATE INDEX IF NOT EXISTS idx_nodes_name_lower ON nodes(LOWER(name))",
                 "CREATE INDEX IF NOT EXISTS idx_nodes_origin_package_id ON nodes(origin_package_id)",
                 "CREATE INDEX IF NOT EXISTS idx_nodes_source_chunk ON nodes(source_chunk_id)",
                 "CREATE INDEX IF NOT EXISTS idx_nodes_superseded_by ON nodes(superseded_by)",

@@ -6534,6 +6534,52 @@ class TestTimestampOverride:
         assert "[C:0.5]" not in text_result.stdout
 
 
+class TestEntityNameIndexes:
+    """Entity name lookup indexes are present for fresh and legacy DBs."""
+
+    def _index_names(self, db_file):
+        with sqlite3.connect(db_file) as conn:
+            return {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'"
+                ).fetchall()
+            }
+
+    def test_entity_name_indexes_created_on_fresh_db(self, tmp_path):
+        from datastore.memorydb.memory_graph import MemoryGraph
+
+        db_file = tmp_path / "fresh.db"
+        MemoryGraph(db_path=db_file)
+
+        indexes = self._index_names(db_file)
+        assert "idx_nodes_name" in indexes
+        assert "idx_nodes_name_lower" in indexes
+
+    def test_entity_name_indexes_added_to_legacy_db(self, tmp_path):
+        from datastore.memorydb.memory_graph import MemoryGraph
+
+        db_file = tmp_path / "legacy.db"
+        schema_path = Path(__file__).resolve().parents[1] / "datastore" / "memorydb" / "schema.sql"
+        legacy_schema = "\n".join(
+            line for line in schema_path.read_text().splitlines()
+            if not line.strip().startswith((
+                "CREATE INDEX IF NOT EXISTS idx_nodes_name ",
+                "CREATE INDEX IF NOT EXISTS idx_nodes_name_lower ",
+            ))
+        )
+        with sqlite3.connect(db_file) as conn:
+            conn.executescript(legacy_schema)
+        assert "idx_nodes_name" not in self._index_names(db_file)
+        assert "idx_nodes_name_lower" not in self._index_names(db_file)
+
+        MemoryGraph(db_path=db_file)
+
+        indexes = self._index_names(db_file)
+        assert "idx_nodes_name" in indexes
+        assert "idx_nodes_name_lower" in indexes
+
+
 class TestSourceChunkStorage:
     """Tests for additive source chunk evidence storage."""
 
