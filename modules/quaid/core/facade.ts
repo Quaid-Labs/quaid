@@ -2430,11 +2430,14 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   function resolveExtractionTrigger(label: string): ExtractionTrigger {
     const normalized = String(label || "").trim().toLowerCase();
     if (!normalized) return "unknown";
-    if (normalized.includes("compact")) return "compaction";
-    if (normalized.includes("recover")) return "recovery";
-    if (normalized.includes("timeout")) return "timeout";
-    if (normalized.includes("new")) return "new";
-    if (normalized.includes("reset")) return "reset";
+    const hasToken = (token: string): boolean => new RegExp(`(?:^|[^a-z0-9])${token}(?:[^a-z0-9]|$)`, "i").test(normalized);
+    if (normalized === "compactionsignal") return "compaction";
+    if (normalized === "resetsignal") return "reset";
+    if (hasToken("compaction") || hasToken("compact")) return "compaction";
+    if (hasToken("recovery") || hasToken("recover")) return "recovery";
+    if (hasToken("timeout")) return "timeout";
+    if (hasToken("new")) return "new";
+    if (hasToken("reset")) return "reset";
     return "unknown";
   }
 

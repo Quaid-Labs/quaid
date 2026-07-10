@@ -3138,6 +3138,11 @@ describe("QuaidFacade", () => {
     expect(facade.resolveExtractionTrigger("CompactionSignal")).toBe("compaction");
     expect(facade.resolveExtractionTrigger("timeout event")).toBe("timeout");
     expect(facade.resolveExtractionTrigger("recovery-run")).toBe("recovery");
+    expect(facade.resolveExtractionTrigger("session new")).toBe("new");
+    expect(facade.resolveExtractionTrigger("ResetSignal")).toBe("reset");
+    expect(facade.resolveExtractionTrigger("renewal event")).toBe("unknown");
+    expect(facade.resolveExtractionTrigger("renewed session")).toBe("unknown");
+    expect(facade.resolveExtractionTrigger("recompact requested")).toBe("unknown");
     expect(facade.resolveExtractionTrigger("")).toBe("unknown");
   });
 
