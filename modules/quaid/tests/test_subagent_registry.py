@@ -534,6 +534,29 @@ class TestAtomicWrite:
         assert entry["transcript_path"] == "/logs/child-A.jsonl"
         assert entry["completed_at"] is not None
 
+    def test_re_register_harvested_child_starts_fresh_run(self, tmp_path):
+        from core.subagent_registry import register, mark_complete, mark_harvested, get_harvestable
+
+        register("parent-1", "child-A", child_transcript_path="/logs/old.jsonl", child_type="general")
+        mark_complete("parent-1", "child-A", transcript_path="/logs/old.jsonl")
+        mark_harvested("parent-1", "child-A")
+
+        register("parent-1", "child-A", child_type="general")
+
+        entry = _read_raw(tmp_path, "parent-1")["children"]["child-A"]
+        assert entry["status"] == "running"
+        assert entry["transcript_path"] == ""
+        assert entry["harvested"] is False
+        assert entry["completed_at"] is None
+        assert entry["harvested_at"] is None
+        assert get_harvestable("parent-1") == []
+
+        mark_complete("parent-1", "child-A", transcript_path="/logs/new.jsonl")
+        harvestable = get_harvestable("parent-1")
+        assert len(harvestable) == 1
+        assert harvestable[0]["child_id"] == "child-A"
+        assert harvestable[0]["transcript_path"] == "/logs/new.jsonl"
+
     def test_completion_prunes_stale_placeholder_running_child(self, tmp_path):
         from core.subagent_registry import register, mark_complete, get_harvestable
 

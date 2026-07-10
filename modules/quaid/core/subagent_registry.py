@@ -177,18 +177,20 @@ def register(
         entry = {**existing, **(metadata or {})}
         existing_transcript = str(existing.get("transcript_path") or "").strip()
         existing_status = str(existing.get("status") or "").strip()
+        existing_harvested = bool(existing.get("harvested", False))
+        preserve_completed = existing_status == "complete" and not existing_harvested
         existing_completed_at = existing.get("completed_at")
         existing_registered_at = existing.get("registered_at")
         entry.update({
             "child_id": child_id,
             "parent_session_id": parent_session_id,
             "child_type": child_type or existing.get("child_type") or "unknown",
-            "transcript_path": child_transcript_path or existing_transcript,
-            "status": existing_status if existing_status == "complete" else "running",
-            "harvested": bool(existing.get("harvested", False)),
-            "registered_at": existing_registered_at or _now_iso_z(),
-            "completed_at": existing_completed_at if existing_status == "complete" else None,
-            "harvested_at": existing.get("harvested_at"),
+            "transcript_path": child_transcript_path or ("" if existing_harvested else existing_transcript),
+            "status": "complete" if preserve_completed else "running",
+            "harvested": False,
+            "registered_at": existing_registered_at if existing_registered_at and not existing_harvested else _now_iso_z(),
+            "completed_at": existing_completed_at if preserve_completed else None,
+            "harvested_at": None,
         })
         children[child_id] = entry
         _write_registry(parent_session_id, data)
