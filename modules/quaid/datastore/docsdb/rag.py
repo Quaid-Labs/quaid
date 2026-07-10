@@ -877,28 +877,34 @@ def _filter_project_log_content_by_date(
     date_to: Optional[str],
     query_terms: Optional[List[str]] = None,
 ) -> Optional[str]:
-    """Return only dated project-log lines inside the requested date window."""
+    """Return dated project-log entries inside the requested date window."""
     if not date_from and not date_to:
         return content
     terms = [str(term or "").lower() for term in (query_terms or []) if str(term or "").strip()]
-    kept: List[tuple[str, int, int, str]] = []
+    kept: List[tuple[str, int, int, List[str]]] = []
+    current_kept: Optional[List[str]] = None
     saw_dated_line = False
     for index, line in enumerate(str(content or "").splitlines()):
         line_date = _project_log_line_date(line)
         if not line_date:
+            if current_kept is not None:
+                current_kept.append(line)
             continue
         saw_dated_line = True
         if date_from and line_date < date_from:
+            current_kept = None
             continue
         if date_to and line_date > date_to:
+            current_kept = None
             continue
         line_score = _project_log_line_query_score(line, terms)
-        kept.append((line_date, index, line_score, line))
+        current_kept = [line]
+        kept.append((line_date, index, line_score, current_kept))
     if kept:
         if date_to:
             # As-of recall shows newest state first, then query-matching same-day lines.
             kept.sort(key=lambda item: (item[0], item[2], -item[1]), reverse=True)
-        return "\n".join(line for _, _, _, line in kept)
+        return "\n".join(line for _, _, _, lines in kept for line in lines)
     if saw_dated_line:
         return None
     # Date-filtered docs recall is intended for project logs. Undated chunks

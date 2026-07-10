@@ -1579,7 +1579,10 @@ class TestDocsSearchFiltering:
                     "\n".join(
                         [
                             "- [2026-03-05T23:59:59] Added legacy recall mode",
+                            "  Preserved CLI context for the legacy recall migration.",
+                            "  Testing confirmed the date-bounded path.",
                             "- [2026-03-15T23:59:59] Switched recall planner to hybrid",
+                            "  This hybrid continuation should stay outside the March 10 cutoff.",
                         ]
                     ),
                     None,
@@ -1623,7 +1626,10 @@ class TestDocsSearchFiltering:
         by_source = {Path(result["source"]).name: result for result in results}
         assert set(by_source) == {"PROJECT.log", "PROJECT.md", "examples.md"}
         assert "Added legacy recall mode" in by_source["PROJECT.log"]["content"]
+        assert "Preserved CLI context for the legacy recall migration." in by_source["PROJECT.log"]["content"]
+        assert "Testing confirmed the date-bounded path." in by_source["PROJECT.log"]["content"]
         assert "Switched recall planner to hybrid" not in by_source["PROJECT.log"]["content"]
+        assert "This hybrid continuation should stay outside the March 10 cutoff." not in by_source["PROJECT.log"]["content"]
         assert by_source["PROJECT.log"]["source_date"] == "2026-03-05"
         assert by_source["PROJECT.md"]["content"] == "Current recall planner summary"
         assert by_source["PROJECT.md"]["source_date"] is None
