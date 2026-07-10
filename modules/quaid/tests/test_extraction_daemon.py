@@ -201,6 +201,33 @@ def test_daemon_lifecycle_signal_mapping_excludes_rolling():
     assert "rolling" not in extraction_daemon.DAEMON_SIGNAL_TO_LIFECYCLE_EVENT
 
 
+def test_atomic_write_uses_unique_temp_paths_within_process(monkeypatch, tmp_path):
+    target = tmp_path / "cursor.json"
+    monkeypatch.setattr(extraction_daemon.os, "getpid", lambda: 4242)
+    uuids = iter([
+        types.SimpleNamespace(hex="a" * 32),
+        types.SimpleNamespace(hex="1" * 32),
+    ])
+    monkeypatch.setattr(extraction_daemon.uuid, "uuid4", lambda: next(uuids))
+    replaced = []
+    real_replace = extraction_daemon.os.replace
+
+    def _record_replace(src, dst):
+        replaced.append((Path(src), Path(dst)))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(extraction_daemon.os, "replace", _record_replace)
+
+    extraction_daemon._atomic_write(target, "first")
+    extraction_daemon._atomic_write(target, "second")
+
+    assert [dst for _src, dst in replaced] == [target, target]
+    assert replaced[0][0] != replaced[1][0]
+    assert replaced[0][0].name.endswith(".tmp.4242.aaaaaaaa")
+    assert replaced[1][0].name.endswith(".tmp.4242.11111111")
+    assert target.read_text(encoding="utf-8") == "second"
+
+
 @pytest.mark.parametrize(
     ("signal_type", "event_name"),
     [
@@ -1512,7 +1539,9 @@ def test_save_deferred_extraction_writes_unique_atomic_files(monkeypatch, tmp_pa
     monkeypatch.setattr(extraction_daemon.os, "getpid", lambda: 4242)
     uuids = iter([
         types.SimpleNamespace(hex="a" * 32),
+        types.SimpleNamespace(hex="1" * 32),
         types.SimpleNamespace(hex="b" * 32),
+        types.SimpleNamespace(hex="2" * 32),
     ])
     monkeypatch.setattr(extraction_daemon.uuid, "uuid4", lambda: next(uuids))
     atomic_writes = []

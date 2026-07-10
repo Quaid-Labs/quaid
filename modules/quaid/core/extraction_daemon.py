@@ -514,7 +514,7 @@ def write_context_refresh_timeout_marker(session_id: str) -> None:
 
 def _atomic_write(path: Path, content: str) -> None:
     """Write content atomically via temp file + os.replace()."""
-    tmp_path = path.with_suffix(f".tmp.{os.getpid()}")
+    tmp_path = path.with_suffix(f".tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}")
     try:
         tmp_path.write_text(content, encoding="utf-8")
         os.replace(str(tmp_path), str(path))
