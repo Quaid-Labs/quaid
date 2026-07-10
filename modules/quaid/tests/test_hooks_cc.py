@@ -358,6 +358,30 @@ def test_context_refresh_marker_paths_raise_data_dir_failure_when_fail_hard(monk
         hooks._context_refresh_compaction_latest_marker_path()
 
 
+def test_runtime_config_snapshot_state_path_raises_data_dir_failure_when_fail_hard(monkeypatch):
+    from core.interface import hooks
+
+    adapter = _adapter_mock()
+    adapter.data_dir.side_effect = RuntimeError("data dir broken")
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="data dir broken"):
+        hooks._runtime_config_snapshot_state_path()
+
+
+def test_prompt_model_probe_state_path_raises_data_dir_failure_when_fail_hard(monkeypatch):
+    from core.interface import hooks
+
+    adapter = _adapter_mock()
+    adapter.data_dir.side_effect = RuntimeError("data dir broken")
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="data dir broken"):
+        hooks._prompt_model_probe_state_path()
+
+
 def test_claude_code_inject_writes_session_end_signal_for_clear_command(monkeypatch, tmp_path, cursor_dir):
     from adaptors.claude_code.adapter import ClaudeCodeAdapter
 

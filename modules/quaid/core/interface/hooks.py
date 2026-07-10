@@ -640,10 +640,14 @@ def _runtime_config_snapshot_state_path() -> Path | None:
 
         data_dir = get_adapter().data_dir()
     except Exception:
+        if _fail_hard_enabled():
+            raise
         return None
     try:
         return Path(data_dir) / "runtime-config-snapshot.json"
     except Exception:
+        if _fail_hard_enabled():
+            raise
         return None
 
 
@@ -896,10 +900,14 @@ def _prompt_model_probe_state_path() -> Path | None:
 
         data_dir = get_adapter().data_dir()
     except Exception:
+        if _fail_hard_enabled():
+            raise
         return None
     try:
         return Path(data_dir) / "prompt-model-config-probe.json"
     except Exception:
+        if _fail_hard_enabled():
+            raise
         return None
 
 
