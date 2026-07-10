@@ -113,7 +113,8 @@ def _quaid_now() -> datetime:
     if raw:
         candidate = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
         try:
-            return datetime.fromisoformat(candidate).replace(tzinfo=None)
+            parsed = datetime.fromisoformat(candidate)
+            return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
         except ValueError:
             try:
                 return datetime.strptime(raw, "%Y-%m-%d")

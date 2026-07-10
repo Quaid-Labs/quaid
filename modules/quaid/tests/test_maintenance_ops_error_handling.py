@@ -663,6 +663,15 @@ def test_quaid_now_rejects_malformed_override_when_failhard_enabled(monkeypatch)
             maintenance_ops._quaid_now()
 
 
+def test_quaid_now_normalizes_offset_override_to_naive_local_storage_time(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T23:30:00-02:00")
+
+    now = maintenance_ops._quaid_now()
+
+    assert now.tzinfo is None
+    assert now.isoformat() == "2026-03-11T23:30:00"
+
+
 def test_update_check_cache_uses_quaid_now_for_freshness(monkeypatch):
     class _Conn:
         def __init__(self, updated_at):

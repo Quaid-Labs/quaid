@@ -152,9 +152,9 @@ def _now() -> datetime:
         except ValueError as exc:
             raise ValueError(f"Invalid QUAID_NOW={raw!r}") from exc
         if parsed.tzinfo is not None:
-            return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            return parsed.replace(tzinfo=None)
         return parsed
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now()
 
 
 def _now_iso() -> str:

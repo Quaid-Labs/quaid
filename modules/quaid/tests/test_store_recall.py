@@ -1561,7 +1561,7 @@ class TestStoreBasic:
         assert node is not None
         assert node.created_at == "2026-03-11T23:59:59"
 
-    def test_now_normalizes_offset_override_to_naive_utc(self, monkeypatch):
+    def test_now_normalizes_offset_override_to_naive_local_storage_time(self, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 
         monkeypatch.setenv("QUAID_NOW", "2026-03-11T23:30:00-02:00")
@@ -1569,9 +1569,9 @@ class TestStoreBasic:
         now = mg._now()
 
         assert now.tzinfo is None
-        assert now.isoformat() == "2026-03-12T01:30:00"
+        assert now.isoformat() == "2026-03-11T23:30:00"
 
-    def test_now_without_override_is_naive_utc(self, monkeypatch):
+    def test_now_without_override_is_naive_local_storage_time(self, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 
         monkeypatch.delenv("QUAID_NOW", raising=False)

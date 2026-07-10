@@ -56,9 +56,9 @@ def test_memorydb_review_helpers_bind_quaid_now_instead_of_sql_now(monkeypatch):
     assert "datetime('now')" not in sql_text
     assert "queued_at" in sql_text
     flat_params = [item for _sql, params in calls for item in params]
-    assert flat_params.count("2026-03-11T00:00:00+00:00") == 7
-    assert "2026-03-10T00:00:00+00:00" in flat_params
-    assert "2026-02-09T00:00:00+00:00" in flat_params
+    assert flat_params.count("2026-03-11T00:00:00") == 7
+    assert "2026-03-10T00:00:00" in flat_params
+    assert "2026-02-09T00:00:00" in flat_params
 
 
 def test_memorydb_now_rejects_malformed_quaid_now(monkeypatch):
