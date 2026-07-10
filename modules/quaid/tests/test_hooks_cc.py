@@ -382,6 +382,29 @@ def test_prompt_model_probe_state_path_raises_data_dir_failure_when_fail_hard(mo
         hooks._prompt_model_probe_state_path()
 
 
+def test_adapter_compatibility_context_returns_empty_on_failure_fail_open(monkeypatch):
+    from core.interface import hooks
+
+    adapter = _adapter_mock()
+    adapter.get_compatibility_context_files.side_effect = RuntimeError("compat broken")
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+
+    assert hooks._collect_adapter_compatibility_context_sections() == []
+
+
+def test_adapter_compatibility_context_raises_failure_when_fail_hard(monkeypatch):
+    from core.interface import hooks
+
+    adapter = _adapter_mock()
+    adapter.get_compatibility_context_files.side_effect = RuntimeError("compat broken")
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="compat broken"):
+        hooks._collect_adapter_compatibility_context_sections()
+
+
 def test_claude_code_inject_writes_session_end_signal_for_clear_command(monkeypatch, tmp_path, cursor_dir):
     from adaptors.claude_code.adapter import ClaudeCodeAdapter
 

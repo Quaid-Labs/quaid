@@ -3104,6 +3104,8 @@ def _collect_adapter_compatibility_context_sections() -> List[str]:
             default_max_lines=120,
         )
     except Exception:
+        if _fail_hard_enabled():
+            raise
         return []
 
 
