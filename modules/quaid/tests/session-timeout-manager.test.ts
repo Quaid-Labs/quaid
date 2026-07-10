@@ -26,6 +26,7 @@ function buildManager(params: {
   source: SourceState;
   failHardEnabled?: boolean;
   extract?: (messages: any[], sessionId?: string, label?: string) => Promise<void>;
+  onAsyncError?: (err: unknown) => void;
 }) {
   return new SessionTimeoutManager({
     workspace: params.workspace,
@@ -39,6 +40,7 @@ function buildManager(params: {
         sessionId,
         lastActivityMs,
       })),
+    onAsyncError: params.onAsyncError,
     extract:
       params.extract ||
       (async () => {
@@ -277,11 +279,12 @@ describe("SessionTimeoutManager (cursor + source)", () => {
     expect(calls[0]).toHaveLength(1);
   });
 
-  it("does not crash timer queue when failHard blocks fallback payload", async () => {
+  it("surfaces timer queue errors when failHard blocks fallback payload", async () => {
     vi.useFakeTimers();
     const workspace = makeWorkspace("quaid-timeout-failhard-timer-");
     const source = createSourceState();
     const logs: string[] = [];
+    const asyncErrors: unknown[] = [];
 
     const manager = new SessionTimeoutManager({
       workspace,
@@ -291,6 +294,7 @@ describe("SessionTimeoutManager (cursor + source)", () => {
       logger: (msg: string) => logs.push(String(msg)),
       readSessionMessages: () => [],
       listSessionActivity: () => [],
+      onAsyncError: (err: unknown) => asyncErrors.push(err),
       extract: async () => {
         // no-op
       },
@@ -304,7 +308,10 @@ describe("SessionTimeoutManager (cursor + source)", () => {
 
     await vi.advanceTimersByTimeAsync(61_000);
     await expect((manager as any).chain).resolves.toBeUndefined();
+    expect(asyncErrors).toHaveLength(1);
+    expect(String((asyncErrors[0] as Error)?.message || asyncErrors[0])).toMatch(/fallback payload blocked by failHard/i);
     expect(logs.some((line) => line.includes("[FAIL-HARD] extraction queue failed"))).toBe(true);
+    expect(logs.join("\n")).not.toContain("suppressed unhandled rejection");
   });
 
   it("recovers only sessions that became stale within the current sweep window", async () => {
@@ -521,6 +528,58 @@ describe("SessionTimeoutManager (cursor + source)", () => {
     expect(calls.length).toBe(1);
     expect(calls[0]?.sid).toBe("session-timer");
     expect(calls[0]?.label).toBe("Timeout");
+  });
+
+  it("preserves pending timeout state when timer log write fails before queueing", async () => {
+    vi.useFakeTimers();
+    const workspace = makeWorkspace("quaid-timeout-log-failure-");
+    const source = createSourceState();
+    const manager = buildManager({ workspace, timeoutMinutes: 1, source, failHardEnabled: true });
+
+    manager.onAgentEnd([
+      { role: "user", content: "via timer", timestamp: Date.now() },
+    ], "session-log-fails");
+
+    const originalWriteQuaidLog = (manager as any).writeQuaidLog.bind(manager);
+    vi.spyOn(manager as any, "writeQuaidLog").mockImplementation((event: string, ...args: any[]) => {
+      if (event === "timer_callback_entered") {
+        throw new Error("timeout log unavailable");
+      }
+      return originalWriteQuaidLog(event, ...args);
+    });
+
+    expect(() => vi.advanceTimersByTime(61_000)).toThrow(/timeout log unavailable/);
+    expect((manager as any).pendingSessionId).toBe("session-log-fails");
+    expect((manager as any).pendingFallbackMessages).toHaveLength(1);
+  });
+
+  it("flushes previous pending session when another session arrives before timeout", async () => {
+    const workspace = makeWorkspace("quaid-timeout-replace-pending-");
+    const source = createSourceState();
+    const calls: Array<{ sid?: string; messages: any[] }> = [];
+    const manager = buildManager({
+      workspace,
+      timeoutMinutes: 1,
+      source,
+      failHardEnabled: false,
+      extract: async (messages, sid) => {
+        calls.push({ sid, messages });
+      },
+    });
+
+    manager.onAgentEnd([
+      { role: "user", content: "first session fact", timestamp: Date.now() },
+    ], "session-a");
+    manager.onAgentEnd([
+      { role: "user", content: "second session fact", timestamp: Date.now() + 1 },
+    ], "session-b");
+    await (manager as any).chain;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.sid).toBe("session-a");
+    expect(calls[0]?.messages[0]?.content).toBe("first session fact");
+    expect((manager as any).pendingSessionId).toBe("session-b");
+    expect((manager as any).pendingFallbackMessages[0]?.content).toBe("second session fact");
   });
 
   it("allows transcript-update lifecycle extraction when transcript contains command evidence", async () => {

@@ -138,6 +138,7 @@ class SessionTimeoutManager {
   readSessionMessagesSource;
   listSessionActivitySource;
   shouldSkipText;
+  onAsyncError;
   hasPendingSessionNotesSource;
   timer = null;
   pendingFallbackMessages = null;
@@ -161,6 +162,11 @@ class SessionTimeoutManager {
     this.isBootstrapOnly = opts.isBootstrapOnly;
     this.logger = opts.logger;
     this.shouldSkipText = opts.shouldSkipText;
+    this.onAsyncError = opts.onAsyncError || ((err) => {
+      setTimeout(() => {
+        throw err instanceof Error ? err : new Error(String(err));
+      }, 0);
+    });
     this.readSessionMessagesSource = (sessionId) => {
       try {
         return filterEligibleMessages(opts.readSessionMessages?.(sessionId) || [], opts.shouldSkipText);
@@ -306,6 +312,19 @@ class SessionTimeoutManager {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    if (this.pendingSessionId && this.pendingSessionId !== sessionId && this.pendingFallbackMessages) {
+      const pendingSessionId = this.pendingSessionId;
+      const pendingFallback = this.pendingFallbackMessages;
+      const pendingTimeoutMinutes = this.resolveTimeoutMinutes();
+      this.writeQuaidLog("timer_replaced_flush_pending", pendingSessionId, {
+        active_session_id: sessionId,
+        timeout_minutes: pendingTimeoutMinutes,
+        message_count: pendingFallback.length
+      });
+      this.queueExtractionFromSession(pendingSessionId, pendingFallback, pendingTimeoutMinutes);
+      this.pendingSessionId = void 0;
+      this.pendingFallbackMessages = null;
+    }
     const source = String(meta?.source || "unknown");
     if (this.pendingSessionId === sessionId && this.pendingFallbackMessages) {
       this.pendingFallbackMessages = mergeUniqueMessages(this.pendingFallbackMessages, gatedIncoming);
@@ -339,19 +358,19 @@ class SessionTimeoutManager {
     });
     this.timer = setTimeout(() => {
       const tmFired = this.resolveTimeoutMinutes();
-      this.writeQuaidLog("timer_callback_entered", this.pendingSessionId || sessionId, {
-        timeout_minutes: tmFired
-      });
       const sid = this.pendingSessionId;
       const fallback = this.pendingFallbackMessages || [];
       this.timer = null;
-      this.pendingSessionId = void 0;
-      this.pendingFallbackMessages = null;
       if (!sid) return;
+      this.writeQuaidLog("timer_callback_entered", sid, {
+        timeout_minutes: tmFired
+      });
       this.writeQuaidLog("timer_fired", sid, {
         timeout_minutes: tmFired
       });
       this.queueExtractionFromSession(sid, fallback, tmFired);
+      this.pendingSessionId = void 0;
+      this.pendingFallbackMessages = null;
     }, delayMs);
     const timerHandle = this.timer;
     if (typeof timerHandle?.unref === "function") {
@@ -553,6 +572,7 @@ class SessionTimeoutManager {
   queueExtractionFromSession(sessionId, fallbackMessages, timeoutMinutes) {
     const work = this.chain.catch((err) => {
       safeLog(this.logger, `[memory][timeout] previous extraction chain error: ${String(err?.message || err)}`);
+      if (this.failHard) throw err;
     }).then(async () => {
       const extracted = await this.extractSessionFromSourceDirect(sessionId, "Timeout", fallbackMessages);
       if (!extracted) {
@@ -565,13 +585,14 @@ class SessionTimeoutManager {
       if (this.failHard) {
         safeLog(
           this.logger,
-          `[memory][timeout][FAIL-HARD] extraction queue failed (suppressed unhandled rejection): ${message}`
+          `[memory][timeout][FAIL-HARD] extraction queue failed: ${message}`
         );
+        this.onAsyncError(err);
       } else {
         safeLog(this.logger, `[memory][timeout] extraction queue failed: ${message}`);
       }
     });
-    this.chain = work.then(() => void 0, () => void 0);
+    this.chain = work.then(() => void 0);
   }
   cursorPath(sessionId) {
     const safeSessionId = String(sessionId || "unknown").replace(/[^a-zA-Z0-9_-]/g, "_");

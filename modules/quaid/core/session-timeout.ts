@@ -42,6 +42,7 @@ type SessionTimeoutManagerOptions = {
   listSessionActivity?: () => SessionActivityRecord[];
   hasPendingSessionNotes?: (sessionId: string) => boolean;
   shouldSkipText?: (text: string) => boolean;
+  onAsyncError?: (err: unknown) => void;
 };
 type AgentEndMeta = {
   source?: string;
@@ -202,6 +203,7 @@ export class SessionTimeoutManager {
   private readSessionMessagesSource: (sessionId: string) => any[];
   private listSessionActivitySource: () => SessionActivityRecord[];
   private shouldSkipText?: (text: string) => boolean;
+  private onAsyncError: (err: unknown) => void;
   private hasPendingSessionNotesSource: (sessionId: string) => boolean;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pendingFallbackMessages: any[] | null = null;
@@ -228,6 +230,11 @@ export class SessionTimeoutManager {
     this.isBootstrapOnly = opts.isBootstrapOnly;
     this.logger = opts.logger;
     this.shouldSkipText = opts.shouldSkipText;
+    this.onAsyncError = opts.onAsyncError || ((err: unknown) => {
+      setTimeout(() => {
+        throw err instanceof Error ? err : new Error(String(err));
+      }, 0);
+    });
     this.readSessionMessagesSource = (sessionId: string) => {
       try {
         return filterEligibleMessages(opts.readSessionMessages?.(sessionId) || [], opts.shouldSkipText);
@@ -391,6 +398,19 @@ export class SessionTimeoutManager {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    if (this.pendingSessionId && this.pendingSessionId !== sessionId && this.pendingFallbackMessages) {
+      const pendingSessionId = this.pendingSessionId;
+      const pendingFallback = this.pendingFallbackMessages;
+      const pendingTimeoutMinutes = this.resolveTimeoutMinutes();
+      this.writeQuaidLog("timer_replaced_flush_pending", pendingSessionId, {
+        active_session_id: sessionId,
+        timeout_minutes: pendingTimeoutMinutes,
+        message_count: pendingFallback.length,
+      });
+      this.queueExtractionFromSession(pendingSessionId, pendingFallback, pendingTimeoutMinutes);
+      this.pendingSessionId = undefined;
+      this.pendingFallbackMessages = null;
+    }
 
     const source = String(meta?.source || "unknown");
     if (this.pendingSessionId === sessionId && this.pendingFallbackMessages) {
@@ -429,19 +449,19 @@ export class SessionTimeoutManager {
 
     this.timer = setTimeout(() => {
       const tmFired = this.resolveTimeoutMinutes();
-      this.writeQuaidLog("timer_callback_entered", this.pendingSessionId || sessionId, {
-        timeout_minutes: tmFired,
-      });
       const sid = this.pendingSessionId;
       const fallback = this.pendingFallbackMessages || [];
       this.timer = null;
-      this.pendingSessionId = undefined;
-      this.pendingFallbackMessages = null;
       if (!sid) return;
+      this.writeQuaidLog("timer_callback_entered", sid, {
+        timeout_minutes: tmFired,
+      });
       this.writeQuaidLog("timer_fired", sid, {
         timeout_minutes: tmFired,
       });
       this.queueExtractionFromSession(sid, fallback, tmFired);
+      this.pendingSessionId = undefined;
+      this.pendingFallbackMessages = null;
     }, delayMs);
     const timerHandle = this.timer as any;
     if (typeof timerHandle?.unref === "function") {
@@ -684,6 +704,7 @@ export class SessionTimeoutManager {
     const work = this.chain
       .catch((err: unknown) => {
         safeLog(this.logger, `[memory][timeout] previous extraction chain error: ${String((err as Error)?.message || err)}`);
+        if (this.failHard) throw err;
       })
       .then(async () => {
         const extracted = await this.extractSessionFromSourceDirect(sessionId, "Timeout", fallbackMessages);
@@ -698,13 +719,14 @@ export class SessionTimeoutManager {
         if (this.failHard) {
           safeLog(
             this.logger,
-            `[memory][timeout][FAIL-HARD] extraction queue failed (suppressed unhandled rejection): ${message}`,
+            `[memory][timeout][FAIL-HARD] extraction queue failed: ${message}`,
           );
+          this.onAsyncError(err);
         } else {
           safeLog(this.logger, `[memory][timeout] extraction queue failed: ${message}`);
         }
       });
-    this.chain = work.then(() => undefined, () => undefined);
+    this.chain = work.then(() => undefined);
   }
 
   private cursorPath(sessionId: string): string {
