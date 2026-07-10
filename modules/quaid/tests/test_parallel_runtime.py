@@ -32,6 +32,20 @@ def test_prune_does_not_evict_lock_owned_by_current_thread(tmp_path: Path):
         held.release()
 
 
+def test_prune_does_not_evict_reserved_unacquired_lock(tmp_path: Path):
+    reg = ResourceLockRegistry(tmp_path / "locks")
+    reserved = reg._reserve_thread_lock("pending-resource")
+
+    try:
+        for i in range(MAX_THREAD_LOCK_CACHE + 80):
+            reg._thread_lock(f"resource-{i}")
+
+        assert reg._thread_locks.get("pending-resource") is reserved
+        assert reg._thread_lock_refs["pending-resource"] == 1
+    finally:
+        reg._release_thread_lock_reservation("pending-resource")
+
+
 def test_acquire_many_logs_unlock_failures(tmp_path: Path):
     reg = ResourceLockRegistry(tmp_path / "locks")
     real_flock = fcntl.flock
@@ -144,7 +158,7 @@ def test_acquire_many_zero_timeout_uses_one_second_floor(tmp_path: Path):
             acquire_timeouts.append(timeout)
             return False
 
-    with patch.object(reg, "_thread_lock", return_value=_FakeLock()), \
+    with patch.object(reg, "_reserve_thread_lock", return_value=_FakeLock()), \
          patch("core.runtime.parallel_runtime.time.monotonic", side_effect=[10.0, 10.0]):
         with pytest.raises(TimeoutError, match="thread lock timeout"):
             with reg.acquire_many(["resource-zero"], timeout_seconds=0):
