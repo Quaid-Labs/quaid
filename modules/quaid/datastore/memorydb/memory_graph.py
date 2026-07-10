@@ -1677,7 +1677,7 @@ class MemoryGraph:
                 if _is_fail_hard_mode():
                     raise
                 owner_id = "default"
-        owner_id = str(owner_id).strip() or "default"
+        owner_id = str(owner_id or "").strip() or "default"
         source_id = str(source_id or session_id or "").strip() or None
         chunk_kind = str(chunk_kind or "session").strip().lower() or "session"
         parent_chunk_id = str(parent_chunk_id or "").strip() or None

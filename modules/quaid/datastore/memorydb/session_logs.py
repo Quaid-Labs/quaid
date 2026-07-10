@@ -292,9 +292,10 @@ def index_session_log(
 
 def list_recent_sessions(limit: int = 5, owner_id: Optional[str] = None) -> List[Dict[str, Any]]:
     lim = max(1, min(int(limit or 5), 50))
+    owner_filter = str(owner_id).strip() if owner_id is not None else ""
     with _lib_get_connection() as conn:
         ensure_schema(conn)
-        if owner_id:
+        if owner_filter:
             rows = conn.execute(
                 """
                 SELECT session_id, owner_id, source_label, source_path, message_count, topic_hint, indexed_at, updated_at
@@ -302,7 +303,7 @@ def list_recent_sessions(limit: int = 5, owner_id: Optional[str] = None) -> List
                 FROM session_logs WHERE owner_id = ?
                 ORDER BY updated_at DESC LIMIT ?
                 """,
-                (str(owner_id), lim),
+                (owner_filter, lim),
             ).fetchall()
         else:
             rows = conn.execute(
@@ -318,16 +319,17 @@ def list_recent_sessions(limit: int = 5, owner_id: Optional[str] = None) -> List
 
 def load_session(session_id: str, owner_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     sid = _normalize_session_id(session_id)
+    owner_filter = str(owner_id).strip() if owner_id is not None else ""
     with _lib_get_connection() as conn:
         ensure_schema(conn)
-        if owner_id:
+        if owner_filter:
             row = conn.execute(
                 """
                 SELECT session_id, owner_id, source_label, source_path, message_count, topic_hint, indexed_at, updated_at, transcript_text
                        , source_channel, conversation_id, participant_ids, participant_aliases
                 FROM session_logs WHERE session_id = ? AND owner_id = ?
                 """,
-                (sid, str(owner_id)),
+                (sid, owner_filter),
             ).fetchone()
         else:
             row = conn.execute(

@@ -57,6 +57,24 @@ def test_session_log_index_list_load(monkeypatch, tmp_path):
     assert loaded["conversation_id"] == "chat-123"
 
 
+def test_session_log_none_owner_filter_is_unfiltered(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+
+    session_logs.index_session_log(
+        session_id="sess-none-filter",
+        transcript="User: alpha\n\nAssistant: noted.",
+        owner_id="quaid",
+    )
+
+    recent = session_logs.list_recent_sessions(limit=5, owner_id=None)
+    loaded = session_logs.load_session("sess-none-filter", owner_id=None)
+
+    assert [row["session_id"] for row in recent] == ["sess-none-filter"]
+    assert loaded is not None
+    assert loaded["owner_id"] == "quaid"
+
+
 def test_session_log_index_honors_quaid_now(monkeypatch, tmp_path):
     adapter = TestAdapter(tmp_path); set_adapter(adapter)
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))

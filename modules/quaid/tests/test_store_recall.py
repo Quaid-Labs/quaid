@@ -6540,6 +6540,24 @@ class TestSourceChunkStorage:
         assert rows[0]["domains"] == ["personal"]
         assert rows[0]["project"] == "life-log"
 
+    def test_store_source_chunk_none_owner_defaults_without_string_none(self, tmp_path, monkeypatch):
+        graph, _db_file = _make_graph(tmp_path)
+        import datastore.memorydb.memory_graph as mg
+
+        monkeypatch.setattr(mg, "_get_memory_config", lambda: SimpleNamespace(users=SimpleNamespace(default_owner=None)))
+        row = graph.store_source_chunk(
+            "User: Default owner source chunk.\nAssistant: Noted.",
+            owner_id=None,
+            source_id="session-file-none-owner",
+            session_id="session-none-owner",
+            chunk_index=0,
+            embed=False,
+        )
+
+        assert row["owner_id"] == "default"
+        assert graph.list_source_chunks(owner_id="None", session_id="session-none-owner") == []
+        assert graph.list_source_chunks(owner_id="default", session_id="session-none-owner")[0]["chunk_id"] == row["chunk_id"]
+
     def test_store_source_chunk_preserves_unicode_project_tags(self, tmp_path):
         graph, _db_file = _make_graph(tmp_path)
 
