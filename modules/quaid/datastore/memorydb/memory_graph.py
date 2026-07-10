@@ -23725,7 +23725,7 @@ def store(
                 if update_if_dup and verified and not existing.verified:
                     existing.verified = True
                     existing.confidence = 0.9
-                graph.update_node(existing, conn=_conn)
+                graph.update_node(existing, conn=conn)
                 if update_if_dup and verified:
                     return _with_dedup_telemetry({
                         "id": existing.id,
@@ -23827,7 +23827,7 @@ def store(
                     if update_if_dup and verified and not existing.verified:
                         existing.verified = True
                         existing.confidence = 0.9
-                    graph.update_node(existing, conn=_conn)
+                    graph.update_node(existing, conn=conn)
                     return _with_dedup_telemetry({
                         "id": existing.id,
                         "status": "duplicate",
@@ -23851,7 +23851,7 @@ def store(
                     if update_if_dup and verified and not existing.verified:
                         existing.verified = True
                         existing.confidence = 0.9
-                    graph.update_node(existing, conn=_conn)
+                    graph.update_node(existing, conn=conn)
                     if update_if_dup and verified:
                         return _with_dedup_telemetry({
                             "id": existing.id,
@@ -23892,7 +23892,7 @@ def store(
                             if update_if_dup and verified and not existing.verified:
                                 existing.verified = True
                                 existing.confidence = 0.9
-                            graph.update_node(existing, conn=_conn)
+                            graph.update_node(existing, conn=conn)
                             if update_if_dup and verified:
                                 return _with_dedup_telemetry({
                                     "id": existing.id,

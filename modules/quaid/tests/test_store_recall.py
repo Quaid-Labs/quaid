@@ -2302,6 +2302,31 @@ class TestStoreBasic:
         assert node is not None
         assert node.session_id == "session-4"
 
+    def test_hash_duplicate_update_reuses_dedup_connection(self, tmp_path, monkeypatch):
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+        text = "Maya keeps the spare easel in the north studio"
+        original_update_node = graph.update_node
+        seen_connections = []
+
+        def tracking_update_node(node, conn=None):
+            seen_connections.append(conn)
+            assert conn is not None
+            return original_update_node(node, conn=conn)
+
+        monkeypatch.setattr(graph, "update_node", tracking_update_node)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            first = store(text, owner_id="quaid", skip_dedup=False)
+            second = store(text, owner_id="quaid", skip_dedup=False)
+
+        assert first["status"] == "created"
+        assert second["status"] in {"duplicate", "updated"}
+        assert len(seen_connections) == 1
+        node = graph.get_node(first["id"])
+        assert node.confirmation_count == 1
+
     def test_dedup_update_keeps_earliest_session_id(self, tmp_path):
         from datastore.memorydb.memory_graph import store
 
