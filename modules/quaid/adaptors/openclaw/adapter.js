@@ -5581,7 +5581,6 @@ notify_user(${JSON.stringify(message)})
       return context;
     };
     const buildRefreshedIdentityHookResult = (event, ctx, fallbackSessionId, instanceId, targetHook) => {
-      if (!isSystemEnabled2("projects")) return void 0;
       const sessionId = String(fallbackSessionId || event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
       const sessionKeyDocs = resolveProjectDocsRefreshKey(event, ctx, sessionId);
       const refreshedIdentityContext = peekRefreshedIdentityContext(
@@ -5635,16 +5634,24 @@ ${refreshedIdentityContext}` : refreshedIdentityContext;
       });
     };
     const armLifecycleProjectContextRefresh = (event, ctx, fallbackSessionId, source) => {
-      if (!isSystemEnabled2("projects")) return;
+      const projectsEnabled = isSystemEnabled2("projects");
       const refreshKey = resolveProjectDocsRefreshKey(event, ctx, fallbackSessionId);
-      armProjectContextRefresh(refreshKey, source, {
-        traceName: "hook.context_refresh.lifecycle_armed"
-      });
-      const sessionId = String(fallbackSessionId || "").trim();
-      if (sessionId && sessionId !== refreshKey) {
-        armProjectContextRefresh(sessionId, `${source}:session_id`, {
+      if (projectsEnabled) {
+        armProjectContextRefresh(refreshKey, source, {
           traceName: "hook.context_refresh.lifecycle_armed"
         });
+      } else {
+        armRefreshedIdentityContext(refreshKey, source);
+      }
+      const sessionId = String(fallbackSessionId || "").trim();
+      if (sessionId && sessionId !== refreshKey) {
+        if (projectsEnabled) {
+          armProjectContextRefresh(sessionId, `${source}:session_id`, {
+            traceName: "hook.context_refresh.lifecycle_armed"
+          });
+        } else {
+          armRefreshedIdentityContext(sessionId, `${source}:session_id`);
+        }
       }
       armRefreshedIdentityContext(
         identityRefreshInstanceKey(getInstanceId(resolveHookAgentLabel(event, ctx))),
@@ -5712,20 +5719,20 @@ ${missingUserOverride}` : missingUserOverride;
           cached_len: missingUserRecovery?.text.length ?? 0
         });
       }
-      const emitIdentityOnlyRefresh = (refreshedIdentityContext, sessionKeyDocs) => {
+      const emitIdentityOnlyRefresh = (refreshedIdentityContext2, sessionKeyDocs2) => {
         const prependContext = [
           ...prependContextParts,
-          refreshedIdentityContext,
+          refreshedIdentityContext2,
           stripQuaidInjectedMemoryBlocks(stripOpenClawInternalContext(event?.prependContext || ""))
         ].filter(Boolean).join("\n\n") || void 0;
         const result = {
           ...prependContext ? { prependContext } : {},
           prependSystemContext: prependSystemContext ? `${prependSystemContext}
 
-${refreshedIdentityContext}` : refreshedIdentityContext,
+${refreshedIdentityContext2}` : refreshedIdentityContext2,
           appendSystemContext: appendSystemContext ? `${appendSystemContext}
 
-${refreshedIdentityContext}` : refreshedIdentityContext
+${refreshedIdentityContext2}` : refreshedIdentityContext2
         };
         identityOnlyRefreshResults.add(result);
         if (event && typeof event === "object") {
@@ -5735,9 +5742,9 @@ ${refreshedIdentityContext}` : refreshedIdentityContext
         }
         writeHookTrace("hook.before_prompt_build.context_emitted", {
           session_id: promptSessionId,
-          session_key: sessionKeyDocs,
+          session_key: sessionKeyDocs2,
           instance_id: promptInstanceId,
-          context_len: refreshedIdentityContext.length,
+          context_len: refreshedIdentityContext2.length,
           context_mode: "openclaw_identity_refresh",
           recall_count: 0,
           docs_count: 0,
@@ -5761,7 +5768,7 @@ ${refreshedIdentityContext}` : refreshedIdentityContext
         );
         return promptModelConfigValidationNotice;
       };
-      const injectFilePlacementReminder = (sessionKeyDocs) => {
+      const injectFilePlacementReminder = (sessionKeyDocs2) => {
         if (!promptInstanceId) return;
         const miscPath = path.join(VISIBLE_WORKSPACE, "projects", `misc--${promptInstanceId}`);
         const projectPlacementContext = [
@@ -5800,10 +5807,12 @@ ${refreshedIdentityContext}` : refreshedIdentityContext
         prependSystemContext = prependSystemContext ? `${prependSystemContext}
 
 ${projectPlacementContext}` : projectPlacementContext;
-        writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
+        writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs2 });
       };
       let identityRefreshAutoInjectContinued = false;
-      if (isSystemEnabled2("projects")) {
+      const projectsEnabled = isSystemEnabled2("projects");
+      const sessionKeyDocs = resolveProjectDocsRefreshKey(event, ctx, promptSessionId);
+      if (projectsEnabled) {
         try {
           const identityContext = await promptFacade.injectProjectContext(void 0, {
             identityOnly: true
@@ -5822,53 +5831,56 @@ ${identityContext}` : identityContext;
         } catch (err) {
           console.warn(`[quaid] Identity context injection failed: ${err?.message || String(err)}`);
         }
-        const sessionKeyDocs = resolveProjectDocsRefreshKey(event, ctx, promptSessionId);
-        const refreshedIdentityContext = consumeRefreshedIdentityContext(
-          [sessionKeyDocs, promptSessionId, identityRefreshInstanceKey(promptInstanceId)],
-          promptInstanceId
-        );
-        if (refreshedIdentityContext) {
-          let modelConfigNotice = "";
-          if (shouldValidatePromptModelConfigForTurn(isAutoInjectEnabled(getMemoryConfig2()), promptAgentLabel)) {
-            modelConfigNotice = await validatePromptModelConfigForTurn();
-            if (modelConfigNotice) {
-              const providerNoticeContext = formatImmediateProviderNoticeContext(modelConfigNotice);
-              if (providerNoticeContext) {
-                prependContextParts.unshift(providerNoticeContext);
-              }
-              appendSystemContext = appendSystemContext ? `${providerNoticeContext || modelConfigNotice}
+      }
+      const refreshedIdentityContext = consumeRefreshedIdentityContext(
+        [sessionKeyDocs, promptSessionId, identityRefreshInstanceKey(promptInstanceId)],
+        promptInstanceId
+      );
+      if (refreshedIdentityContext) {
+        let modelConfigNotice = "";
+        if (shouldValidatePromptModelConfigForTurn(isAutoInjectEnabled(getMemoryConfig2()), promptAgentLabel)) {
+          modelConfigNotice = await validatePromptModelConfigForTurn();
+          if (modelConfigNotice) {
+            const providerNoticeContext = formatImmediateProviderNoticeContext(modelConfigNotice);
+            if (providerNoticeContext) {
+              prependContextParts.unshift(providerNoticeContext);
+            }
+            appendSystemContext = appendSystemContext ? `${providerNoticeContext || modelConfigNotice}
 
 ${appendSystemContext}` : providerNoticeContext || modelConfigNotice;
-            }
           }
-          injectFilePlacementReminder(sessionKeyDocs);
-          const identityRefreshQuery = selectAutoInjectQuery(
-            event,
-            promptLastUserMessageQuery,
-            nowMs,
-            promptSessionId
-          );
-          const shouldRunAutoInjectAfterIdentityRefresh = !modelConfigNotice && identityRefreshQuery.query.length >= 3 && !PROMPT_RELAY_SKIP_RE.test(identityRefreshQuery.query) && !identityRefreshQuery.query.startsWith("Extract memorable facts and journal entries from this conversation:") && !promptFacade.isInternalMaintenancePrompt(identityRefreshQuery.query);
-          if (!shouldRunAutoInjectAfterIdentityRefresh) {
-            return emitIdentityOnlyRefresh(refreshedIdentityContext, sessionKeyDocs);
-          }
-          appendSystemContext = appendSystemContext ? `${appendSystemContext}
-
-${refreshedIdentityContext}` : refreshedIdentityContext;
-          prependSystemContext = prependSystemContext ? `${prependSystemContext}
-
-${refreshedIdentityContext}` : refreshedIdentityContext;
-          prependContextParts.push(refreshedIdentityContext);
-          identityRefreshAutoInjectContinued = true;
-          writeHookTrace("hook.before_prompt_build.identity_refresh_continued", {
-            session_id: promptSessionId,
-            session_key: sessionKeyDocs,
-            instance_id: promptInstanceId,
-            query: identityRefreshQuery.query.slice(0, 80),
-            source: identityRefreshQuery.source,
-            context_len: refreshedIdentityContext.length
-          });
         }
+        if (projectsEnabled) {
+          injectFilePlacementReminder(sessionKeyDocs);
+        }
+        const identityRefreshQuery = selectAutoInjectQuery(
+          event,
+          promptLastUserMessageQuery,
+          nowMs,
+          promptSessionId
+        );
+        const shouldRunAutoInjectAfterIdentityRefresh = !modelConfigNotice && identityRefreshQuery.query.length >= 3 && !PROMPT_RELAY_SKIP_RE.test(identityRefreshQuery.query) && !identityRefreshQuery.query.startsWith("Extract memorable facts and journal entries from this conversation:") && !promptFacade.isInternalMaintenancePrompt(identityRefreshQuery.query);
+        if (!shouldRunAutoInjectAfterIdentityRefresh) {
+          return emitIdentityOnlyRefresh(refreshedIdentityContext, sessionKeyDocs);
+        }
+        appendSystemContext = appendSystemContext ? `${appendSystemContext}
+
+${refreshedIdentityContext}` : refreshedIdentityContext;
+        prependSystemContext = prependSystemContext ? `${prependSystemContext}
+
+${refreshedIdentityContext}` : refreshedIdentityContext;
+        prependContextParts.push(refreshedIdentityContext);
+        identityRefreshAutoInjectContinued = true;
+        writeHookTrace("hook.before_prompt_build.identity_refresh_continued", {
+          session_id: promptSessionId,
+          session_key: sessionKeyDocs,
+          instance_id: promptInstanceId,
+          query: identityRefreshQuery.query.slice(0, 80),
+          source: identityRefreshQuery.source,
+          context_len: refreshedIdentityContext.length
+        });
+      }
+      if (projectsEnabled) {
         if (!identityRefreshAutoInjectContinued) {
           writeHookTrace("hook.docs_gate_check", {
             session_id: sessionKeyDocs,

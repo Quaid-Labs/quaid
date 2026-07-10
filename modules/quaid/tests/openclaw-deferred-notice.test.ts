@@ -3951,4 +3951,97 @@ describe("openclaw deferred notices", () => {
     error.mockRestore();
     removeTempDir(fixture.home);
   });
+
+  it("delivers /new refreshed identity over registerHook when project docs are disabled", async () => {
+    vi.useFakeTimers();
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-new-identity-registerhook-home-",
+      "openclaw-main",
+      "[Quaid] /new registerHook identity fixture",
+    );
+    const configPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "config.json");
+    writeJson(configPath, {
+      ...JSON.parse(fs.readFileSync(configPath, "utf8")),
+      systems: { memory: true, projects: false },
+    });
+    const identityDir = path.join(fixture.visibleHome, "instances", "openclaw-main");
+    fs.mkdirSync(identityDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(identityDir, "USER.md"),
+      "# USER\nThe office plant is named Bartholomew. It is a fiddle-leaf fig.\n",
+      "utf8",
+    );
+    fs.writeFileSync(path.join(identityDir, "SOUL.md"), "# SOUL\n", "utf8");
+    fs.writeFileSync(path.join(identityDir, "ENVIRONMENT.md"), "# ENVIRONMENT\n", "utf8");
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildRegisterCall = api.registerHook.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build-registerHook"
+    );
+    const commandNewCall = api.registerHook.mock.calls.find((call: any[]) =>
+      call?.[0] === "command:new" && call?.[2]?.name === "command-new-memory-extraction"
+    );
+    expect(beforePromptBuildRegisterCall).toBeTruthy();
+    expect(commandNewCall).toBeTruthy();
+
+    const beforePromptBuildHandler = beforePromptBuildRegisterCall?.[1];
+    const commandNewHandler = commandNewCall?.[1];
+    const sessionKey = "agent:main:matrix:direct:@quaid-test-bot:localhost";
+    const sessionId = "session-m7-registerhook-projects-disabled";
+
+    await commandNewHandler(
+      {
+        action: "new",
+        sessionId,
+        sessionKey,
+      },
+      {
+        sessionId,
+        sessionKey,
+        agentId: "main",
+        trigger: "user",
+      },
+    );
+
+    const result = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "What's the office plant named?",
+        messages: [{ role: "user", content: "What's the office plant named?" }],
+        sessionId,
+        sessionKey,
+      },
+      {
+        sessionId,
+        sessionKey,
+        agentId: "main",
+        trigger: "user",
+      },
+    );
+    const combined = `${String(result?.prependContext || "")}\n${combinedSystemContext(result)}`;
+    expect(combined).toContain("Quaid Refreshed Identity Context");
+    expect(combined).toContain("Bartholomew");
+    expect(combined).toContain("fiddle-leaf fig");
+    const traceEvents = readHookTraceEvents(fixture.hiddenHome, "openclaw-main").map((row) => String(row.event || ""));
+    expect(traceEvents).toContain("hook.identity_refresh.armed");
+    expect(traceEvents).toContain("hook.identity_refresh.injected");
+    expect(traceEvents).not.toContain("hook.project_docs_injected");
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
 });
