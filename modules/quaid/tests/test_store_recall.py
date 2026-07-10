@@ -7515,6 +7515,72 @@ class TestSourceChunkStorage:
         assert "v.node_id IS NULL" in select_sql
         assert "NOT IN" not in select_sql
 
+    def test_node_vec_backfill_tolerates_concurrent_duplicate_insert(self, tmp_path):
+        """A concurrent semantic search may fill vec_nodes after our anti-join snapshot."""
+        import datastore.memorydb.memory_graph as mg
+
+        db_file = tmp_path / "vec-backfill-race.db"
+        conn = sqlite3.connect(db_file)
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE nodes(id TEXT PRIMARY KEY, embedding BLOB, owner_id TEXT, privacy TEXT)")
+        conn.execute("CREATE TABLE vec_nodes(node_id TEXT PRIMARY KEY, embedding BLOB)")
+        conn.execute(
+            "INSERT INTO nodes(id, embedding, owner_id, privacy) VALUES (?, ?, ?, ?)",
+            ("node-race", b"packed", "rowan", "private"),
+        )
+
+        class _RaceConnection:
+            def __init__(self, inner):
+                self._inner = inner
+                self.raced = False
+
+            def execute(self, sql, params=()):
+                normalized = " ".join(str(sql).split())
+                if normalized.startswith("INSERT OR IGNORE INTO vec_nodes") and not self.raced:
+                    self.raced = True
+                    self._inner.execute(
+                        "INSERT INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
+                        ("node-race", b"packed"),
+                    )
+                return self._inner.execute(sql, params)
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+        graph = mg.MemoryGraph.__new__(mg.MemoryGraph)
+        with patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            assert graph._backfill_vec_index(_RaceConnection(conn), owner_id="rowan") == 0
+
+        assert conn.execute(
+            "SELECT COUNT(*) FROM vec_nodes WHERE node_id = ?",
+            ("node-race",),
+        ).fetchone()[0] == 1
+        conn.close()
+
+    def test_ensure_vec_table_tolerates_concurrent_create(self):
+        """Another first-run connection can create vec_nodes between SELECT and CREATE."""
+        import datastore.memorydb.memory_graph as mg
+
+        class _Conn:
+            def __init__(self):
+                self.sql = []
+
+            def execute(self, sql, params=()):
+                del params
+                normalized = " ".join(str(sql).split())
+                self.sql.append(normalized)
+                if normalized.startswith("SELECT 1 FROM vec_nodes LIMIT 0"):
+                    raise sqlite3.OperationalError("no such table: vec_nodes")
+                if normalized.startswith("CREATE VIRTUAL TABLE vec_nodes"):
+                    raise sqlite3.OperationalError("table vec_nodes already exists")
+                raise AssertionError(f"unexpected SQL: {normalized}")
+
+        conn = _Conn()
+        graph = mg.MemoryGraph.__new__(mg.MemoryGraph)
+        graph._ensure_vec_table(conn, _FAKE_EMBEDDING)
+
+        assert any(sql.startswith("CREATE VIRTUAL TABLE vec_nodes") for sql in conn.sql)
+
     def test_list_source_chunks_domain_filter_runs_before_limit(self, tmp_path):
         """Domain-filtered chunk listing must not drop matches beyond the first page."""
         graph, _db_file = _make_graph(tmp_path)

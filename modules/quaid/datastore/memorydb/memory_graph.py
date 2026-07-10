@@ -1015,11 +1015,7 @@ class MemoryGraph:
                 # may run before the first extraction stores an embedding.
                 # Create the empty vector table up front so fail-hard retrieval
                 # does not treat that normal state as vec/index corruption.
-                conn.execute(
-                    f"CREATE VIRTUAL TABLE vec_nodes USING vec0("
-                    f"node_id TEXT PRIMARY KEY, "
-                    f"embedding float[{configured_dim}] distance_metric=cosine)"
-                )
+                self._create_vec_nodes_table(conn, configured_dim)
 
             if not nodes_table_exists:
                 return
@@ -1051,11 +1047,12 @@ class MemoryGraph:
         backfilled = 0
         for row in missing:
             try:
-                conn.execute(
-                    "INSERT INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
+                cursor = conn.execute(
+                    "INSERT OR IGNORE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
                     (row["id"], row["embedding"])
                 )
-                backfilled += 1
+                if getattr(cursor, "rowcount", 0) > 0:
+                    backfilled += 1
             except Exception as exc:
                 logger.warning(
                     "vec backfill skipped node %s due to vec_nodes insert failure: %s",
@@ -1080,13 +1077,23 @@ class MemoryGraph:
         """
         try:
             conn.execute("SELECT 1 FROM vec_nodes LIMIT 0")
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
             dim = _get_configured_embedding_dim()
+            self._create_vec_nodes_table(conn, dim)
+
+    def _create_vec_nodes_table(self, conn: sqlite3.Connection, dim: int) -> None:
+        try:
             conn.execute(
                 f"CREATE VIRTUAL TABLE vec_nodes USING vec0("
                 f"node_id TEXT PRIMARY KEY, "
                 f"embedding float[{dim}] distance_metric=cosine)"
             )
+        except sqlite3.OperationalError as exc:
+            if "already exists" in str(exc).lower():
+                return
+            raise
 
     def _ensure_source_chunk_vec_table(self, conn: sqlite3.Connection) -> bool:
         """Ensure the dedicated session/source chunk vector table exists."""
