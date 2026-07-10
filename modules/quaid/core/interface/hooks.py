@@ -1729,6 +1729,8 @@ def hook_inject(args):
                         "session_id": session_id,
                         "error": str(exc)[:500],
                     })
+                    if _fail_hard_enabled():
+                        raise
             _write_hook_trace("hook.inject.command_detected", {
                 "query": query[:160],
                 "session_id": session_id,
@@ -3874,6 +3876,8 @@ def hook_extract(args):
             "error": str(exc),
             "source": "precompact_context_refresh" if is_precompact else "hook_extract_context_refresh",
         })
+        if _fail_hard_enabled():
+            raise
 
     if not transcript_path:
         print(f"[quaid][{label}] no transcript_path in hook input", file=sys.stderr)

@@ -558,6 +558,42 @@ def test_claude_code_inject_refreshes_rules_context_for_compact_command(monkeypa
     assert marker_payload["source"] == "hook_inject"
 
 
+def test_claude_code_inject_compaction_context_failure_raises_when_fail_hard_enabled(
+    monkeypatch, tmp_path, cursor_dir
+):
+    from adaptors.claude_code.adapter import ClaudeCodeAdapter
+    from core.interface import hooks
+
+    transcript_path = tmp_path / "cc-compact-failhard.jsonl"
+    transcript_path.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "/compact"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    adapter = _adapter_mock()
+    cc_adapter = ClaudeCodeAdapter()
+    adapter.adapter_id.return_value = "claude-code"
+    adapter.resolve_prompt_submit_signal.side_effect = cc_adapter.resolve_prompt_submit_signal
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr(
+        hooks,
+        "_maybe_compaction_refresh_context_artifacts",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("refresh broken")),
+    )
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="refresh broken"):
+        _run_hook_inject(
+            {
+                "sessionId": "sess-cc-compact-failhard",
+                "transcriptPath": str(transcript_path),
+                "cwd": str(tmp_path),
+                "prompt": "/compact",
+            },
+            monkeypatch=monkeypatch,
+        )
+
+
 def test_compaction_rules_identity_context_strips_rules_provenance(monkeypatch, tmp_path):
     from core.interface import hooks
 
@@ -2478,6 +2514,38 @@ def test_hook_extract_precompact_accepts_fresh_cc_camelcase_payload(
     marker_payload = json.loads(marker_file.read_text(encoding="utf-8"))
     assert marker_payload["reason"] == "precompact_hook"
     assert marker_payload["source"] == "hook_extract_precompact"
+
+
+def test_hook_extract_precompact_context_failure_raises_when_fail_hard_enabled(
+    tmp_path, sessions_dir, mock_adapter, monkeypatch
+):
+    from core.interface import hooks
+
+    session_id = "sess-precompact-failhard"
+    transcript = sessions_dir / "cc-failhard" / f"{session_id}.jsonl"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    transcript.write_text('{"role":"user","content":"/compact"}\n', encoding="utf-8")
+
+    mock_adapter.adapter_id.return_value = "claude-code"
+    mock_adapter.get_session_path.return_value = None
+    mock_adapter.get_sessions_dir.return_value = str(sessions_dir)
+    monkeypatch.setattr(
+        hooks,
+        "_maybe_compaction_refresh_context_artifacts",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("refresh broken")),
+    )
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="refresh broken"):
+        _run_hook_extract(
+            {
+                "sessionId": session_id,
+                "cwd": str(tmp_path),
+                "transcriptPath": str(transcript),
+            },
+            monkeypatch=monkeypatch,
+            precompact=True,
+        )
 
 
 def test_hook_extract_raises_signal_write_failure_when_fail_hard_enabled(
