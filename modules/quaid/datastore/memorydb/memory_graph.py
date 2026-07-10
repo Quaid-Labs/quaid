@@ -18047,6 +18047,18 @@ def _resolve_recall_command_date_bounds(
     return _normalize_recall_date_bound(date_from), _normalize_recall_date_bound(date_to)
 
 
+def _normalize_recall_cli_date_aliases(args: Any) -> Any:
+    """Mirror --after/--since into date_from for every recall dispatch path."""
+    if getattr(args, "command", None) != "recall":
+        return args
+    if getattr(args, "date_from", None) not in (None, ""):
+        return args
+    after_bound = getattr(args, "date_after", None)
+    if after_bound not in (None, ""):
+        setattr(args, "date_from", after_bound)
+    return args
+
+
 def _resolve_recall_command_temporal_dimension(
     config: Dict[str, Any],
     *,
@@ -25477,6 +25489,7 @@ if __name__ == "__main__":
 
         # Parse args
         args = parser.parse_args()
+        args = _normalize_recall_cli_date_aliases(args)
         if args.command in {"recall", "recall-fast"} and bool(getattr(args, "json", False)):
             os.environ["QUAID_QUIET"] = "1"
 

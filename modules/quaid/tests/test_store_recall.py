@@ -968,6 +968,23 @@ def test_recall_command_date_bounds_cli_values_override_config_aliases():
     ) == ("2023-01-01", "2023-12-31")
 
 
+def test_recall_cli_after_alias_sets_date_from_for_query_layer():
+    import datastore.memorydb.memory_graph as mg
+
+    args = SimpleNamespace(
+        command="recall",
+        date_from=None,
+        date_after="2023-01-01",
+        date_to="2024-01-01",
+    )
+
+    normalized = mg._normalize_recall_cli_date_aliases(args)
+
+    assert normalized.date_from == "2023-01-01"
+    assert normalized.date_after == "2023-01-01"
+    assert normalized.date_to == "2024-01-01"
+
+
 @pytest.mark.parametrize("bad_date", ["2023-13-01", "2023-99-99"])
 def test_recall_date_bound_rejects_invalid_calendar_dates(bad_date):
     import datastore.memorydb.memory_graph as mg
