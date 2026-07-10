@@ -661,13 +661,12 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
-  it("does not switch to another session's cached user query during transcript-tail settle", async () => {
+  it("does not wait for another session's cached user query after transcript-tail recovery", async () => {
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
-    vi.stubEnv("QUAID_OC_TRANSCRIPT_TAIL_SETTLE_MS", "20");
     const fixture = seedDeferredNoticeFixture(
       "quaid-oc-transcript-tail-cross-session-home-",
       "openclaw-main",
-      "[Quaid] cross-session settle fixture",
+      "[Quaid] cross-session transcript tail fixture",
     );
     const configPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "config.json");
     const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
@@ -702,17 +701,11 @@ describe("openclaw deferred notices", () => {
     const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
       call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
     );
-    const messageReceivedCall = api.on.mock.calls.find((call: any[]) =>
-      call?.[0] === "message_received" && call?.[2]?.name === "message-received-command-memory-extraction"
-    );
     expect(beforePromptBuildCall).toBeTruthy();
-    expect(messageReceivedCall).toBeTruthy();
 
     const beforePromptBuildHandler = beforePromptBuildCall?.[1];
-    const messageReceivedHandler = messageReceivedCall?.[1];
     const sessionAId = "session-tail-settle-a";
     const sessionAKey = "agent:main:matrix:room-tail-settle-a";
-    const sessionBId = "session-tail-settle-b";
     const sessionBKey = "agent:main:matrix:room-tail-settle-b";
     const staleTail = "ok now";
     const sessionBQuery = "What pourover brewer do I use?";
@@ -744,7 +737,7 @@ describe("openclaw deferred notices", () => {
       "utf8",
     );
 
-    const promptPromise = beforePromptBuildHandler(
+    const result = await beforePromptBuildHandler(
       {
         prependContext: "",
         prompt: "",
@@ -761,13 +754,7 @@ describe("openclaw deferred notices", () => {
         trigger: "user",
       },
     );
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    await messageReceivedHandler(
-      { text: sessionBQuery, sessionId: sessionBId, sessionKey: sessionBKey, timestamp: Date.now() },
-      { sessionId: sessionBId, sessionKey: sessionBKey, agentId: "main", trigger: "user" },
-    );
 
-    const result = await promptPromise;
     const context = String(result?.prependContext || "");
     expect(context).not.toContain("Hario Switch");
     expect(log.mock.calls.some((call) => String(call.join(" ")).includes("Auto-injected"))).toBe(false);
@@ -1612,8 +1599,8 @@ describe("openclaw deferred notices", () => {
     const first = await beforePromptBuildHandler(
       {
         prependContext: "",
-        prompt: "First docs attempt",
-        messages: [{ role: "user", content: "First docs attempt" }],
+        prompt: "Hi",
+        messages: [{ role: "user", content: "Hi" }],
         sessionId: "session-project-docs-retry-a",
         sessionKey,
         cwd: projectDir,
@@ -1632,8 +1619,8 @@ describe("openclaw deferred notices", () => {
     const second = await beforePromptBuildHandler(
       {
         prependContext: "",
-        prompt: "Second docs attempt",
-        messages: [{ role: "user", content: "Second docs attempt" }],
+        prompt: "Yo",
+        messages: [{ role: "user", content: "Yo" }],
         sessionId: "session-project-docs-retry-b",
         sessionKey,
         cwd: projectDir,

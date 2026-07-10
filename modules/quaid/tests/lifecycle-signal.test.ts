@@ -2881,11 +2881,12 @@ describe("lifecycle signal detection", () => {
     }
   });
 
-  it("documents transcript-tail settle as platform write latency, not daemon sweep latency", () => {
+  it("does not add a synchronous transcript-tail settle wait in before_prompt_build", () => {
     const source = fs.readFileSync(path.resolve("adaptors/openclaw/adapter.ts"), "utf8");
 
-    expect(source).toContain("platform transcript write");
-    expect(source).toContain("not for daemon extraction/indexing");
+    expect(source).not.toContain("QUAID_OC_TRANSCRIPT_TAIL_SETTLE_MS");
+    expect(source).not.toContain("transcript_tail_settled");
+    expect(source).not.toContain("transcript_tail_settle_unchanged");
   });
 
   it("rethrows before_prompt_build auto-injection errors when failHard is enabled", () => {
