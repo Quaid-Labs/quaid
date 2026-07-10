@@ -319,13 +319,15 @@ def _store_payload_source_chunks(
             session_chunk_offsets[owner_session_key] = max_existing_index + 1
         next_chunk_index = session_chunk_offsets[owner_session_key]
         try:
+            raw_chunk_index = raw.get("chunk_index")
+            chunk_index = int(raw_chunk_index if raw_chunk_index is not None else next_chunk_index)
             stored_rows = session_bridge.store_session_source_text(
                 text=text,
                 owner_id=owner_id,
                 source_id=source_key,
                 session_id=chunk_session_id,
                 start_index=next_chunk_index,
-                chunk_index=int(raw.get("chunk_index", next_chunk_index) or next_chunk_index),
+                chunk_index=chunk_index,
                 chunk_kind="micro",
                 source_channel=raw.get("source_channel") or source_channel,
                 source_conversation_id=chunk_source_conversation_id,

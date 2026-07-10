@@ -6600,6 +6600,7 @@ class TestExtractFromTranscript:
         assert applied["source_chunks_micro_split"] == 2
         chunk_call = mock_store_source_chunks.call_args.kwargs
         assert chunk_call["start_index"] == 5
+        assert chunk_call["chunk_index"] == 0
         assert chunk_call["chunk_kind"] == "micro"
         assert [call.kwargs["source_chunk_id"] for call in mock_store.call_args_list] == [
             "sch_micro_5",
