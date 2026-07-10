@@ -370,6 +370,47 @@ def _signal_dead_letter_dir() -> Path:
     return d
 
 
+def _signal_write_lock_path(session_id: str) -> Path:
+    d = _signal_dir() / ".locks"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{_validate_session_id(session_id)}.lock"
+
+
+def _acquire_signal_write_lock(session_id: str) -> Optional[int]:
+    fd: Optional[int] = None
+    try:
+        fd = os.open(str(_signal_write_lock_path(session_id)), os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return fd
+    except (OSError, IOError) as exc:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if _fail_hard_enabled():
+            raise RuntimeError(f"failed acquiring signal write lock for {session_id}") from exc
+        logger.warning("failed acquiring signal write lock for %s; writing without dedupe lock: %s", session_id, exc)
+        return None
+
+
+def _release_signal_write_lock(lock_fd: Optional[int]) -> None:
+    if lock_fd is None:
+        return
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        os.close(lock_fd)
+    except OSError:
+        pass
+
+
+def _signal_path_exists(path: Path) -> bool:
+    return path.exists()
+
+
 def _cursor_dir() -> Path:
     d = _instance_root() / "data" / "session-cursors"
     d.mkdir(parents=True, exist_ok=True)
@@ -988,54 +1029,58 @@ def write_signal(
     incoming_meta = meta or {}
 
     sig_dir = _signal_dir()
-    existing_path = None
-    existing_payload: Optional[Dict[str, Any]] = None
-    if dedupe:
-        for f in sorted(sig_dir.iterdir()):
-            if not f.name.endswith(".json"):
-                continue
-            try:
-                existing = json.loads(f.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                continue
-            if _validate_session_id(existing.get("session_id", "")) != session_id:
-                continue
-            existing_type = str(existing.get("type", "") or existing.get("signal_type", "")).strip()
-            if existing_type != signal_type:
-                continue
-            existing_meta = existing.get("meta", {}) if isinstance(existing.get("meta", {}), dict) else {}
-            if not _signal_dedupe_compatible(
-                existing_type=existing_type,
-                existing_meta=existing_meta,
-                new_type=signal_type,
-                new_meta=incoming_meta,
-            ):
-                continue
-            existing_path = f
-            existing_payload = existing if isinstance(existing, dict) else None
-            break
+    lock_fd = _acquire_signal_write_lock(session_id) if dedupe else None
+    try:
+        existing_path = None
+        existing_payload: Optional[Dict[str, Any]] = None
+        if dedupe:
+            for f in sorted(sig_dir.iterdir()):
+                if not f.name.endswith(".json"):
+                    continue
+                try:
+                    existing = json.loads(f.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                if _validate_session_id(existing.get("session_id", "")) != session_id:
+                    continue
+                existing_type = str(existing.get("type", "") or existing.get("signal_type", "")).strip()
+                if existing_type != signal_type:
+                    continue
+                existing_meta = existing.get("meta", {}) if isinstance(existing.get("meta", {}), dict) else {}
+                if not _signal_dedupe_compatible(
+                    existing_type=existing_type,
+                    existing_meta=existing_meta,
+                    new_type=signal_type,
+                    new_meta=incoming_meta,
+                ):
+                    continue
+                existing_path = f
+                existing_payload = existing if isinstance(existing, dict) else None
+                break
 
-    payload = {
-        "type": signal_type,
-        "session_id": session_id,
-        "transcript_path": transcript_path,
-        "adapter": adapter,
-        "supports_compaction_control": supports_compaction_control,
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "meta": incoming_meta,
-    }
-    if existing_path is not None and existing_payload is not None:
-        merged_meta = dict(existing_payload.get("meta", {}) or {})
-        merged_meta.update(meta or {})
-        payload["meta"] = merged_meta
-        _atomic_write(existing_path, json.dumps(payload))
-        return existing_path
+        payload = {
+            "type": signal_type,
+            "session_id": session_id,
+            "transcript_path": transcript_path,
+            "adapter": adapter,
+            "supports_compaction_control": supports_compaction_control,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "meta": incoming_meta,
+        }
+        if existing_path is not None and existing_payload is not None and _signal_path_exists(existing_path):
+            merged_meta = dict(existing_payload.get("meta", {}) or {})
+            merged_meta.update(meta or {})
+            payload["meta"] = merged_meta
+            _atomic_write(existing_path, json.dumps(payload))
+            return existing_path
 
-    # B047: Use UUID suffix for uniqueness (avoids ms-level collision)
-    fname = f"{int(time.time() * 1000)}_{os.getpid()}_{uuid.uuid4().hex[:8]}_{signal_type}.json"
-    sig_path = sig_dir / fname
-    _atomic_write(sig_path, json.dumps(payload))
-    return sig_path
+        # B047: Use UUID suffix for uniqueness (avoids ms-level collision)
+        fname = f"{int(time.time() * 1000)}_{os.getpid()}_{uuid.uuid4().hex[:8]}_{signal_type}.json"
+        sig_path = sig_dir / fname
+        _atomic_write(sig_path, json.dumps(payload))
+        return sig_path
+    finally:
+        _release_signal_write_lock(lock_fd)
 
 
 def _is_staged_payload_flush_signal_meta(meta: Dict[str, Any]) -> bool:

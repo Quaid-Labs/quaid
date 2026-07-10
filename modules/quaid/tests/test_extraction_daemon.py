@@ -9258,6 +9258,124 @@ class TestSignalRoundTrip:
         assert signals[0]["transcript_path"] == "/second.jsonl"
         assert signals[0]["meta"] == {"reason": "chunk_budget", "source": "followup"}
 
+    def test_write_signal_holds_session_lock_through_dedupe_write(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        real_flock = extraction_daemon.fcntl.flock
+        real_atomic_write = extraction_daemon._atomic_write
+        lock_held = {"value": False}
+        events = []
+
+        def tracking_flock(fd, op):
+            if op & extraction_daemon.fcntl.LOCK_EX:
+                result = real_flock(fd, op)
+                lock_held["value"] = True
+                events.append("lock")
+                return result
+            if op == extraction_daemon.fcntl.LOCK_UN:
+                events.append(("unlock", lock_held["value"]))
+                lock_held["value"] = False
+            return real_flock(fd, op)
+
+        def tracking_atomic_write(path, content):
+            events.append(("write", lock_held["value"], Path(path).suffix == ".json"))
+            return real_atomic_write(path, content)
+
+        monkeypatch.setattr(extraction_daemon.fcntl, "flock", tracking_flock)
+        monkeypatch.setattr(extraction_daemon, "_atomic_write", tracking_atomic_write)
+
+        extraction_daemon.write_signal(
+            signal_type="rolling",
+            session_id="sess-lock-dedupe",
+            transcript_path="/first.jsonl",
+            meta={"reason": "chunk_budget"},
+        )
+
+        assert events[0] == "lock"
+        assert ("write", True, True) in events
+        assert events[-1] == ("unlock", True)
+
+    def test_write_signal_lock_failure_logs_and_writes_when_fail_open(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+        real_open = extraction_daemon.os.open
+
+        def fail_lock_open(path, flags, mode=0o777):
+            if str(path).endswith(".lock"):
+                raise OSError("lock unavailable")
+            return real_open(path, flags, mode)
+
+        monkeypatch.setattr(extraction_daemon.os, "open", fail_lock_open)
+
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            extraction_daemon.write_signal(
+                signal_type="rolling",
+                session_id="sess-lock-fail-open",
+                transcript_path="/first.jsonl",
+            )
+
+        signals = extraction_daemon.read_pending_signals()
+        assert len(signals) == 1
+        assert signals[0]["session_id"] == "sess-lock-fail-open"
+        assert "failed acquiring signal write lock for sess-lock-fail-open" in caplog.text
+        assert "lock unavailable" in caplog.text
+
+    def test_write_signal_lock_failure_raises_when_fail_hard(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+        real_open = extraction_daemon.os.open
+
+        def fail_lock_open(path, flags, mode=0o777):
+            if str(path).endswith(".lock"):
+                raise OSError("lock unavailable")
+            return real_open(path, flags, mode)
+
+        monkeypatch.setattr(extraction_daemon.os, "open", fail_lock_open)
+
+        with pytest.raises(RuntimeError, match="failed acquiring signal write lock"):
+            extraction_daemon.write_signal(
+                signal_type="rolling",
+                session_id="sess-lock-failhard",
+                transcript_path="/first.jsonl",
+            )
+
+        assert extraction_daemon.read_pending_signals() == []
+
+    def test_write_signal_does_not_resurrect_deleted_dedupe_target(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        first = extraction_daemon.write_signal(
+            signal_type="rolling",
+            session_id="sess-stale-dedupe",
+            transcript_path="/first.jsonl",
+            meta={"reason": "chunk_budget"},
+        )
+
+        def stale_once(path):
+            if path == first:
+                first.unlink()
+                return False
+            return path.exists()
+
+        monkeypatch.setattr(extraction_daemon, "_signal_path_exists", stale_once)
+        second = extraction_daemon.write_signal(
+            signal_type="rolling",
+            session_id="sess-stale-dedupe",
+            transcript_path="/second.jsonl",
+            meta={"source": "followup"},
+        )
+
+        assert second != first
+        assert not first.exists()
+        signals = extraction_daemon.read_pending_signals()
+        assert len(signals) == 1
+        assert signals[0]["transcript_path"] == "/second.jsonl"
+
     def test_write_signal_keeps_staged_flush_separate_from_real_lifecycle(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
