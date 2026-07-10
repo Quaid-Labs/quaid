@@ -8,6 +8,7 @@ import os
 import sys
 import uuid
 import tempfile
+import sqlite3
 from pathlib import Path
 
 # Ensure the plugin root is on the path
@@ -270,6 +271,10 @@ class TestVecUpsertFailures:
             caplog.set_level("WARNING")
             graph.add_node(node, embed=False)
         assert "failed vec_nodes upsert" in caplog.text
+        assert "cleared node" in caplog.text
+        refreshed = graph.get_node(node.id)
+        assert refreshed is not None
+        assert refreshed.embedding is None
 
     def test_add_node_vec_upsert_raises_with_fail_hard(self, graph):
         node = Node.create(type="Person", name="VecFailHard", owner_id="quaid", status="approved")
@@ -293,6 +298,97 @@ class TestVecUpsertFailures:
                 graph.update_node(node, embed=False)
         assert "vec_nodes retry failed" in caplog.text
         assert "vec_nodes sync was skipped" in caplog.text
+
+    def test_update_node_vec_upsert_clears_embedding_without_fail_hard(self, graph, caplog):
+        node = Node.create(type="Person", name="VecUpdateSoftFail", owner_id="quaid", status="approved")
+        graph.add_node(node, embed=False)
+
+        with graph._get_conn() as conn:
+            conn.execute("DROP TABLE IF EXISTS vec_nodes")
+            conn.execute("CREATE TABLE vec_nodes(node_id TEXT PRIMARY KEY, embedding BLOB)")
+            conn.execute("INSERT INTO vec_nodes(node_id, embedding) VALUES (?, ?)", (node.id, b"old"))
+
+        node.name = "VecUpdateSoftFail changed"
+        node.embedding = [0.3, 0.4, 0.5]
+
+        class _VecInsertFailingConnection:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, sql, *args, **kwargs):
+                if "INSERT OR REPLACE INTO vec_nodes" in str(sql) or "INSERT INTO vec_nodes" in str(sql):
+                    raise sqlite3.OperationalError("vec insert down")
+                return self._conn.execute(sql, *args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        with graph._get_conn() as conn:
+            failing_conn = _VecInsertFailingConnection(conn)
+            with patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+                 patch.object(MemoryGraph, "_ensure_vec_table", return_value=None), \
+                 patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False):
+                caplog.set_level("WARNING")
+                assert graph.update_node(node, conn=failing_conn) is True
+
+        refreshed = graph.get_node(node.id)
+        assert refreshed is not None
+        assert refreshed.name == "VecUpdateSoftFail changed"
+        assert refreshed.embedding is None
+        with graph._get_conn() as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM vec_nodes WHERE node_id = ?",
+                (node.id,),
+            ).fetchone()[0] == 0
+        assert "cleared node" in caplog.text
+
+    def test_search_vec_filters_nodes_with_missing_primary_embedding(self, graph):
+        class _Rows:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def fetchall(self):
+                return self._rows
+
+        class _Conn:
+            def __init__(self):
+                self.node_fetch_sql = ""
+
+            def execute(self, sql, _params=()):
+                normalized = " ".join(str(sql).split())
+                if "FROM vec_nodes WHERE embedding MATCH" in normalized:
+                    return _Rows([{"node_id": "stale-node", "distance": 0.1}])
+                if "SELECT * FROM nodes WHERE id IN" in normalized:
+                    self.node_fetch_sql = normalized
+                    return _Rows([])
+                return _Rows([])
+
+        class _ConnManager:
+            def __init__(self, conn):
+                self.conn = conn
+
+            def __enter__(self):
+                return self.conn
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        conn = _Conn()
+        with patch.object(graph, "_get_conn", return_value=_ConnManager(conn)), \
+             patch.object(graph, "_ensure_vec_table", return_value=None), \
+             patch.object(graph, "_backfill_vec_index", return_value=0):
+            assert graph._search_vec(
+                [0.1, 0.2, 0.3],
+                candidate_limit=4,
+                types=None,
+                privacy=None,
+                owner_id=None,
+                min_similarity=0.0,
+                current_session_id=None,
+                compaction_time=None,
+            ) == []
+
+        assert "embedding IS NOT NULL" in conn.node_fetch_sql
 
     def test_update_node_skips_vec_sync_when_embedding_unchanged(self, graph, caplog):
         node = Node.create(type="Person", name="VecSameEmbedding", owner_id="quaid", status="approved")

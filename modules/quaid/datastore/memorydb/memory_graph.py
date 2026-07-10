@@ -2262,7 +2262,7 @@ class MemoryGraph:
                                  (node.id, packed))
                 except Exception as exc:
                     logger.warning(
-                        "add_node inserted node %s but failed vec_nodes upsert: %s",
+                        "add_node failed vec_nodes upsert for %s: %s",
                         node.id,
                         exc,
                     )
@@ -2270,6 +2270,23 @@ class MemoryGraph:
                         raise RuntimeError(
                             "Vector index upsert failed during add_node while fail-hard mode is enabled"
                         ) from exc
+                    try:
+                        active_conn.execute("UPDATE nodes SET embedding = NULL WHERE id = ?", (node.id,))
+                        node.embedding = None
+                        logger.warning(
+                            "add_node cleared node %s embedding after vec_nodes failure; janitor will retry",
+                            node.id,
+                        )
+                    except Exception as clear_exc:
+                        logger.warning(
+                            "add_node failed clearing embedding for %s after vec_nodes failure; rolling back insert: %s",
+                            node.id,
+                            clear_exc,
+                        )
+                        active_conn.rollback()
+                        raise RuntimeError(
+                            "add_node could not preserve vector index consistency after vec_nodes failure"
+                        ) from clear_exc
             self._sync_node_domains(active_conn, node.id, self._extract_domains_from_attrs(node.attributes))
         return node.id
 
@@ -2395,14 +2412,30 @@ class MemoryGraph:
                         )
                         vec_sync_exc = retry_exc
                     if not recovered:
-                        # Keep node write durable even if vec index upsert fails.
-                        # This avoids run-level aborts for index-only inconsistencies.
+                        # Keep the node write durable only after making it safe for janitor backfill.
                         logger.warning(
                             "update_node updated node %s but vec_nodes sync was skipped",
                             node.id,
                         )
                         if _is_fail_hard_mode():
                             raise RuntimeError("vec_nodes sync failed during update_node") from vec_sync_exc
+                        try:
+                            active_conn.execute("UPDATE nodes SET embedding = NULL WHERE id = ?", (node.id,))
+                            node.embedding = None
+                            logger.warning(
+                                "update_node cleared node %s embedding after vec_nodes failure; janitor will retry",
+                                node.id,
+                            )
+                        except Exception as clear_exc:
+                            logger.warning(
+                                "update_node failed clearing embedding for %s after vec_nodes failure; rolling back update: %s",
+                                node.id,
+                                clear_exc,
+                            )
+                            active_conn.rollback()
+                            raise RuntimeError(
+                                "update_node could not preserve vector index consistency after vec_nodes failure"
+                            ) from clear_exc
             if result.rowcount > 0:
                 self._sync_node_domains(active_conn, node.id, self._extract_domains_from_attrs(node.attributes))
             return result.rowcount > 0
@@ -2800,6 +2833,7 @@ class MemoryGraph:
 
             placeholders = ",".join("?" * len(node_ids))
             sql = f"""SELECT * FROM nodes WHERE id IN ({placeholders})
+                      AND embedding IS NOT NULL
                       AND (status IS NULL OR status IN ('approved', 'pending', 'active'))
                       AND superseded_by IS NULL"""
             params = list(node_ids)
