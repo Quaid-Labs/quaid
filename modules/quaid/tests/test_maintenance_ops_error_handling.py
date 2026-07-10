@@ -520,6 +520,52 @@ def test_fix_vec_nodes_insert_error_respects_fail_hard():
             maintenance_ops.apply_review_decisions_from_list(_GraphAlwaysFail(), decisions, dry_run=False)
 
 
+def test_review_fix_embeds_outside_db_connection():
+    class _Conn:
+        def execute(self, sql, params=()):
+            text = str(sql).strip().upper()
+            if text.startswith("SELECT NAME, STATUS, SOURCE, SPEAKER, ATTRIBUTES FROM NODES"):
+                return _DummyResult(rows=[{
+                    "name": "old fact",
+                    "status": "pending",
+                    "source": "unit",
+                    "speaker": "user",
+                    "attributes": "{}",
+                }])
+            if text.startswith("DELETE FROM EDGES"):
+                return _DummyResult(rowcount=0)
+            if text.startswith("UPDATE NODES"):
+                return _DummyResult(rowcount=1)
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    class _Graph:
+        def __init__(self):
+            self.active_connections = 0
+
+        @contextmanager
+        def _get_conn(self):
+            self.active_connections += 1
+            try:
+                yield _Conn()
+            finally:
+                self.active_connections -= 1
+
+    graph = _Graph()
+
+    def _get_embedding(_text):
+        assert graph.active_connections == 0
+        return [0.1]
+
+    decisions = [{"id": "n1", "action": "FIX", "new_text": "updated text", "edges": []}]
+
+    with patch("lib.embeddings.get_embedding", side_effect=_get_embedding), \
+         patch("lib.embeddings.pack_embedding", return_value=b"x"), \
+         patch.object(maintenance_ops, "_upsert_vec_embedding", return_value=None):
+        out = maintenance_ops.apply_review_decisions_from_list(graph, decisions, dry_run=False)
+
+    assert out["fixed"] == 1
+
+
 @pytest.mark.parametrize(
     ("action", "expected_resolution", "superseding_id", "superseded_id"),
     [

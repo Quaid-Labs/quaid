@@ -3998,22 +3998,24 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                         exc,
                     )
                     source_type = None
-            if action == "DELETE":
-                _diag_log_decision(
-                    "review_decision_delete",
-                    dry_run=bool(dry_run),
-                    memory_id=memory_id,
-                    current_status=current_status,
-                    current_text=current_text,
-                    source=source_value,
-                    speaker=speaker_value,
-                    source_type=source_type,
-                    reason=reason,
-                )
-                if dry_run:
-                    print(f"    Would DELETE: {memory_id}")
-                else:
-                    # Delete fact edges + node in one transaction so crashes cannot leave partial state.
+
+        if action == "DELETE":
+            _diag_log_decision(
+                "review_decision_delete",
+                dry_run=bool(dry_run),
+                memory_id=memory_id,
+                current_status=current_status,
+                current_text=current_text,
+                source=source_value,
+                speaker=speaker_value,
+                source_type=source_type,
+                reason=reason,
+            )
+            if dry_run:
+                print(f"    Would DELETE: {memory_id}")
+            else:
+                # Delete fact edges + node in one transaction so crashes cannot leave partial state.
+                with graph._get_conn() as conn:
                     edges_deleted = conn.execute(
                         "DELETE FROM edges WHERE source_fact_id = ?",
                         (memory_id,),
@@ -4031,39 +4033,40 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                     if edges_deleted > 0:
                         print(f"    DELETED {edges_deleted} edges from fact")
                     print(f"    DELETED: {memory_id}")
-                deleted += 1
+            deleted += 1
 
-            elif action == "FIX" and "new_text" in decision:
-                new_text = decision["new_text"]
-                new_edges = decision.get("edges", [])
-                _diag_log_decision(
-                    "review_decision_fix",
-                    dry_run=bool(dry_run),
-                    memory_id=memory_id,
-                    current_status=current_status,
-                    current_text=current_text,
-                    source=source_value,
-                    speaker=speaker_value,
-                    source_type=source_type,
-                    new_text=new_text,
-                    reason=reason,
-                    new_edges_count=len(new_edges or []),
-                )
-                if dry_run:
-                    print(f"    Would FIX: {memory_id} -> {new_text[:50]}...")
-                    if new_edges:
-                        print(f"    Would create {len(new_edges)} new edges")
-                else:
-                    # Delete old edges + update fact + recreate edges in one transaction.
+        elif action == "FIX" and "new_text" in decision:
+            new_text = decision["new_text"]
+            new_edges = decision.get("edges", [])
+            _diag_log_decision(
+                "review_decision_fix",
+                dry_run=bool(dry_run),
+                memory_id=memory_id,
+                current_status=current_status,
+                current_text=current_text,
+                source=source_value,
+                speaker=speaker_value,
+                source_type=source_type,
+                new_text=new_text,
+                reason=reason,
+                new_edges_count=len(new_edges or []),
+            )
+            if dry_run:
+                print(f"    Would FIX: {memory_id} -> {new_text[:50]}...")
+                if new_edges:
+                    print(f"    Would create {len(new_edges)} new edges")
+            else:
+                # Embedding generation may call a remote provider; keep it outside the SQLite transaction.
+                from lib.embeddings import get_embedding as _get_emb_fix, pack_embedding as _pack_emb_fix
+                new_emb = _get_emb_fix(new_text)
+                new_hash = content_hash(new_text)
+                packed_emb = _pack_emb_fix(new_emb) if new_emb else None
+                # Delete old edges + update fact + recreate edges in one transaction.
+                with graph._get_conn() as conn:
                     edges_deleted = conn.execute(
                         "DELETE FROM edges WHERE source_fact_id = ?",
                         (memory_id,),
                     ).rowcount
-                    # Update the fact text, embedding, and content_hash.
-                    from lib.embeddings import get_embedding as _get_emb_fix, pack_embedding as _pack_emb_fix
-                    new_emb = _get_emb_fix(new_text)
-                    new_hash = content_hash(new_text)
-                    packed_emb = _pack_emb_fix(new_emb) if new_emb else None
                     conn.execute(
                         "UPDATE nodes SET name = ?, embedding = ?, content_hash = ?, updated_at = ?, status = 'approved' WHERE id = ?",
                         (new_text, packed_emb, new_hash, _quaid_now().isoformat(), memory_id)
@@ -4096,38 +4099,39 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                     if edges_deleted > 0:
                         print(f"    DELETED {edges_deleted} old edges from fact")
                     print(f"    FIXED: {memory_id} -> {new_text[:50]}...")
-                fixed += 1
+            fixed += 1
 
-            elif action == "KEEP":
-                _diag_log_decision(
-                    "review_decision_keep",
-                    dry_run=bool(dry_run),
-                    memory_id=memory_id,
-                    current_status=current_status,
-                    current_text=current_text,
-                    source=source_value,
-                    speaker=speaker_value,
-                    source_type=source_type,
-                    reason=reason,
-                )
-                if not dry_run:
+        elif action == "KEEP":
+            _diag_log_decision(
+                "review_decision_keep",
+                dry_run=bool(dry_run),
+                memory_id=memory_id,
+                current_status=current_status,
+                current_text=current_text,
+                source=source_value,
+                speaker=speaker_value,
+                source_type=source_type,
+                reason=reason,
+            )
+            if not dry_run:
+                with graph._get_conn() as conn:
                     conn.execute(
                         "UPDATE nodes SET status = 'approved' WHERE id = ?",
                         (memory_id,)
                     )
-                kept += 1
-            else:
-                _diag_log_decision(
-                    "review_decision_skipped",
-                    dry_run=bool(dry_run),
-                    memory_id=memory_id,
-                    current_status=current_status,
-                    current_text=current_text,
-                    action=action,
-                    reason=reason,
-                    payload=decision,
-                    skip_reason="unknown_action",
-                )
+            kept += 1
+        else:
+            _diag_log_decision(
+                "review_decision_skipped",
+                dry_run=bool(dry_run),
+                memory_id=memory_id,
+                current_status=current_status,
+                current_text=current_text,
+                action=action,
+                reason=reason,
+                payload=decision,
+                skip_reason="unknown_action",
+            )
 
     return {"kept": kept, "deleted": deleted, "fixed": fixed, "merged": merged}
 
