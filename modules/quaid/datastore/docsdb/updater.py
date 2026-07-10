@@ -77,7 +77,10 @@ def _now_datetime() -> datetime:
         try:
             parsed = datetime.fromisoformat(normalized)
         except ValueError as exc:
-            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from exc
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Invalid QUAID_NOW={raw!r}") from exc
+            logger.warning("Invalid QUAID_NOW=%r; falling back to wall clock", raw)
+            return datetime.now(timezone.utc)
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed

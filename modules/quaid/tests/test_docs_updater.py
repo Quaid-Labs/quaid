@@ -1046,14 +1046,15 @@ class TestCleanupStateLocking:
 
             assert updater.get_update_log(limit=1)[0]["timestamp"] == "2026-03-11T05:06:07+00:00"
 
-    def test_log_doc_update_db_rejects_malformed_quaid_now(self, tmp_path, monkeypatch):
+    def test_log_doc_update_db_rejects_malformed_quaid_now_when_fail_hard(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):
             import datastore.docsdb.updater as updater
 
             monkeypatch.setenv("DOCS_DB_PATH", str(tmp_path / "docs.db"))
             monkeypatch.setenv("QUAID_NOW", "not-a-date")
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
 
-            with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
                 updater.log_doc_update_db(
                     "docs/test.md",
                     ["src/app.py"],
@@ -1062,6 +1063,29 @@ class TestCleanupStateLocking:
                     commit_hash="abc123",
                     agent_id="pytest",
                 )
+
+    def test_log_doc_update_db_falls_back_on_malformed_quaid_now_when_fail_open(self, tmp_path, monkeypatch, caplog):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            monkeypatch.setenv("DOCS_DB_PATH", str(tmp_path / "docs.db"))
+            monkeypatch.setenv("QUAID_NOW", "not-a-date")
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
+
+            with caplog.at_level("WARNING", logger="datastore.docsdb.updater"):
+                updater.log_doc_update_db(
+                    "docs/test.md",
+                    ["src/app.py"],
+                    12.5,
+                    "updated docs",
+                    commit_hash="abc123",
+                    agent_id="pytest",
+                )
+
+            entry = updater.get_update_log(limit=1)[0]
+            assert entry["timestamp"] != "not-a-date"
+            assert entry["timestamp"].endswith("+00:00")
+            assert "Invalid QUAID_NOW='not-a-date'; falling back to wall clock" in caplog.text
 
     def test_log_doc_update_honors_quaid_now(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):
@@ -1084,13 +1108,14 @@ class TestCleanupStateLocking:
             entries = updater._load_changelog()
             assert entries[0]["timestamp"] == "2026-03-11T05:06:07+00:00"
 
-    def test_log_doc_update_rejects_malformed_quaid_now(self, tmp_path, monkeypatch):
+    def test_log_doc_update_rejects_malformed_quaid_now_when_fail_hard(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):
             import datastore.docsdb.updater as updater
 
             monkeypatch.setenv("QUAID_NOW", "not-a-date")
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
 
-            with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
                 updater.log_doc_update(
                     "docs/test.md",
                     "janitor",
@@ -1104,6 +1129,31 @@ class TestCleanupStateLocking:
                 )
 
             assert not updater._changelog_path().exists()
+
+    def test_log_doc_update_falls_back_on_malformed_quaid_now_when_fail_open(self, tmp_path, monkeypatch, caplog):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            monkeypatch.setenv("QUAID_NOW", "not-a-date")
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
+
+            with caplog.at_level("WARNING", logger="datastore.docsdb.updater"):
+                updater.log_doc_update(
+                    "docs/test.md",
+                    "janitor",
+                    ["src/app.py"],
+                    "updated",
+                    dry_run=False,
+                    success=False,
+                    chars_before=10,
+                    chars_after=10,
+                    notify=False,
+                )
+
+            entries = updater._load_changelog()
+            assert entries[0]["timestamp"] != "not-a-date"
+            assert entries[0]["timestamp"].endswith("+00:00")
+            assert "Invalid QUAID_NOW='not-a-date'; falling back to wall clock" in caplog.text
 
     def test_queue_delayed_notification_logs_exc_info(self, tmp_path, monkeypatch, caplog):
         with _adapter_patch(tmp_path):

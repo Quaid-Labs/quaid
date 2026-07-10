@@ -48,8 +48,11 @@ def _now_datetime() -> datetime:
     if raw:
         try:
             value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        except ValueError as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Invalid QUAID_NOW={raw!r}") from exc
+            logger.warning("Invalid QUAID_NOW=%r; falling back to wall clock", raw)
+            return datetime.now(timezone.utc)
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)

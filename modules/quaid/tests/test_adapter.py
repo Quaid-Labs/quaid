@@ -3117,13 +3117,28 @@ class TestCodexAdapter:
         assert second == ""
         assert not pending_path.exists()
 
-    def test_pending_context_rejects_malformed_quaid_now(self, tmp_path, monkeypatch):
+    def test_pending_context_rejects_malformed_quaid_now_when_fail_hard(self, tmp_path, monkeypatch):
         monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-bad-clock")
         monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        monkeypatch.setattr("adaptors.codex.adapter.is_fail_hard_enabled", lambda: True)
         adapter = CodexAdapter(home=tmp_path)
 
-        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
             adapter.notify("bad clock")
+
+    def test_pending_context_falls_back_on_malformed_quaid_now_when_fail_open(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-bad-clock-open")
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        monkeypatch.setattr("adaptors.codex.adapter.is_fail_hard_enabled", lambda: False)
+        adapter = CodexAdapter(home=tmp_path)
+
+        with caplog.at_level("WARNING", logger="adaptors.codex.adapter"):
+            assert adapter.notify("bad clock") is True
+
+        pending_path = adapter.data_dir() / "codex-pending-notifications.jsonl"
+        entry = json.loads(pending_path.read_text(encoding="utf-8"))
+        assert entry["ts"] != "not-a-date"
+        assert "Invalid QUAID_NOW='not-a-date'; falling back to wall clock" in caplog.text
 
     def test_pending_context_skips_malformed_entry_timestamp(self, tmp_path, monkeypatch):
         monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-malformed-entry-clock")
