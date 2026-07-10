@@ -7815,6 +7815,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     )
             except Exception as e:
                 logger.warning("[%s] session %s: subagent merge error: %s", label, session_id, e)
+                if _fail_hard_enabled():
+                    raise
 
         if rolling_mode:
             operation_phase = "rolling_stage_extract"

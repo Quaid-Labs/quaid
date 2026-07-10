@@ -2377,6 +2377,60 @@ def test_process_signal_fifo_check_failure_releases_lock_when_fail_hard(monkeypa
     assert released == [("source-key", 458)]
 
 
+def test_process_signal_subagent_merge_failure_releases_lock_when_fail_hard(monkeypatch, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text('{"role":"user","content":"remember the orange mug"}\n', encoding="utf-8")
+    released = []
+
+    real_registry = sys.modules.get("core.subagent_registry")
+    fake_registry = types.ModuleType("core.subagent_registry")
+    fake_registry.is_registered_subagent = lambda _session_id: False
+    fake_registry.get_harvestable = lambda _session_id: (_ for _ in ()).throw(RuntimeError("subagent registry down"))
+    sys.modules["core.subagent_registry"] = fake_registry
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+        def parse_session_jsonl(self, path):
+            return "User: I remember the orange mug near the kitchen window."
+
+    monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda reason: None)
+    monkeypatch.setattr(extraction_daemon, "_read_rolling_state_for_signal", lambda *args, **kwargs: ({}, "sess-subagent"))
+    monkeypatch.setattr(extraction_daemon, "_active_source_cursor_for_stale_signal_transcript", lambda *args: ("", ""))
+    monkeypatch.setattr(extraction_daemon, "_signal_source_cursor_key", lambda *args, **kwargs: "source-key")
+    monkeypatch.setattr(extraction_daemon, "_acquire_session_processing_lock", lambda key: 459)
+    monkeypatch.setattr(extraction_daemon, "_release_session_processing_lock", lambda key, fd: released.append((key, fd)))
+    monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter_for_signal", lambda *args, **kwargs: _Adapter())
+    monkeypatch.setattr(extraction_daemon, "_read_cursor_with_source_compat", lambda *args, **kwargs: {
+        "line_offset": 0,
+        "transcript_path": str(transcript),
+    })
+    monkeypatch.setattr(extraction_daemon, "_cursor_or_adapter_owns_transcript_path", lambda *args, **kwargs: True)
+    monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
+    monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: True)
+    monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", lambda *args, **kwargs: ({}, {}))
+    monkeypatch.setattr(extraction_daemon, "write_rolling_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extraction_daemon, "count_transcript_lines", lambda _path: 1)
+    monkeypatch.setattr(extraction_daemon, "read_transcript_slice", lambda _path, _start: [])
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    try:
+        with pytest.raises(RuntimeError, match="subagent registry down"):
+            extraction_daemon.process_signal({
+                "session_id": "sess-subagent",
+                "type": "session_end",
+                "transcript_path": str(transcript),
+            })
+    finally:
+        if real_registry is not None:
+            sys.modules["core.subagent_registry"] = real_registry
+        else:
+            sys.modules.pop("core.subagent_registry", None)
+
+    assert released == [("source-key", 459)]
+
+
 def test_process_signal_duplicate_sweep_failure_releases_lock_when_fail_hard(monkeypatch, tmp_path):
     transcript = tmp_path / "session.jsonl"
     transcript.write_text('{"role":"user","content":"remember the yellow mug"}\n', encoding="utf-8")
