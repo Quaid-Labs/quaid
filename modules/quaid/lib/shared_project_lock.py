@@ -25,6 +25,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Generator, Optional
 
+from lib.fail_policy import is_fail_hard_enabled
+
 logger = logging.getLogger("quaid.shared_project_lock")
 
 
@@ -72,6 +74,8 @@ def write_checkpoint(quaid_home: Path, project_name: str) -> None:
         cp.write_text(str(timestamp) + "\n")
     except OSError as e:
         logger.warning("write_checkpoint failed for %s: %s", project_name, e)
+        if is_fail_hard_enabled():
+            raise
 
 
 @contextmanager
@@ -99,6 +103,8 @@ def try_claim_project_update(
         fd = open(lock_file, "w")
     except OSError as e:
         logger.warning("cannot open project lock for %s: %s — skipping", project_name, e)
+        if is_fail_hard_enabled():
+            raise
         yield False
         return
 

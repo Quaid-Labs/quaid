@@ -657,6 +657,22 @@ class TestSharedProjectLock:
             write_checkpoint(tmp_path, "proj")
         assert not _checkpoint_path(tmp_path, "proj").exists()
 
+    def test_checkpoint_write_failure_raises_when_failhard(self, tmp_path, monkeypatch):
+        from lib import shared_project_lock
+
+        real_write_text = Path.write_text
+
+        def failing_write_text(path, *args, **kwargs):
+            if Path(path).name == ".doc-update-checkpoint":
+                raise OSError("checkpoint disk full")
+            return real_write_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", failing_write_text)
+        monkeypatch.setattr(shared_project_lock, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(OSError, match="checkpoint disk full"):
+            shared_project_lock.write_checkpoint(tmp_path, "proj")
+
     def test_checkpoint_age_rejects_malformed_quaid_now(self, tmp_path, monkeypatch):
         from lib.shared_project_lock import _read_checkpoint_age, _checkpoint_path
 
@@ -667,3 +683,20 @@ class TestSharedProjectLock:
 
         with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
             _read_checkpoint_age(tmp_path, "proj")
+
+    def test_lock_open_failure_raises_when_failhard(self, tmp_path, monkeypatch):
+        from lib import shared_project_lock
+
+        real_open = builtins.open
+
+        def failing_open(path, *args, **kwargs):
+            if Path(path).name == ".doc-update.lock":
+                raise OSError("lock open failed")
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", failing_open)
+        monkeypatch.setattr(shared_project_lock, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(OSError, match="lock open failed"):
+            with shared_project_lock.try_claim_project_update(tmp_path, "proj"):
+                pass
