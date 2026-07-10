@@ -139,6 +139,10 @@ def run_callables(
                     if return_exceptions:
                         out[idx] = exc
                     else:
+                        for pending_fut in pending:
+                            pending_fut.cancel()
+                        if pending:
+                            _retire_pool(pool_name, worker_count, ex)
                         raise
         except (TimeoutError, FuturesTimeoutError):
             continue

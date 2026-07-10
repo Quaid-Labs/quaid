@@ -128,6 +128,55 @@ class TestParallelExecution:
         with pytest.raises(ValueError, match="parallel boom"):
             worker_pool.run_callables([boom, lambda: "ok"], max_workers=2, pool_name="test-exc")
 
+    def test_parallel_exception_cancels_pending_peer_futures(self, monkeypatch):
+        class _FakeFuture:
+            def __init__(self, exc=None):
+                self.exc = exc
+                self.cancelled = False
+
+            def cancel(self):
+                self.cancelled = True
+                return True
+
+            def result(self):
+                if self.exc is not None:
+                    raise self.exc
+                return "ok"
+
+        class _FakeExecutor:
+            def __init__(self, futures):
+                self.futures = list(futures)
+                self.submitted = 0
+                self.shutdown_calls = []
+
+            def submit(self, _fn):
+                fut = self.futures[self.submitted]
+                self.submitted += 1
+                return fut
+
+            def shutdown(self, *, wait=False, cancel_futures=False):
+                self.shutdown_calls.append((wait, cancel_futures))
+
+        failing = _FakeFuture(ValueError("parallel boom"))
+        queued = _FakeFuture()
+        fake_executor = _FakeExecutor([failing, queued])
+
+        def fake_as_completed(_pending, timeout=None):
+            yield failing
+
+        monkeypatch.setattr(worker_pool, "_pool", lambda _pool_name, _max_workers: fake_executor)
+        monkeypatch.setattr(worker_pool, "as_completed", fake_as_completed)
+
+        with pytest.raises(ValueError, match="parallel boom"):
+            worker_pool.run_callables(
+                [lambda: "boom", lambda: "queued"],
+                max_workers=2,
+                pool_name="test-exc-cancel",
+            )
+
+        assert queued.cancelled is True
+        assert fake_executor.shutdown_calls == [(False, True)]
+
     def test_parallel_return_exceptions_captures(self):
         def boom():
             raise RuntimeError("parallel captured")
