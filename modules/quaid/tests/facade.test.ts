@@ -2573,6 +2573,16 @@ describe("QuaidFacade", () => {
     expect(out.map((m) => m.text)).toEqual(["public", "mine"]);
   });
 
+  it("filterMemoriesByPrivacy keeps unowned private memories from bridge nulls", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const out = facade.filterMemoriesByPrivacy([
+      { text: "json null", category: "fact", similarity: 0.8, privacy: "private", ownerId: null as any },
+      { text: "legacy none", category: "fact", similarity: 0.8, privacy: "private", ownerId: "None" },
+      { text: "other", category: "fact", similarity: 0.95, privacy: "private", ownerId: "alice" },
+    ], "quaid");
+    expect(out.map((m) => m.text)).toEqual(["json null", "legacy none"]);
+  });
+
   it("load/save/reset injection dedup state round-trips", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-injection-state-"));
     await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });

@@ -2446,9 +2446,10 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   }
 
   function filterMemoriesByPrivacy(memories: MemoryResult[], currentOwner: string): MemoryResult[] {
-    return memories.filter((m) =>
-      !(m.privacy === "private" && m.ownerId && m.ownerId !== "None" && m.ownerId !== currentOwner)
-    );
+    return memories.filter((m) => {
+      const ownerId = m.ownerId == null || m.ownerId === "None" ? "" : String(m.ownerId);
+      return !(m.privacy === "private" && ownerId && ownerId !== currentOwner);
+    });
   }
 
   function readInjectionLog(sessionId: string): Record<string, unknown> {

@@ -1710,9 +1710,10 @@ function createQuaidFacade(deps) {
     return words.length < 3;
   }
   function filterMemoriesByPrivacy(memories, currentOwner) {
-    return memories.filter(
-      (m) => !(m.privacy === "private" && m.ownerId && m.ownerId !== "None" && m.ownerId !== currentOwner)
-    );
+    return memories.filter((m) => {
+      const ownerId = m.ownerId == null || m.ownerId === "None" ? "" : String(m.ownerId);
+      return !(m.privacy === "private" && ownerId && ownerId !== currentOwner);
+    });
   }
   function readInjectionLog(sessionId) {
     const injectionLogPath = getInjectionLogPath(sessionId);
