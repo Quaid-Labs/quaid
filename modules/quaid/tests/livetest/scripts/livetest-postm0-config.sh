@@ -18,6 +18,8 @@
 #   livetest.enableExtractionBufferLog: true
 #   capture.chunk_tokens: 1500
 #   claude-code only: models.fastReasoning: claude-haiku-4-5-20251001
+#   claude-code only: models.deepReasoning: claude-sonnet-4-6
+#   openclaw/codex only: models.deepReasoning: gpt-5.4
 #
 # Per-platform is the correct layer: platform config supersedes global, and
 # per-instance can override platform later (e.g. M4 idle-timeout flip on one
@@ -81,7 +83,11 @@ overrides = {
     'capture': {'chunk_tokens': 1500},
 }
 if platform == 'claude-code':
-    overrides.setdefault('models', {})['fastReasoning'] = 'claude-haiku-4-5-20251001'
+    models = overrides.setdefault('models', {})
+    models['fastReasoning'] = 'claude-haiku-4-5-20251001'
+    models['deepReasoning'] = 'claude-sonnet-4-6'
+elif platform in {'openclaw', 'codex'}:
+    overrides.setdefault('models', {})['deepReasoning'] = 'gpt-5.4'
 def merge(base, over):
     out = json.loads(json.dumps(base))
     for k, v in over.items():
@@ -95,8 +101,8 @@ p.write_text(json.dumps(merged, indent=2))
 print(f'  merged {p}')
 print(f'  capture.chunk_tokens={merged.get(\"capture\",{}).get(\"chunk_tokens\")}')
 print(f'  livetest.enableExtractionBufferLog={merged.get(\"livetest\",{}).get(\"enableExtractionBufferLog\")}')
-if platform == 'claude-code':
-    print(f'  models.fastReasoning={merged.get(\"models\",{}).get(\"fastReasoning\")}')
+print(f'  models.fastReasoning={merged.get(\"models\",{}).get(\"fastReasoning\")}')
+print(f'  models.deepReasoning={merged.get(\"models\",{}).get(\"deepReasoning\")}')
 PYEOF
 "
 done
