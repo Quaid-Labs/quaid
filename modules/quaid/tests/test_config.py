@@ -511,6 +511,23 @@ class TestConfigPathResolution:
             config._warned_unknown_config_keys.clear()
             config._warned_unknown_config_keys.update(old_warned)
 
+    def test_config_verbose_chatter_treats_false_quiet_as_disabled(self, tmp_path, capsys, monkeypatch):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({"promptSet": "default"}))
+            monkeypatch.setenv("QUAID_CONFIG_VERBOSE", "1")
+            monkeypatch.setenv("QUAID_QUIET", "false")
+
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                _ = load_config()
+
+            assert f"[config] Loaded from {config_file}" in capsys.readouterr().err
+        finally:
+            config._config = old_config
+
     def test_loads_identity_and_privacy_blocks(self, tmp_path):
         import config
         old_config = config._config
@@ -1709,6 +1726,28 @@ class TestConfigPathResolution:
         try:
             config._run_config_callbacks(cfg)
             assert "Config callback failed" not in capsys.readouterr().err
+        finally:
+            with config._config_callbacks_lock:
+                callbacks = config._config_callbacks.get("plugins.slots.adapter", [])
+                if _boom in callbacks:
+                    callbacks.remove(_boom)
+
+    def test_config_callback_warning_treats_false_quiet_as_disabled(self, capsys, monkeypatch):
+        import config
+
+        def _boom(_value, _cfg):
+            raise ValueError("callback boom")
+
+        cfg = MemoryConfig()
+        cfg.plugins.strict = False
+        monkeypatch.setenv("QUAID_QUIET", "false")
+
+        with config._config_callbacks_lock:
+            callbacks = config._config_callbacks.setdefault("plugins.slots.adapter", [])
+            callbacks.append(_boom)
+        try:
+            config._run_config_callbacks(cfg)
+            assert "Config callback failed for 'plugins.slots.adapter'" in capsys.readouterr().err
         finally:
             with config._config_callbacks_lock:
                 callbacks = config._config_callbacks.get("plugins.slots.adapter", [])

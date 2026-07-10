@@ -67,7 +67,7 @@ def _truthy_env(name: str) -> bool:
 
 
 def _config_load_chatter_enabled() -> bool:
-    return _truthy_env("QUAID_CONFIG_VERBOSE") and not os.environ.get("QUAID_QUIET")
+    return _truthy_env("QUAID_CONFIG_VERBOSE") and not _truthy_env("QUAID_QUIET")
 
 
 def _config_bool(value: Any, default: bool) -> bool:
@@ -810,7 +810,7 @@ def _run_config_callbacks(config: "MemoryConfig") -> None:
                 msg = f"Config callback failed for '{path}': {exc}"
                 if strict:
                     raise ValueError(msg) from exc
-                if not os.environ.get("QUAID_QUIET"):
+                if not _truthy_env("QUAID_QUIET"):
                     print(f"[plugins][warn] {msg}", file=sys.stderr)
 
 
