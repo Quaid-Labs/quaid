@@ -150,6 +150,8 @@ class ClaudeCodeInstanceManager(InstanceManager):
             try:
                 cfg = json.loads(config_path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
+                if is_fail_hard_enabled():
+                    raise
                 cfg = {}
 
         models = cfg.setdefault("models", {})
@@ -183,6 +185,8 @@ class ClaudeCodeInstanceManager(InstanceManager):
                 try:
                     cfg = json.loads(config_path.read_text(encoding="utf-8"))
                 except Exception:
+                    if is_fail_hard_enabled():
+                        raise
                     pass
             models = cfg.setdefault("models", {})
             models.setdefault("deepReasoning", self.DEFAULT_DEEP_MODEL)
@@ -234,6 +238,8 @@ class ClaudeCodeInstanceManager(InstanceManager):
             try:
                 settings = json.loads(settings_path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
+                if is_fail_hard_enabled():
+                    raise
                 settings = {}
 
         if "hooks" not in settings:
@@ -290,6 +296,8 @@ class ClaudeCodeInstanceManager(InstanceManager):
             try:
                 settings = json.loads(settings_path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
+                if is_fail_hard_enabled():
+                    raise
                 settings = {}
         else:
             settings = {}

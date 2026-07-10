@@ -631,6 +631,71 @@ class TestClaudeCodeInstanceManager:
 
         assert "Warning: could not write auth token: disk full" in capsys.readouterr().out
 
+    def test_write_model_config_raises_malformed_config_when_failhard(self, tmp_path, monkeypatch):
+        from adaptors.claude_code import instance_manager as manager_mod
+        from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
+
+        silo_root = tmp_path / "instances" / "claude-code-main"
+        silo_root.mkdir(parents=True)
+        (silo_root / "config.json").write_text("}{bad json", encoding="utf-8")
+        mgr = ClaudeCodeInstanceManager(MagicMock())
+        monkeypatch.setattr(manager_mod, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(json.JSONDecodeError):
+            mgr._write_model_config(silo_root, "deep-model", "fast-model")
+
+    def test_auto_provision_raises_malformed_config_when_failhard(self, tmp_path, monkeypatch):
+        from adaptors.claude_code import instance_manager as manager_mod
+        from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
+
+        adapter = MagicMock()
+        adapter.agent_id_prefix.return_value = "claude-code"
+        adapter.quaid_home.return_value = tmp_path / "quaid"
+        adapter.instance_root.return_value = tmp_path / "quaid" / "instances" / "claude-code-main"
+        mgr = ClaudeCodeInstanceManager(adapter)
+        silo_root = tmp_path / "quaid" / "instances" / "claude-code-auto"
+
+        def fake_create(_name):
+            silo_root.mkdir(parents=True)
+            (silo_root / "config.json").write_text("}{bad json", encoding="utf-8")
+            return silo_root
+
+        monkeypatch.setattr(mgr, "create", fake_create)
+        monkeypatch.setattr(manager_mod, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(json.JSONDecodeError):
+            mgr.auto_provision("auto")
+
+    def test_write_hooks_raises_malformed_settings_when_failhard(self, tmp_path, monkeypatch):
+        from adaptors.claude_code import instance_manager as manager_mod
+        from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
+
+        adapter = MagicMock()
+        adapter.quaid_home.return_value = tmp_path / "quaid"
+        adapter.visible_home.return_value = tmp_path / "visible"
+        mgr = ClaudeCodeInstanceManager(adapter)
+        settings_path = tmp_path / ".claude" / "settings.json"
+        settings_path.parent.mkdir(parents=True)
+        settings_path.write_text("}{bad json", encoding="utf-8")
+        monkeypatch.setattr(manager_mod, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(json.JSONDecodeError):
+            mgr._write_hooks("claude-code-main", settings_path=settings_path)
+
+    def test_write_settings_raises_malformed_settings_when_failhard(self, tmp_path, monkeypatch):
+        from adaptors.claude_code import instance_manager as manager_mod
+        from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
+
+        project_dir = tmp_path / "project"
+        settings_path = project_dir / ".claude" / "settings.json"
+        settings_path.parent.mkdir(parents=True)
+        settings_path.write_text("}{bad json", encoding="utf-8")
+        mgr = ClaudeCodeInstanceManager(MagicMock())
+        monkeypatch.setattr(manager_mod, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(json.JSONDecodeError):
+            mgr._write_settings(project_dir, "claude-code-main")
+
 
 # ---- Adapter registration ----
 
