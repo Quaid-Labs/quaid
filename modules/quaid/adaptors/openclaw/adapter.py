@@ -606,6 +606,12 @@ class OpenClawAdapter(QuaidAdapter):
                dry_run: bool = False, force: bool = False) -> bool:
         if os.environ.get("QUAID_DISABLE_NOTIFICATIONS") and not force:
             return True
+        if not force and self._is_transcript_poisoning_notice(message):
+            print(
+                "[notify] Suppressed OpenClaw extraction notice to avoid agent-visible transcript pollution",
+                file=sys.stderr,
+            )
+            return True
 
         info = self.get_last_channel()
         if channel_override and (not info or str(info.channel).strip().lower() != str(channel_override).strip().lower()):
@@ -939,6 +945,14 @@ class OpenClawAdapter(QuaidAdapter):
         r"^\s*(?:\*{1,2}\s*)?\[Quaid\](?:\*{1,2})?\s+.*?\bCompaction extraction summary\b",
         flags=re.IGNORECASE | re.DOTALL,
     )
+    _QUAID_EXTRACTION_NOTICE_RE = re.compile(
+        r"(?:"
+        r"\bProcessing memories from\b|"
+        r"\[Quaid\s+[—-]\s+Memory Extraction(?:\s*\([^]]+\))?\]|"
+        r"\[Quaid\].*?\bCompaction extraction summary\b"
+        r")",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
 
     def sanitize_transcript_text(self, text: str) -> str:
         value = super().sanitize_transcript_text(text)
@@ -959,6 +973,8 @@ class OpenClawAdapter(QuaidAdapter):
         return value.strip()
 
     def filter_system_messages(self, text: str) -> bool:
+        if self._is_transcript_poisoning_notice(text):
+            return True
         if self._QUAID_COMPACTION_SUMMARY_RE.match(text):
             return True
         if text.startswith("GatewayRestart:") or text.startswith("System:"):
@@ -984,6 +1000,10 @@ class OpenClawAdapter(QuaidAdapter):
             self._OPENCLAW_QUEUED_BUSY_RE.search(value)
             and "A new session was started via /new or /reset." in value
         )
+
+    def _is_transcript_poisoning_notice(self, message: str) -> bool:
+        """OpenClaw message delivery writes status notices into agent-visible history."""
+        return bool(self._QUAID_EXTRACTION_NOTICE_RE.search(str(message or "")))
 
     @classmethod
     def _row_timestamp(cls, row: dict) -> str:

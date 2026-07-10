@@ -1022,6 +1022,26 @@ class TestOpenClawAdapter:
         adapter = OpenClawAdapter()
         assert adapter.filter_system_messages("System: shutting down") is True
 
+    def test_filter_quaid_extraction_status_notices(self):
+        adapter = OpenClawAdapter()
+        assert adapter.filter_system_messages(
+            "**[Quaid — Memory Extraction]**\n\n"
+            "**Summary:** 1 stored, 0 skipped, 0 edges"
+        ) is True
+        assert adapter.filter_system_messages(
+            "🧠 Processing memories from /new..."
+        ) is True
+        assert adapter.filter_system_messages(
+            "**[Quaid]** 💾 **Compaction extraction summary:**\n\n"
+            "• Sessions processed: 2"
+        ) is True
+
+    def test_filter_quaid_operator_notice_remains_extractable(self):
+        adapter = OpenClawAdapter()
+        assert adapter.filter_system_messages(
+            "[Quaid Notice]: Janitor found a stale provider warning for Project Heron."
+        ) is False
+
     def test_filter_restart_kind(self):
         adapter = OpenClawAdapter()
         assert adapter.filter_system_messages('{"kind": "restart"}') is True
@@ -1984,6 +2004,45 @@ class TestOpenClawAdapter:
             assert "message" in cmd
             assert "send" in cmd
             assert "test message" in cmd
+
+    def test_notify_suppresses_extraction_status_transcript_turns(self, monkeypatch, capsys):
+        adapter = OpenClawAdapter()
+        mock_info = ChannelInfo(
+            channel="matrix",
+            target="!room:localhost",
+            account_id="default",
+            session_key="agent:main:main",
+        )
+        monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
+        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: "openclaw")
+        message = (
+            "**[Quaid — Memory Extraction]**\n\n"
+            "**Summary:** 1 stored, 0 skipped, 0 edges"
+        )
+
+        with patch("adaptors.openclaw.adapter.subprocess.run") as mock_run:
+            assert adapter.notify(message) is True
+
+        mock_run.assert_not_called()
+        assert "Suppressed OpenClaw extraction notice" in capsys.readouterr().err
+
+    def test_notify_force_bypasses_extraction_status_suppression(self, monkeypatch):
+        adapter = OpenClawAdapter()
+        mock_info = ChannelInfo(
+            channel="matrix",
+            target="!room:localhost",
+            account_id="default",
+            session_key="agent:main:main",
+        )
+        monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
+        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: "openclaw")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+
+        with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
+            assert adapter.notify("🧠 Processing memories from /new...", force=True) is True
+
+        mock_run.assert_called_once()
 
     def test_installer_provider_surface(self, monkeypatch, tmp_path):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
