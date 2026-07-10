@@ -57,6 +57,25 @@ def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+            tmp_path = Path(handle.name)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        raise
+
+
 def _normalize_project_name(name: str) -> str:
     return unicodedata.normalize("NFKC", str(name or "")).casefold().strip()
 
@@ -340,7 +359,7 @@ def _cleanup_pending_project_review_entries(
         if len(keep) == before:
             continue
         if keep:
-            queue_path.write_text(json.dumps(keep, indent=2) + "\n", encoding="utf-8")
+            _atomic_write_text(queue_path, json.dumps(keep, indent=2) + "\n")
         else:
             queue_path.unlink(missing_ok=True)
     return removed

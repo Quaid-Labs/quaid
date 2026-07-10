@@ -1104,6 +1104,45 @@ class TestDeleteProjectPurgesDb:
                 canonical=tmp_path / "projects" / "my-app",
             )
 
+    def test_cleanup_pending_project_review_preserves_original_on_replace_failure(self, mock_adapter):
+        from core import project_registry as registry_mod
+
+        _adapter, tmp_path = mock_adapter
+        queue_dir = tmp_path / "instances" / "test-inst" / "logs" / "janitor"
+        queue_dir.mkdir(parents=True)
+        queue_path = queue_dir / "pending-project-review.json"
+        original = json.dumps(
+            [
+                {
+                    "section": "App Notes",
+                    "project_hint": "my-app",
+                    "source_file": str(tmp_path / "projects" / "my-app" / "README.md"),
+                },
+                {
+                    "section": "Other Notes",
+                    "project_hint": "other-app",
+                    "source_file": str(tmp_path / "projects" / "other-app" / "README.md"),
+                },
+            ]
+        )
+        queue_path.write_text(original, encoding="utf-8")
+
+        def fail_replace(src, dst):
+            if Path(dst) == queue_path:
+                raise OSError("replace failed")
+            return os.replace(src, dst)
+
+        with patch("core.project_registry.os.replace", side_effect=fail_replace), \
+             pytest.raises(OSError, match="replace failed"):
+            registry_mod._cleanup_pending_project_review_entries(
+                quaid_home=tmp_path,
+                project_name="my-app",
+                canonical=tmp_path / "projects" / "my-app",
+            )
+
+        assert queue_path.read_text(encoding="utf-8") == original
+        assert sorted(path.name for path in queue_dir.iterdir()) == ["pending-project-review.json"]
+
     def test_delete_post_queue_cleanup_failure_raises_when_failhard(self, mock_adapter):
         create_project("my-app")
 
