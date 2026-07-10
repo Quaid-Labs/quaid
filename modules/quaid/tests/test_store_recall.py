@@ -691,6 +691,34 @@ def test_relation_chain_rank_prefers_explicit_zero_hop_depth():
     assert key[6] == 0
 
 
+def test_relation_chain_boost_does_not_promote_partial_graph_row_above_direct_fact():
+    import datastore.memorydb.memory_graph as mg
+
+    direct_fact = {
+        "id": "direct-fact",
+        "text": "Riley runs a repair studio",
+        "category": "fact",
+        "similarity": 0.98,
+    }
+    partial_graph = {
+        "id": "partial-graph",
+        "text": "Morgan --spouse_of--> Riley --sibling_of--> Jordan",
+        "category": "graph",
+        "via": "graph_traversal",
+        "graph_relation_groups": ["spouse", "sibling"],
+        "hop_depth": 2,
+        "similarity": 0.72,
+    }
+
+    rows = [direct_fact, partial_graph]
+    mg._boost_relation_chain_row_scores(rows, ["spouse", "sibling"], query="spouse sibling")
+
+    assert direct_fact["similarity"] == 0.98
+    assert partial_graph["similarity"] == 0.97
+    assert partial_graph["similarity"] <= 0.994
+    assert max(rows, key=lambda row: row["similarity"])["id"] == "direct-fact"
+
+
 def test_beam_search_graph_deduplicates_nodes_reached_from_same_level(tmp_path):
     import datastore.memorydb.memory_graph as mg
 
