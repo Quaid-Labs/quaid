@@ -1589,6 +1589,30 @@ def test_codex_deferred_notice_relay_context_is_enabled(monkeypatch):
     assert "must" in context.lower() or "relay" in context.lower()
 
 
+def test_deferred_notice_hint_logs_failure_when_fail_open(monkeypatch, caplog):
+    from core.interface import hooks
+
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+    with caplog.at_level("WARNING", logger="core.interface.hooks"), \
+         patch("lib.runtime_context.format_deferred_notice_hint", side_effect=RuntimeError("hint broken")):
+        context = hooks._get_deferred_notice_hint()
+
+    assert context == ""
+    assert "Failed reading deferred notice hint: hint broken" in caplog.text
+
+
+def test_deferred_notice_hint_raises_failure_when_fail_hard(monkeypatch, caplog):
+    from core.interface import hooks
+
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+    with caplog.at_level("WARNING", logger="core.interface.hooks"), \
+         patch("lib.runtime_context.format_deferred_notice_hint", side_effect=RuntimeError("hint broken")), \
+         pytest.raises(RuntimeError, match="hint broken"):
+        hooks._get_deferred_notice_hint()
+
+    assert "Failed reading deferred notice hint: hint broken" in caplog.text
+
+
 def test_codex_deferred_notice_relay_context_logs_drain_failure(monkeypatch, caplog):
     from core.interface import hooks
 

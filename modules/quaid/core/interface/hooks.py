@@ -2426,7 +2426,10 @@ def _get_deferred_notice_hint() -> str:
         from lib.runtime_context import format_deferred_notice_hint
 
         return format_deferred_notice_hint() or ""
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed reading deferred notice hint: %s", exc)
+        if _fail_hard_enabled():
+            raise
         return ""
 
 
