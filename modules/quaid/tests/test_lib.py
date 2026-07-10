@@ -346,6 +346,51 @@ class TestGetConnection:
 
         assert "SQLite WAL mode not activated" in caplog.text
 
+    def test_connection_setup_allows_memory_database_without_wal(self, monkeypatch):
+        from lib import database
+
+        monkeypatch.setattr(database, "_fail_hard_enabled", lambda: True)
+
+        with database.get_connection(Path(":memory:")) as conn:
+            journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+
+        assert journal_mode == "memory"
+
+    def test_connection_setup_keeps_default_synchronous_when_wal_not_activated(
+        self, tmp_path, monkeypatch
+    ):
+        from lib import database
+
+        db_path = tmp_path / "test.db"
+        real_connect = database.sqlite3.connect
+        synchronous_values = []
+
+        class DeleteJournalConnection:
+            def __init__(self, conn):
+                object.__setattr__(self, "_conn", conn)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+            def __setattr__(self, name, value):
+                setattr(self._conn, name, value)
+
+            def execute(self, sql, *args, **kwargs):
+                normalized = str(sql).strip().upper()
+                if normalized == "PRAGMA JOURNAL_MODE=WAL":
+                    return SimpleNamespace(fetchone=lambda: ("delete",))
+                if normalized.startswith("PRAGMA SYNCHRONOUS"):
+                    synchronous_values.append(str(sql))
+                return self._conn.execute(sql, *args, **kwargs)
+
+        monkeypatch.setattr(database.sqlite3, "connect", lambda *args, **kwargs: DeleteJournalConnection(real_connect(*args, **kwargs)))
+        monkeypatch.setattr(database, "_fail_hard_enabled", lambda: False)
+
+        with database.get_connection(db_path):
+            pass
+
+        assert synchronous_values == []
+
     def test_refresh_read_visibility_raises_checkpoint_failure_when_failhard(self, monkeypatch):
         from lib import database
 
@@ -367,7 +412,7 @@ class TestGetConnection:
 
         monkeypatch.setattr(database, "_fail_hard_enabled", lambda: False)
 
-        with caplog.at_level("DEBUG", logger="lib.database"):
+        with caplog.at_level("WARNING", logger="lib.database"):
             database.refresh_read_visibility(BrokenConn())
 
         assert "wal checkpoint pre-read refresh skipped: checkpoint failed" in caplog.text

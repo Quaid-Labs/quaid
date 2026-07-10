@@ -95,6 +95,7 @@ def _open_configured_connection(path: Path) -> sqlite3.Connection:
     still get the original sqlite error.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    is_memory_db = str(path) == ":memory:"
     attempts = len(_CONNECT_RETRY_DELAYS_SECONDS) + 1
     last_exc: sqlite3.OperationalError | None = None
     for attempt in range(1, attempts + 1):
@@ -107,12 +108,13 @@ def _open_configured_connection(path: Path) -> sqlite3.Connection:
             # Force WAL mode on every connection open to avoid check-then-set races.
             journal_row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
             journal_mode = str(journal_row[0] if journal_row else "").strip().lower()
-            if journal_mode != "wal":
+            if not is_memory_db and journal_mode != "wal":
                 message = f"SQLite WAL mode not activated for {path}; actual journal_mode={journal_mode or 'unknown'}"
                 if _fail_hard_enabled():
                     raise RuntimeError(message)
                 logger.warning(message)
-            conn.execute("PRAGMA synchronous = NORMAL")   # Safe with WAL, faster than FULL
+            if is_memory_db or journal_mode == "wal":
+                conn.execute("PRAGMA synchronous = NORMAL")   # Safe with WAL, faster than FULL
             conn.execute("PRAGMA cache_size = -64000")     # 64MB page cache
             conn.execute("PRAGMA temp_store = MEMORY")     # Temp tables in memory
             _load_vec(conn)
@@ -154,7 +156,7 @@ def refresh_read_visibility(conn: sqlite3.Connection) -> None:
     except Exception as exc:
         if _fail_hard_enabled():
             raise
-        logger.debug("wal checkpoint pre-read refresh skipped: %s", exc)
+        logger.warning("wal checkpoint pre-read refresh skipped: %s", exc)
 
 
 @contextmanager
