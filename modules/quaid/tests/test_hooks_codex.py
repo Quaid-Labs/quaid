@@ -1624,12 +1624,47 @@ def test_clear_provider_notice_state_logs_failures(monkeypatch, caplog):
 
     monkeypatch.setattr("lib.agent_notice.clear_pending_notices_by_source", fail_pending)
     monkeypatch.setattr("lib.agent_notice.clear_deferred_notices_by_source", fail_deferred)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
 
     with caplog.at_level("WARNING", logger="core.interface.hooks"):
         cleared = hooks._clear_provider_notice_state()
 
     assert cleared == {"pending": 0, "deferred": 0}
     assert "Failed clearing pending provider notices: pending broken" in caplog.text
+    assert "Failed clearing deferred provider notices: deferred broken" in caplog.text
+
+
+def test_clear_provider_notice_state_raises_pending_failure_when_fail_hard(monkeypatch, caplog):
+    from core.interface import hooks
+
+    def fail_pending(**_kwargs):
+        raise RuntimeError("pending broken")
+
+    monkeypatch.setattr("lib.agent_notice.clear_pending_notices_by_source", fail_pending)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"), pytest.raises(RuntimeError, match="pending broken"):
+        hooks._clear_provider_notice_state()
+
+    assert "Failed clearing pending provider notices: pending broken" in caplog.text
+
+
+def test_clear_provider_notice_state_raises_deferred_failure_when_fail_hard(monkeypatch, caplog):
+    from core.interface import hooks
+
+    def clear_pending(**_kwargs):
+        return 1
+
+    def fail_deferred(**_kwargs):
+        raise RuntimeError("deferred broken")
+
+    monkeypatch.setattr("lib.agent_notice.clear_pending_notices_by_source", clear_pending)
+    monkeypatch.setattr("lib.agent_notice.clear_deferred_notices_by_source", fail_deferred)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"), pytest.raises(RuntimeError, match="deferred broken"):
+        hooks._clear_provider_notice_state()
+
     assert "Failed clearing deferred provider notices: deferred broken" in caplog.text
 
 

@@ -720,12 +720,16 @@ def _clear_provider_notice_state() -> dict:
         cleared["pending"] = int(clear_pending_notices_by_source(sources=sources) or 0)
     except Exception as exc:
         logger.warning("Failed clearing pending provider notices: %s", exc)
+        if _fail_hard_enabled():
+            raise
     try:
         from lib.agent_notice import clear_deferred_notices_by_source
 
         cleared["deferred"] = int(clear_deferred_notices_by_source(sources=sources) or 0)
     except Exception as exc:
         logger.warning("Failed clearing deferred provider notices: %s", exc)
+        if _fail_hard_enabled():
+            raise
     return cleared
 
 
