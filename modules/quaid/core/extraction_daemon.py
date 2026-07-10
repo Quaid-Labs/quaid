@@ -5512,12 +5512,8 @@ def _cursor_records_transcript_path(session_id: str, transcript_path: str) -> bo
             transcript_path,
             exc,
         )
-        try:
-            from lib.fail_policy import is_fail_hard_enabled
-            if is_fail_hard_enabled():
-                raise
-        except ImportError:
-            pass
+        if _fail_hard_enabled():
+            raise
         return False
     cursor_path = str((cursor or {}).get("transcript_path") or "").strip()
     if not cursor_path:
@@ -5628,12 +5624,8 @@ def _adapter_owns_transcript_path(adapter, session_id: str, transcript_path: str
                 transcript_path,
                 exc,
             )
-            try:
-                from lib.fail_policy import is_fail_hard_enabled
-                if is_fail_hard_enabled():
-                    raise
-            except ImportError:
-                pass
+            if _fail_hard_enabled():
+                raise
             return False
     except Exception as exc:
         logger.warning(
@@ -5642,12 +5634,8 @@ def _adapter_owns_transcript_path(adapter, session_id: str, transcript_path: str
             transcript_path,
             exc,
         )
-        try:
-            from lib.fail_policy import is_fail_hard_enabled
-            if is_fail_hard_enabled():
-                raise
-        except ImportError:
-            pass
+        if _fail_hard_enabled():
+            raise
         return False
     return bool(owns)
 

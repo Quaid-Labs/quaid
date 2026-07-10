@@ -3968,6 +3968,18 @@ def test_cursor_records_transcript_path_raises_on_read_error_when_fail_hard(monk
         extraction_daemon._cursor_records_transcript_path("broken-session", "/tmp/session.jsonl")
 
 
+def test_cursor_records_transcript_path_uses_daemon_failhard_helper(monkeypatch):
+    monkeypatch.setattr(
+        extraction_daemon,
+        "read_cursor",
+        lambda _session_id: (_ for _ in ()).throw(RuntimeError("cursor read failed")),
+    )
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="cursor read failed"):
+        extraction_daemon._cursor_records_transcript_path("broken-session", "/tmp/session.jsonl")
+
+
 def test_cursor_records_transcript_path_falls_back_on_read_error_when_not_fail_hard(monkeypatch):
     monkeypatch.setattr(
         extraction_daemon,
@@ -3977,6 +3989,24 @@ def test_cursor_records_transcript_path_falls_back_on_read_error_when_not_fail_h
     monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
 
     assert not extraction_daemon._cursor_records_transcript_path("broken-session", "/tmp/session.jsonl")
+
+
+def test_adapter_owns_transcript_path_uses_daemon_failhard_helper(monkeypatch, tmp_path):
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_text('{"role":"user","content":"adapter ownership"}\n', encoding="utf-8")
+
+    class _Adapter:
+        def owns_session_path(self, path, session_id=""):
+            raise RuntimeError("adapter ownership failed")
+
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="adapter ownership failed"):
+        extraction_daemon._adapter_owns_transcript_path(
+            _Adapter(),
+            "adapter-session",
+            str(transcript_path),
+        )
 
 
 def test_process_signal_allows_current_instance_cursor_owned_transcript(monkeypatch, tmp_path):
