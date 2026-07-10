@@ -258,8 +258,10 @@ def cmd_unlink(args):
 
 def cmd_delete(args):
     from core.project_registry import _is_reserved_project_name, delete_project, get_project
-    if not _is_reserved_project_name(args.name):
-        _require_project_visible(args.name, get_project(args.name))
+    if _is_reserved_project_name(args.name):
+        print(f"Error: Cannot delete reserved project: {args.name}", file=sys.stderr)
+        sys.exit(1)
+    _require_project_visible(args.name, get_project(args.name))
     try:
         delete_project(args.name)
         print(f"Deleted project: {args.name}")

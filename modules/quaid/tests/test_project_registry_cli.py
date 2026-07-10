@@ -442,21 +442,29 @@ class TestCmdDelete:
         assert exc_info.value.code == 1
 
     def test_reserved_project_exits_with_one(self, capsys):
-        with patch("core.project_registry.get_project", return_value={"instances": []}), \
-             patch(
-                 "core.project_registry.delete_project",
-                 side_effect=ValueError("Cannot delete reserved project: quaid"),
-             ):
+        with patch("core.project_registry.get_project", side_effect=AssertionError("visibility check should be skipped")), \
+             patch("core.project_registry.delete_project", side_effect=AssertionError("delete should be skipped")):
             with pytest.raises(SystemExit) as exc_info:
                 cli.cmd_delete(_args(name="quaid"))
         assert exc_info.value.code == 1
         assert "Cannot delete reserved project: quaid" in capsys.readouterr().err
 
+    def test_reserved_misc_project_exits_with_one(self, capsys):
+        with patch("core.project_registry.get_project", side_effect=AssertionError("visibility check should be skipped")), \
+             patch("core.project_registry.delete_project", side_effect=AssertionError("delete should be skipped")):
+            with pytest.raises(SystemExit) as exc_info:
+                cli.cmd_delete(_args(name="misc--codex-cdx-livetest-b89008986acd"))
+        assert exc_info.value.code == 1
+        assert (
+            "Cannot delete reserved project: misc--codex-cdx-livetest-b89008986acd"
+            in capsys.readouterr().err
+        )
+
     def test_reserved_project_bypasses_visibility_check(self, capsys):
         with patch("core.project_registry.get_project", side_effect=AssertionError("visibility check should be skipped")), \
              patch(
                  "core.project_registry.delete_project",
-                 side_effect=ValueError("Cannot delete reserved project: quaid"),
+                 side_effect=AssertionError("delete should be skipped"),
              ):
             with pytest.raises(SystemExit) as exc_info:
                 cli.cmd_delete(_args(name="quaid"))
