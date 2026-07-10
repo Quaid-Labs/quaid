@@ -1494,13 +1494,13 @@ def backfill_embeddings(graph: MemoryGraph, metrics: JanitorMetrics,
                             packed,
                             context="backfill",
                         )
+                        embedded += 1
                     except Exception as exc:
                         msg = f"vec_nodes sync skipped during backfill for node {node_id}: {exc}"
                         logger.warning(msg)
                         if is_fail_hard_enabled():
                             raise
                         metrics.add_warning(msg)
-                embedded += 1
             else:
                 metrics.add_error(f"Failed to embed node {node_id}: {name[:50]}")
 

@@ -1357,7 +1357,7 @@ def test_backfill_embeddings_vec_upsert_failure_warns_and_continues(monkeypatch)
         out = maintenance_ops.backfill_embeddings(graph, metrics, dry_run=False)
 
     assert out["found"] == 1
-    assert out["embedded"] == 1
+    assert out["embedded"] == 0
     assert metrics.summary()["warnings"] >= 1
     get_embedding.assert_called_once_with("alpha node", timeout_s=120.0)
 
