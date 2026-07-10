@@ -6475,6 +6475,54 @@ def test_fail_hard_wrapper_fails_closed_on_import_error(monkeypatch):
     assert extraction_daemon._fail_hard_enabled() is True
 
 
+def test_read_usage_totals_reads_only_appended_events(tmp_path, monkeypatch):
+    usage_path = tmp_path / "llm-usage-events.jsonl"
+    monkeypatch.setattr(extraction_daemon, "_usage_events_path", lambda: usage_path)
+    extraction_daemon._USAGE_TOTALS_CACHE.update({
+        "path": "",
+        "device": None,
+        "inode": None,
+        "offset": 0,
+        "totals": None,
+    })
+
+    usage_path.write_text(
+        "\n".join([
+            json.dumps({"tier": "fast", "input_tokens": 10, "output_tokens": 4}),
+            json.dumps({"tier": "deep", "input_tokens": 30, "output_tokens": 12}),
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    real_loads = extraction_daemon.json.loads
+    parsed_lines = []
+
+    def _tracking_loads(line):
+        parsed_lines.append(line)
+        return real_loads(line)
+
+    monkeypatch.setattr(extraction_daemon.json, "loads", _tracking_loads)
+
+    first = extraction_daemon._read_usage_totals()
+    assert first["calls"] == 2
+    assert first["input_tokens"] == 40
+    assert first["output_tokens"] == 16
+    assert first["fast_calls"] == 1
+    assert first["deep_calls"] == 1
+    assert len(parsed_lines) == 2
+
+    parsed_lines.clear()
+    with usage_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"tier": "fast", "input_tokens": 7, "output_tokens": 3}) + "\n")
+
+    second = extraction_daemon._read_usage_totals()
+    assert second["calls"] == 3
+    assert second["input_tokens"] == 47
+    assert second["output_tokens"] == 19
+    assert second["fast_calls"] == 2
+    assert second["deep_calls"] == 1
+    assert len(parsed_lines) == 1
+
+
 def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypatch, tmp_path):
     transcript_path = tmp_path / "session.jsonl"
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")

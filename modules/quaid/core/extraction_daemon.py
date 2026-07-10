@@ -4124,8 +4124,28 @@ def _usage_events_path() -> Path:
     return _instance_root() / "logs" / "llm-usage-events.jsonl"
 
 
-def _read_usage_totals() -> Dict[str, int]:
-    totals = {
+_USAGE_TOTAL_KEYS = (
+    "calls",
+    "input_tokens",
+    "output_tokens",
+    "fast_calls",
+    "fast_input_tokens",
+    "fast_output_tokens",
+    "deep_calls",
+    "deep_input_tokens",
+    "deep_output_tokens",
+)
+_USAGE_TOTALS_CACHE: Dict[str, Any] = {
+    "path": "",
+    "device": None,
+    "inode": None,
+    "offset": 0,
+    "totals": None,
+}
+
+
+def _zero_usage_totals() -> Dict[str, int]:
+    return {
         "calls": 0,
         "input_tokens": 0,
         "output_tokens": 0,
@@ -4136,31 +4156,80 @@ def _read_usage_totals() -> Dict[str, int]:
         "deep_input_tokens": 0,
         "deep_output_tokens": 0,
     }
+
+
+def _apply_usage_event_row(totals: Dict[str, int], row: Dict[str, Any]) -> None:
+    tier = str(row.get("tier", "") or "").strip().lower()
+    input_tokens = int(row.get("input_tokens", 0) or 0)
+    output_tokens = int(row.get("output_tokens", 0) or 0)
+    totals["calls"] += 1
+    totals["input_tokens"] += input_tokens
+    totals["output_tokens"] += output_tokens
+    if tier in ("fast", "deep"):
+        totals[f"{tier}_calls"] += 1
+        totals[f"{tier}_input_tokens"] += input_tokens
+        totals[f"{tier}_output_tokens"] += output_tokens
+
+
+def _read_usage_totals() -> Dict[str, int]:
     path = _usage_events_path()
     if not path.is_file():
-        return totals
+        if _USAGE_TOTALS_CACHE.get("path") == str(path):
+            _USAGE_TOTALS_CACHE.update({
+                "device": None,
+                "inode": None,
+                "offset": 0,
+                "totals": None,
+            })
+        return _zero_usage_totals()
     try:
-        with path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
+        stat = path.stat()
+        device = getattr(stat, "st_dev", None)
+        inode = getattr(stat, "st_ino", None)
+        cached_path = str(_USAGE_TOTALS_CACHE.get("path") or "")
+        cached_device = _USAGE_TOTALS_CACHE.get("device")
+        cached_inode = _USAGE_TOTALS_CACHE.get("inode")
+        cached_offset = int(_USAGE_TOTALS_CACHE.get("offset", 0) or 0)
+        cached_totals = _USAGE_TOTALS_CACHE.get("totals")
+        if (
+            cached_path == str(path)
+            and cached_device == device
+            and cached_inode == inode
+            and isinstance(cached_totals, dict)
+            and int(stat.st_size) >= cached_offset
+        ):
+            totals = {key: int(cached_totals.get(key, 0) or 0) for key in _USAGE_TOTAL_KEYS}
+            offset = cached_offset
+        else:
+            totals = _zero_usage_totals()
+            offset = 0
+
+        with path.open("rb") as fh:
+            fh.seek(offset)
+            while True:
+                raw_line = fh.readline()
+                if not raw_line:
+                    break
+                if not raw_line.endswith(b"\n"):
+                    break
+                offset = fh.tell()
+                line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line:
                     continue
                 try:
                     row = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                tier = str(row.get("tier", "") or "").strip().lower()
-                input_tokens = int(row.get("input_tokens", 0) or 0)
-                output_tokens = int(row.get("output_tokens", 0) or 0)
-                totals["calls"] += 1
-                totals["input_tokens"] += input_tokens
-                totals["output_tokens"] += output_tokens
-                if tier in ("fast", "deep"):
-                    totals[f"{tier}_calls"] += 1
-                    totals[f"{tier}_input_tokens"] += input_tokens
-                    totals[f"{tier}_output_tokens"] += output_tokens
+                _apply_usage_event_row(totals, row)
+        _USAGE_TOTALS_CACHE.update({
+            "path": str(path),
+            "device": device,
+            "inode": inode,
+            "offset": offset,
+            "totals": dict(totals),
+        })
     except OSError:
-        return totals
+        return _zero_usage_totals()
     return totals
 
 
