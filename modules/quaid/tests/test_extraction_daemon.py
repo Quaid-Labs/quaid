@@ -11785,6 +11785,104 @@ class TestCheckIdleSessions:
         with pytest.raises(OSError, match="rolling state unavailable"):
             extraction_daemon.check_idle_sessions(timeout_minutes=30)
 
+    def test_cursor_source_identity_failure_logs_and_returns_false_when_fail_open(self, monkeypatch, caplog):
+        cursor_data = {
+            "cursor_key": "source-deadbeef",
+            "session_id": "sess-source",
+            "transcript_path": "/tmp/source.jsonl",
+        }
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+        monkeypatch.setattr(extraction_daemon, "_cursor_data_records_transcript_path", lambda *_args: False)
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_signal_source_identity",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("identity unavailable")),
+        )
+
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            assert extraction_daemon._cursor_data_records_transcript_source(
+                cursor_data,
+                "sess-source",
+                "/tmp/other.jsonl",
+            ) is False
+
+        assert "failed to compare cursor transcript source" in caplog.text
+        assert "identity unavailable" in caplog.text
+
+    def test_cursor_source_identity_failure_raises_when_fail_hard(self, monkeypatch):
+        cursor_data = {
+            "cursor_key": "source-deadbeef",
+            "session_id": "sess-source",
+            "transcript_path": "/tmp/source.jsonl",
+        }
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr(extraction_daemon, "_cursor_data_records_transcript_path", lambda *_args: False)
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_signal_source_identity",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("identity unavailable")),
+        )
+
+        with pytest.raises(RuntimeError, match="identity unavailable"):
+            extraction_daemon._cursor_data_records_transcript_source(
+                cursor_data,
+                "sess-source",
+                "/tmp/other.jsonl",
+            )
+
+    def test_read_installed_at_read_failure_logs_and_raises_when_fail_hard(self, monkeypatch, tmp_path):
+        state_path = tmp_path / "install-state.json"
+        state_path.write_text("{not-json", encoding="utf-8")
+        monkeypatch.setattr(extraction_daemon, "_install_state_path", lambda: state_path)
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(json.JSONDecodeError):
+            extraction_daemon._read_installed_at()
+
+    def test_read_installed_at_write_failure_logs_and_raises_when_fail_hard(self, monkeypatch, tmp_path):
+        state_path = tmp_path / "install-state.json"
+        monkeypatch.setattr(extraction_daemon, "_install_state_path", lambda: state_path)
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_atomic_write",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("write denied")),
+        )
+
+        with pytest.raises(OSError, match="write denied"):
+            extraction_daemon._read_installed_at()
+
+    def test_adapter_compaction_capability_failure_logs_and_returns_false_when_fail_open(self, monkeypatch, caplog):
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+        class _BrokenAdapter:
+            def get_capability(self, *_args, **_kwargs):
+                raise RuntimeError("capability unavailable")
+
+        import lib.adapter as adapter_mod
+
+        monkeypatch.setattr(adapter_mod, "get_adapter", lambda: _BrokenAdapter())
+
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            assert extraction_daemon._adapter_supports_compaction_control() is False
+
+        assert "failed to resolve adapter compaction-control capability" in caplog.text
+        assert "capability unavailable" in caplog.text
+
+    def test_adapter_compaction_capability_failure_raises_when_fail_hard(self, monkeypatch):
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+        class _BrokenAdapter:
+            def get_capability(self, *_args, **_kwargs):
+                raise RuntimeError("capability unavailable")
+
+        import lib.adapter as adapter_mod
+
+        monkeypatch.setattr(adapter_mod, "get_adapter", lambda: _BrokenAdapter())
+
+        with pytest.raises(RuntimeError, match="capability unavailable"):
+            extraction_daemon._adapter_supports_compaction_control()
+
     def test_check_idle_sessions_warns_on_subagent_registry_failure_when_fail_open(
         self, monkeypatch, tmp_path, caplog
     ):

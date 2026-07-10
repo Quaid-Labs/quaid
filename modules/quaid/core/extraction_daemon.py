@@ -5785,7 +5785,15 @@ def _cursor_data_records_transcript_source(
         expected_cursor_key = _signal_source_cursor_key(cursor_identity_session, cursor_path)
         expected_transcript_key = _signal_source_cursor_key(session_id, transcript_path)
         return cursor_key in {expected_cursor_key, expected_transcript_key}
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "failed to compare cursor transcript source for session %s path=%s: %s",
+            session_id,
+            transcript_path,
+            exc,
+        )
+        if _fail_hard_enabled():
+            raise
         return False
 
 
@@ -8695,15 +8703,19 @@ def _read_installed_at() -> float:
             if installed_at:
                 normalized = installed_at.replace("Z", "+00:00")
                 return datetime.fromisoformat(normalized).timestamp()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("failed to read daemon install state %s: %s", path, exc)
+        if _fail_hard_enabled():
+            raise
 
     installed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write(path, json.dumps({"installedAt": installed_at}))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("failed to write daemon install state %s: %s", path, exc)
+        if _fail_hard_enabled():
+            raise
     # If the lower-bound file is first created during an idle sweep, returning
     # "now" would immediately classify any already-written fresh transcript as
     # older than installedAt and skip timeout extraction forever. Seed the file
@@ -8788,7 +8800,10 @@ def _adapter_supports_compaction_control() -> bool:
         from lib.adapter import get_adapter
         adapter = get_adapter()
         return bool(adapter.get_capability("supports_compaction_control", False))
-    except Exception:
+    except Exception as exc:
+        logger.warning("failed to resolve adapter compaction-control capability: %s", exc)
+        if _fail_hard_enabled():
+            raise
         return False
 
 
