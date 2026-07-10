@@ -753,7 +753,7 @@ class DocsRegistry:
                 return
 
             try:
-                config_data = json.loads(config_path.read_text())
+                config_data = json.loads(config_path.read_text(encoding="utf-8"))
                 definitions = config_data.get("projects", {}).get("definitions", {})
                 for name, proj_data in definitions.items():
                     now_iso = _now_iso()
@@ -2424,7 +2424,7 @@ class DocsRegistry:
             with _config_write_lock(config_path):
                 if not config_path.exists():
                     return False
-                config_data = json.loads(config_path.read_text())
+                config_data = json.loads(config_path.read_text(encoding="utf-8"))
                 mutator_fn(config_data)
                 _atomic_write_text_unlocked(config_path, json.dumps(config_data, indent=2) + "\n")
             # Reload cached config

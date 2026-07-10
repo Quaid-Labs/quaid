@@ -203,6 +203,23 @@ class TestConfigReloadPolicy:
         assert "target-project" in definitions
         assert not (setup_env / "config.tmp").exists()
 
+    def test_update_config_reads_config_as_utf8(self, setup_env, monkeypatch):
+        import config as config_mod
+
+        r = _get_registry()
+        config_path = setup_env / "config.json"
+        real_read_text = Path.read_text
+
+        def _read_text_requires_utf8(path, *args, **kwargs):
+            if path == config_path:
+                assert kwargs.get("encoding") == "utf-8"
+            return real_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", _read_text_requires_utf8)
+        monkeypatch.setattr(config_mod, "reload_config", lambda: None)
+
+        assert r._update_config(lambda data: data["projects"].update({"defaultProject": "café"})) is True
+
 
 class TestEnsureTable:
     def test_idempotent(self, setup_env):
@@ -1933,6 +1950,33 @@ class TestProjectDefinitionsTable:
         assert "test-project" in defs
         assert defs["test-project"].label == "Test Project"
         assert defs["test-project"].home_dir == "projects/test-project/"
+
+    def test_seed_from_json_reads_config_as_utf8(self, setup_env, monkeypatch):
+        from datastore.docsdb.registry import DocsRegistry
+
+        config_path = setup_env / "config.json"
+        config_data = json.loads(config_path.read_text(encoding="utf-8"))
+        config_data["projects"]["definitions"]["unicode-project"] = {
+            "label": "Café Project",
+            "homeDir": "projects/unicode-project/",
+            "description": "naïve façade",
+        }
+        config_path.write_text(json.dumps(config_data, ensure_ascii=False), encoding="utf-8")
+
+        r = DocsRegistry(db_path=setup_env / "unicode-seed.db", seed_projects=False)
+        real_read_text = Path.read_text
+
+        def _read_text_requires_utf8(path, *args, **kwargs):
+            if path == config_path:
+                assert kwargs.get("encoding") == "utf-8"
+            return real_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", _read_text_requires_utf8)
+        r._seed_projects_from_json()
+
+        defs = r.get_all_project_definitions()
+        assert defs["unicode-project"].label == "Café Project"
+        assert defs["unicode-project"].description == "naïve façade"
 
     def test_seed_skips_when_populated(self, setup_env):
         """Seeding is idempotent — doesn't duplicate when table already has data."""
