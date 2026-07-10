@@ -76,7 +76,7 @@ def project_queue_lock(project: str, *, quaid_home: Optional[Path] = None):
                 raise
             logger.warning("Failed acquiring project-log queue lock for %s", project, exc_info=True)
         if not locked:
-            yield
+            raise RuntimeError(f"Failed acquiring project-log queue lock for {name}")
         else:
             held = getattr(_LOCK_STATE, "held_projects", set())
             _LOCK_STATE.held_projects = {*held, name}

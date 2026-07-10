@@ -1248,8 +1248,8 @@ def test_project_log_queue_failed_flock_does_not_authorize_drain(project_env, mo
     monkeypatch.setitem(sys.modules, "fcntl", BrokenFcntl)
     monkeypatch.setattr(project_log_queue, "is_fail_hard_enabled", lambda: False)
 
-    with project_log_queue.project_queue_lock("demo"):
-        with pytest.raises(RuntimeError, match="project-log queue lock is required"):
+    with pytest.raises(RuntimeError, match="Failed acquiring project-log queue lock for demo"):
+        with project_log_queue.project_queue_lock("demo"):
             project_log_queue.drain_project_log_queue("demo")
 
 
