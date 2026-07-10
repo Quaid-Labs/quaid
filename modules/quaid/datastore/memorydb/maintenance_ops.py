@@ -645,6 +645,10 @@ def _merge_nodes_into(
                 """,
                 source_fact_ids + source_fact_ids + source_fact_ids,
             )
+            conn.execute(
+                f"UPDATE entity_aliases SET canonical_node_id = ? WHERE canonical_node_id IN ({placeholders})",
+                [merged_id] + source_fact_ids,
+            )
 
         # Clean up self-referencing edges created when merging nodes that
         # had edges between each other (A→B becomes merged→merged)

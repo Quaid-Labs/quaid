@@ -817,6 +817,25 @@ class TestMergeOriginalsDeleted:
         assert graph.get_node(node_b.id) is None
         assert graph.get_node(result["id"]) is not None
 
+    def test_aliases_repoint_to_merged_node(self, tmp_path):
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
+        graph, _ = _make_graph(tmp_path)
+        node_a = _store_and_get(graph, "Douglas Quaid likes espresso")
+        node_b = _store_and_get(graph, "Douglas Quaid prefers espresso")
+        alias_id = graph.add_alias("doug", "Douglas Quaid", canonical_node_id=node_a.id, owner_id="quaid")
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", False):
+            result = _merge_nodes_into(
+                graph, "Douglas Quaid likes espresso",
+                [node_a.id, node_b.id],
+            )
+
+        with graph._get_conn() as conn:
+            row = conn.execute("SELECT canonical_node_id FROM entity_aliases WHERE id = ?", (alias_id,)).fetchone()
+            assert row["canonical_node_id"] == result["id"]
+
 
 # ===========================================================================
 # 9. Dry Run

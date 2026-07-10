@@ -2466,6 +2466,7 @@ class MemoryGraph:
             # Keep the method invariant independent of per-connection FK settings.
             conn.execute("DELETE FROM edges WHERE source_id = ? OR target_id = ?", (node_id, node_id))
             conn.execute("UPDATE nodes SET superseded_by = NULL WHERE superseded_by = ?", (node_id,))
+            conn.execute("UPDATE entity_aliases SET canonical_node_id = NULL WHERE canonical_node_id = ?", (node_id,))
             result = conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
             if result.rowcount > 0 and _lib_has_vec():
                 try:
@@ -24634,6 +24635,7 @@ def hard_delete_node(node_id: str, conn: Optional[sqlite3.Connection] = None) ->
         # Explicit cleanup for callers supplying connections with foreign_keys=OFF.
         active_conn.execute("DELETE FROM node_domains WHERE node_id = ?", (node_id,))
         active_conn.execute("UPDATE nodes SET superseded_by = NULL WHERE superseded_by = ?", (node_id,))
+        active_conn.execute("UPDATE entity_aliases SET canonical_node_id = NULL WHERE canonical_node_id = ?", (node_id,))
         # Clean up vec_nodes index (virtual table, no CASCADE)
         try:
             active_conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node_id,))

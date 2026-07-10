@@ -796,6 +796,46 @@ def test_delete_node_cleans_edges_and_supersession_without_fk_cascade(tmp_path, 
     assert edge_count == 0
 
 
+def test_delete_node_clears_alias_node_link(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _db_file = _make_graph(tmp_path)
+    node = mg.Node.create("Person", "Douglas Quaid", owner_id="quaid")
+    graph.add_node(node, embed=False)
+    alias_id = graph.add_alias("sol", "Douglas Quaid", canonical_node_id=node.id, owner_id="quaid")
+
+    assert graph.delete_node(node.id) is True
+
+    with graph._get_conn() as conn:
+        row = conn.execute("SELECT canonical_node_id, canonical_name FROM entity_aliases WHERE id = ?", (alias_id,)).fetchone()
+    assert row["canonical_node_id"] is None
+    assert row["canonical_name"] == "Douglas Quaid"
+
+
+def test_hard_delete_node_clears_alias_node_link_with_caller_connection(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, db_file = _make_graph(tmp_path)
+    node = mg.Node.create("Person", "Douglas Quaid", owner_id="quaid")
+    graph.add_node(node, embed=False)
+    alias_id = graph.add_alias("sol", "Douglas Quaid", canonical_node_id=node.id, owner_id="quaid")
+
+    raw_conn = sqlite3.connect(str(db_file))
+    raw_conn.row_factory = sqlite3.Row
+    raw_conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            assert mg.hard_delete_node(node.id, conn=raw_conn) is True
+        raw_conn.commit()
+    finally:
+        raw_conn.close()
+
+    with graph._get_conn() as conn:
+        row = conn.execute("SELECT canonical_node_id, canonical_name FROM entity_aliases WHERE id = ?", (alias_id,)).fetchone()
+    assert row["canonical_node_id"] is None
+    assert row["canonical_name"] == "Douglas Quaid"
+
+
 def test_get_fact_history_handles_long_supersession_chain(tmp_path):
     """Long-running fact histories should not depend on Python recursion depth."""
     import datastore.memorydb.memory_graph as mg
