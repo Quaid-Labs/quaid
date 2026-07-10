@@ -5521,6 +5521,11 @@ class TestExtractFromTranscript:
 
         assert extraction_publish._current_utc_timestamp() == "2026-03-11T00:00:00+00:00"
 
+    def test_memorydb_extraction_publish_date_only_timestamps_are_utc_aware(self):
+        from datastore.memorydb import extraction_publish
+
+        assert extraction_publish._normalize_extracted_timestamp("2026-03-11") == "2026-03-11T23:59:59+00:00"
+
     def test_memorydb_extraction_publish_current_timestamp_malformed_quaid_now_honors_failhard(self, monkeypatch):
         from datastore.memorydb import extraction_publish
 
@@ -6989,14 +6994,14 @@ class TestExtractFromTranscript:
         )
 
         assert "created_at" not in mock_store.call_args.kwargs
-        assert mock_store.call_args.kwargs["mentioned_at"] == "2026-03-12T23:59:59"
+        assert mock_store.call_args.kwargs["mentioned_at"] == "2026-03-12T23:59:59+00:00"
         assert payload["project_log_metrics"]["entries_queued"] == 1
         mock_enqueue_project_logs.assert_called_once_with(
             {
                 "recipe-app": [
                     {
                         "text": "Recipe app added centralized retry middleware",
-                        "created_at": "2026-03-12T23:59:59",
+                        "created_at": "2026-03-12T23:59:59+00:00",
                     }
                 ]
             },
