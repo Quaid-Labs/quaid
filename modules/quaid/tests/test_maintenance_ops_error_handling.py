@@ -1531,7 +1531,7 @@ def test_backfill_embeddings_vec_upsert_failure_warns_and_continues(monkeypatch)
     metrics = maintenance_ops.JanitorMetrics()
     graph = _Graph()
 
-    with patch("lib.embeddings.get_embedding", return_value=[0.1, 0.2]) as get_embedding, \
+    with patch("lib.embeddings.get_embeddings", return_value=[[0.1, 0.2]]) as get_embeddings, \
          patch("lib.embeddings.pack_embedding", return_value=b"emb"), \
          patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False), \
          patch.object(maintenance_ops, "_upsert_vec_embedding", return_value=False):
@@ -1540,7 +1540,12 @@ def test_backfill_embeddings_vec_upsert_failure_warns_and_continues(monkeypatch)
     assert out["found"] == 1
     assert out["embedded"] == 0
     assert metrics.summary()["warnings"] >= 1
-    get_embedding.assert_called_once_with("alpha node", timeout_s=120.0)
+    get_embeddings.assert_called_once_with(
+        ["alpha node"],
+        pool_name="janitor_embedding_backfill",
+        task_name="janitor",
+        timeout_s=120.0,
+    )
 
 
 def test_backfill_embeddings_rolls_back_node_embedding_when_vec_sync_skips(monkeypatch, tmp_path):
@@ -1553,7 +1558,7 @@ def test_backfill_embeddings_rolls_back_node_embedding_when_vec_sync_skips(monke
     graph.add_node(node, embed=False)
 
     metrics = maintenance_ops.JanitorMetrics()
-    with patch("lib.embeddings.get_embedding", return_value=[0.1, 0.2]), \
+    with patch("lib.embeddings.get_embeddings", return_value=[[0.1, 0.2]]), \
          patch("lib.embeddings.pack_embedding", return_value=b"emb"), \
          patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False), \
          patch.object(maintenance_ops, "_upsert_vec_embedding", return_value=False):
@@ -1566,6 +1571,50 @@ def test_backfill_embeddings_rolls_back_node_embedding_when_vec_sync_skips(monke
         row = conn.execute("SELECT embedding FROM nodes WHERE id = ?", (node.id,)).fetchone()
     assert row is not None
     assert row["embedding"] is None
+
+
+def test_backfill_embeddings_batches_provider_calls(monkeypatch):
+    monkeypatch.delenv("QUAID_JANITOR_EMBED_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("OLLAMA_EMBED_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("QUAID_JANITOR_EMBED_BACKFILL_LIMIT", raising=False)
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            text = str(sql).strip().upper()
+            if text.startswith("SELECT ID, NAME FROM NODES WHERE EMBEDDING IS NULL"):
+                return _DummyResult(rows=[
+                    {"id": "n1", "name": "alpha node"},
+                    {"id": "n2", "name": "bravo node"},
+                ])
+            if text.startswith("SELECT COUNT(*) FROM NODES_FTS"):
+                return _DummyResult(rows=[(2,)])
+            if text.startswith("SELECT COUNT(*) FROM NODES"):
+                return _DummyResult(rows=[(2,)])
+            if text.startswith("SELECT ROWID, NAME FROM NODES ORDER BY ROWID DESC LIMIT 1"):
+                return _DummyResult(rows=[(2, "bravo node")])
+            if text.startswith("SELECT ROWID FROM NODES_FTS WHERE ROWID = ?"):
+                return _DummyResult(rows=[(2,)])
+            return _DummyResult(rowcount=1)
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    metrics = maintenance_ops.JanitorMetrics()
+    with patch("lib.embeddings.get_embeddings", return_value=[[0.1], [0.2]]) as get_embeddings, \
+         patch("lib.embeddings.pack_embedding", return_value=b"emb"), \
+         patch.object(maintenance_ops, "_upsert_vec_embedding", return_value=None):
+        out = maintenance_ops.backfill_embeddings(_Graph(), metrics, dry_run=False)
+
+    assert out["found"] == 2
+    assert out["embedded"] == 2
+    get_embeddings.assert_called_once_with(
+        ["alpha node", "bravo node"],
+        pool_name="janitor_embedding_backfill",
+        task_name="janitor",
+        timeout_s=120.0,
+    )
 
 
 def test_backfill_embeddings_vec_upsert_failure_raises_under_failhard(monkeypatch):
@@ -1585,7 +1634,7 @@ def test_backfill_embeddings_vec_upsert_failure_raises_under_failhard(monkeypatc
         def _get_conn(self):
             yield _Conn()
 
-    with patch("lib.embeddings.get_embedding", return_value=[0.1, 0.2]), \
+    with patch("lib.embeddings.get_embeddings", return_value=[[0.1, 0.2]]), \
          patch("lib.embeddings.pack_embedding", return_value=b"emb"), \
          patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=True), \
          patch.object(maintenance_ops, "_upsert_vec_embedding", side_effect=RuntimeError("vec write failed")):
@@ -1622,14 +1671,19 @@ def test_backfill_embeddings_uses_global_timeout_when_janitor_override_unset(mon
     metrics = maintenance_ops.JanitorMetrics()
     graph = _Graph()
 
-    with patch("lib.embeddings.get_embedding", return_value=[0.1, 0.2]) as get_embedding, \
+    with patch("lib.embeddings.get_embeddings", return_value=[[0.1, 0.2]]) as get_embeddings, \
          patch("lib.embeddings.pack_embedding", return_value=b"emb"), \
          patch.object(maintenance_ops, "_upsert_vec_embedding", return_value=None):
         out = maintenance_ops.backfill_embeddings(graph, metrics, dry_run=False)
 
     assert out["found"] == 1
     assert out["embedded"] == 1
-    get_embedding.assert_called_once_with("alpha node", timeout_s=85.0)
+    get_embeddings.assert_called_once_with(
+        ["alpha node"],
+        pool_name="janitor_embedding_backfill",
+        task_name="janitor",
+        timeout_s=85.0,
+    )
 
 
 def test_backfill_embeddings_uses_env_override_timeout(monkeypatch):
@@ -1660,14 +1714,19 @@ def test_backfill_embeddings_uses_env_override_timeout(monkeypatch):
     metrics = maintenance_ops.JanitorMetrics()
     graph = _Graph()
 
-    with patch("lib.embeddings.get_embedding", return_value=[0.1, 0.2]) as get_embedding, \
+    with patch("lib.embeddings.get_embeddings", return_value=[[0.1, 0.2]]) as get_embeddings, \
          patch("lib.embeddings.pack_embedding", return_value=b"emb"), \
          patch.object(maintenance_ops, "_upsert_vec_embedding", return_value=None):
         out = maintenance_ops.backfill_embeddings(graph, metrics, dry_run=False)
 
     assert out["found"] == 1
     assert out["embedded"] == 1
-    get_embedding.assert_called_once_with("alpha node", timeout_s=17.0)
+    get_embeddings.assert_called_once_with(
+        ["alpha node"],
+        pool_name="janitor_embedding_backfill",
+        task_name="janitor",
+        timeout_s=17.0,
+    )
 
 
 def test_backfill_embeddings_applies_env_query_limit(monkeypatch):

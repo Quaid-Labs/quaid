@@ -1518,7 +1518,7 @@ def backfill_embeddings(graph: MemoryGraph, metrics: JanitorMetrics,
     Returns dict with 'found' and 'embedded' counts.
     """
     metrics.start_task("embedding_backfill")
-    from lib.embeddings import get_embedding as _get_emb, pack_embedding as _pack_emb
+    from lib.embeddings import get_embeddings as _get_embs, pack_embedding as _pack_emb
 
     batch_limit = _janitor_embedding_backfill_limit()
     with graph._get_conn() as conn:
@@ -1539,12 +1539,21 @@ def backfill_embeddings(graph: MemoryGraph, metrics: JanitorMetrics,
         metrics.add_warning(warning)
     embed_timeout_s = _janitor_embedding_timeout_seconds()
 
-    for row in rows:
+    embeddings = []
+    if not dry_run and rows:
+        embeddings = _get_embs(
+            [str(row["name"] or "") for row in rows],
+            pool_name="janitor_embedding_backfill",
+            task_name="janitor",
+            timeout_s=embed_timeout_s,
+        )
+
+    for idx, row in enumerate(rows):
         node_id, name = row["id"], row["name"]
         if dry_run:
             print(f"    Would embed: {name[:50]}...")
         else:
-            emb = _get_emb(name, timeout_s=embed_timeout_s)
+            emb = embeddings[idx]
             if emb:
                 packed = _pack_emb(emb)
                 try:
