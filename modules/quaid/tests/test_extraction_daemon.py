@@ -20480,6 +20480,64 @@ class TestReadTranscriptSlice:
         assert first in parsed
         assert second in parsed
 
+    def test_read_transcript_token_window_codex_uses_incremental_parser(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
+        from adaptors.codex.adapter import CodexAdapter
+
+        t = tmp_path / "codex-linear-window.jsonl"
+        first = "First task has a duplicate response/event row pair."
+        second = "Second task lands through a later fallback row."
+        lines_in = [
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": first}],
+                    },
+                }
+            ) + "\n",
+            json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": first}}) + "\n",
+            json.dumps({"type": "event_msg", "payload": {"type": "agent_message", "message": "ACK"}}) + "\n",
+            json.dumps({"type": "event_msg", "payload": {"type": "task_started"}}) + "\n",
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": second}],
+                    },
+                }
+            ) + "\n",
+        ]
+        t.write_text("".join(lines_in), encoding="utf-8")
+        original_parse = extraction_daemon._parse_transcript_lines
+
+        def fail_full_candidate_parse(*_args, **_kwargs):
+            raise AssertionError("full candidate parse should not run for Codex token windows")
+
+        monkeypatch.setattr(extraction_daemon, "_parse_transcript_lines", fail_full_candidate_parse)
+
+        read_lines = extraction_daemon.read_transcript_token_window(
+            str(t),
+            from_line=0,
+            max_tokens=10_000,
+            max_lines=0,
+            adapter=CodexAdapter(),
+        )
+        parsed = original_parse(read_lines, adapter=CodexAdapter())
+
+        assert read_lines == lines_in
+        assert parsed.count(first) == 1
+        assert second in parsed
+
     def test_read_transcript_token_window_includes_crossing_codex_task_user_turn(
         self,
         monkeypatch,

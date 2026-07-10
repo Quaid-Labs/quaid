@@ -4453,6 +4453,162 @@ def _parse_transcript_lines(lines: List[str], adapter=None, *, raise_on_parse_er
                 pass
 
 
+def _adapter_id_for_semantic_window(adapter) -> str:
+    try:
+        adapter_id = getattr(adapter, "adapter_id", None)
+        if callable(adapter_id):
+            return str(adapter_id() or "").strip().lower()
+    except Exception:
+        return ""
+    return str(getattr(adapter, "adapter_id", "") or "").strip().lower()
+
+
+class _SingleLineAdapterTranscriptAccumulator:
+    """Build a semantic transcript incrementally for adapters with row-local parsing."""
+
+    def __init__(self, adapter, *, raise_on_parse_error: bool = False) -> None:
+        self._adapter = adapter
+        self._raise_on_parse_error = raise_on_parse_error
+        self._parsed_blocks: List[str] = []
+
+    def append_line(self, line: str) -> str:
+        parsed = _parse_transcript_lines(
+            [line],
+            adapter=self._adapter,
+            raise_on_parse_error=self._raise_on_parse_error,
+        )
+        if parsed:
+            self._parsed_blocks.append(parsed)
+        return "\n\n".join(self._parsed_blocks).strip()
+
+
+class _CodexTranscriptAccumulator:
+    """Incremental equivalent of CodexAdapter.parse_session_jsonl for window sizing."""
+
+    def __init__(self, adapter) -> None:
+        self._adapter = adapter
+        self._messages: List[Dict[str, Any]] = []
+        self._fallback_messages: List[Dict[str, Any]] = []
+        self._session_source_type = ""
+        self._line_index = -1
+
+    def _row_timestamp(self, row: Dict[str, Any]) -> str:
+        row_timestamp = getattr(self._adapter, "_row_timestamp", None)
+        if callable(row_timestamp):
+            return str(row_timestamp(row) or "").strip()
+        return str(row.get("timestamp") or "").strip()
+
+    def _build_transcript(self, messages: List[Dict[str, Any]]) -> str:
+        build_timestamped = getattr(self._adapter, "_build_timestamped_transcript", None)
+        if callable(build_timestamped):
+            return str(build_timestamped(messages) or "").strip()
+        return str(self._adapter.build_transcript(messages) or "").strip()
+
+    @staticmethod
+    def _message_text_from_content(content: Any) -> str:
+        if isinstance(content, list):
+            text_parts = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text") or item.get("input_text") or item.get("output_text") or "").strip()
+                if text:
+                    text_parts.append(text)
+            return "\n".join(text_parts).strip()
+        if isinstance(content, str):
+            return content.strip()
+        return ""
+
+    def append_line(self, line: str) -> str:
+        self._line_index += 1
+        raw = str(line or "").strip()
+        if not raw:
+            return self.current_transcript()
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            return self.current_transcript()
+        if not isinstance(obj, dict):
+            return self.current_transcript()
+
+        record_type = str(obj.get("type") or "").strip()
+        payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+        row_timestamp = self._row_timestamp(obj)
+
+        if record_type == "session_meta":
+            source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+            subagent = source.get("subagent") if isinstance(source, dict) else {}
+            self._session_source_type = ""
+            if isinstance(subagent, dict) and isinstance(subagent.get("thread_spawn"), dict):
+                self._session_source_type = "subagent"
+            return self.current_transcript()
+
+        if record_type == "event_msg":
+            payload_type = str(payload.get("type") or "").strip()
+            if payload_type in ("user_message", "agent_message"):
+                role = "user" if payload_type == "user_message" else "assistant"
+                text = str(payload.get("message") or "").strip()
+                if text:
+                    self._messages.append({
+                        "role": role,
+                        "content": text,
+                        "source_type": self._session_source_type,
+                        "timestamp": row_timestamp,
+                        "line_index": self._line_index,
+                    })
+            return self.current_transcript()
+
+        if record_type == "response_item" and str(payload.get("type") or "").strip() == "message":
+            role = str(payload.get("role") or "").strip().lower()
+            if role in ("user", "assistant"):
+                text = self._message_text_from_content(payload.get("content", []))
+                if text:
+                    self._fallback_messages.append({
+                        "role": role,
+                        "content": text,
+                        "source_type": self._session_source_type,
+                        "timestamp": row_timestamp,
+                        "line_index": self._line_index,
+                    })
+        return self.current_transcript()
+
+    def current_transcript(self) -> str:
+        if self._messages:
+            selected = sorted(
+                self._messages
+                + [
+                    message
+                    for message in self._fallback_messages
+                    if message.get("role") == "user"
+                ],
+                key=lambda message: int(message.get("line_index", 0) or 0),
+            )
+        else:
+            selected = list(self._fallback_messages)
+
+        deduped = []
+        last_pair = None
+        for message in selected:
+            pair = (message.get("role"), message.get("content"))
+            if pair == last_pair:
+                continue
+            deduped.append(message)
+            last_pair = pair
+        return self._build_transcript(deduped)
+
+
+def _transcript_window_accumulator(adapter, *, raise_on_parse_error: bool = False):
+    adapter_id = _adapter_id_for_semantic_window(adapter)
+    if adapter_id == "codex":
+        return _CodexTranscriptAccumulator(adapter)
+    if adapter_id in {"claude-code", "openclaw", "standalone"}:
+        return _SingleLineAdapterTranscriptAccumulator(
+            adapter,
+            raise_on_parse_error=raise_on_parse_error,
+        )
+    return None
+
+
 def _handle_transcript_parse_failure(
     exc: _TranscriptParseError,
     *,
@@ -5215,6 +5371,10 @@ def read_transcript_token_window(
     saw_extractable_conversation = False
     current_parsed = ""
     stop_after_budget_crossing = False
+    accumulator = _transcript_window_accumulator(
+        adapter,
+        raise_on_parse_error=raise_on_parse_error,
+    ) if adapter is not None else None
     try:
         with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f):
@@ -5256,12 +5416,15 @@ def read_transcript_token_window(
                         )
                         break
                     continue
-                candidate = lines + [line]
-                candidate_parsed = _parse_transcript_lines(
-                    candidate,
-                    adapter=adapter,
-                    raise_on_parse_error=raise_on_parse_error,
-                )
+                if accumulator is not None:
+                    candidate_parsed = accumulator.append_line(line)
+                else:
+                    candidate = lines + [line]
+                    candidate_parsed = _parse_transcript_lines(
+                        candidate,
+                        adapter=adapter,
+                        raise_on_parse_error=raise_on_parse_error,
+                    )
                 candidate_extractable = bool(candidate_parsed)
                 candidate_tokens = estimate_tokens(candidate_parsed) if candidate_extractable else 0
                 semantic_changed = candidate_extractable and candidate_parsed != current_parsed
