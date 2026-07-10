@@ -2060,6 +2060,61 @@ def test_rolling_debug_dir_rejects_flag_path_outside_quaid_home(monkeypatch, tmp
     assert "rolling-debug.enabled outside QUAID_HOME" in caplog.text
 
 
+def test_rolling_debug_dir_warns_and_defaults_on_flag_read_failure(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    home = tmp_path / "home"
+    flag = home / "instances" / "test-inst" / "data" / "rolling-debug.enabled"
+    flag.parent.mkdir(parents=True)
+    flag.write_text(str(home / "debug" / "rolling"), encoding="utf-8")
+    monkeypatch.setenv("QUAID_HOME", str(home))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    monkeypatch.delenv("QUAID_ROLLING_DEBUG_DIR", raising=False)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+    original_read_text = pathlib.Path.read_text
+
+    def fail_flag_read(path, *args, **kwargs):
+        if path == flag:
+            raise OSError("flag unreadable")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", fail_flag_read)
+
+    with caplog.at_level("WARNING", logger="quaid.daemon"):
+        debug_dir = extraction_daemon._rolling_debug_dir()
+
+    assert debug_dir == home / "instances" / "test-inst" / "logs" / "daemon" / "rolling-debug"
+    assert "failed reading debug directory flag" in caplog.text
+    assert "flag unreadable" in caplog.text
+
+
+def test_rolling_debug_dir_raises_on_flag_read_failure_when_fail_hard(
+    monkeypatch,
+    tmp_path,
+):
+    home = tmp_path / "home"
+    flag = home / "instances" / "test-inst" / "data" / "rolling-debug.enabled"
+    flag.parent.mkdir(parents=True)
+    flag.write_text(str(home / "debug" / "rolling"), encoding="utf-8")
+    monkeypatch.setenv("QUAID_HOME", str(home))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    monkeypatch.delenv("QUAID_ROLLING_DEBUG_DIR", raising=False)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+    original_read_text = pathlib.Path.read_text
+
+    def fail_flag_read(path, *args, **kwargs):
+        if path == flag:
+            raise OSError("flag unreadable")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", fail_flag_read)
+
+    with pytest.raises(OSError, match="flag unreadable"):
+        extraction_daemon._rolling_debug_dir()
+
+
 def test_stage_semantic_buffer_payload_raises_on_partial_chunks_when_fail_hard(monkeypatch):
     import ingest.extract as extract_mod
 

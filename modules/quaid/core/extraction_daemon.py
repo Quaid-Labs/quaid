@@ -4400,8 +4400,10 @@ def _rolling_debug_dir() -> Path:
                 debug_dir = _contained_debug_dir(configured, str(flag_path))
                 if debug_dir is not None:
                     return debug_dir
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("[rolling-debug] failed reading debug directory flag; using default: %s", exc)
+        if _fail_hard_enabled():
+            raise
     return default_dir
 
 
