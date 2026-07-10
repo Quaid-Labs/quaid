@@ -17639,6 +17639,52 @@ class TestRecallFastHookInjectContract:
         assert stores == ["vector", "docs"]
         assert project == "cross-live-test"
 
+    def test_registered_project_name_uses_registry_cache_within_ttl(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        registry = tmp_path / "project-registry.json"
+        registry.write_text(
+            '{"projects":{"cross-live-test":{"description":"xp"}},"deleted_projects":{}}\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setattr(mg, "_registered_project_registry_cache", None)
+        monkeypatch.setattr(mg.time, "monotonic", MagicMock(side_effect=[100.0, 101.0]))
+        original_read_text = Path.read_text
+        read_count = {"count": 0}
+
+        def _counting_read_text(path, *args, **kwargs):
+            if path == registry:
+                read_count["count"] += 1
+            return original_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", _counting_read_text)
+
+        assert mg._registered_project_name_in_query("cross-live-test docs") == "cross-live-test"
+        assert mg._registered_project_name_in_query("cross-live-test status") == "cross-live-test"
+        assert read_count["count"] == 1
+
+    def test_registered_project_name_cache_refreshes_after_registry_change(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        registry = tmp_path / "project-registry.json"
+        registry.write_text(
+            '{"projects":{"cross-live-test":{"description":"xp"}},"deleted_projects":{}}\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setattr(mg, "_registered_project_registry_cache", None)
+        monkeypatch.setattr(mg.time, "monotonic", MagicMock(side_effect=[100.0, 106.0]))
+
+        assert mg._registered_project_name_in_query("cross-live-test docs") == "cross-live-test"
+        registry.write_text(
+            '{"projects":{"new-refresh-project":{"description":"xp"}},"deleted_projects":{}}\n',
+            encoding="utf-8",
+        )
+        os.utime(registry, ns=(123456789000000000, 123456789000000000))
+
+        assert mg._registered_project_name_in_query("new-refresh-project docs") == "new-refresh-project"
+
     def test_infer_recall_store_defaults_does_not_match_project_name_inside_relation_chain_word(self, tmp_path, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 

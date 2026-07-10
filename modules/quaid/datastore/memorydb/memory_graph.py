@@ -20364,6 +20364,57 @@ def _sanitize_planned_project(value: Any) -> Optional[str]:
     return text[:64]
 
 
+_REGISTERED_PROJECT_REGISTRY_CACHE_TTL_S = 5.0
+_registered_project_registry_cache: Optional[Dict[str, Any]] = None
+
+
+def _load_registered_project_registry(path: Path) -> Tuple[List[str], Set[str]]:
+    """Load project names needed for recall routing without docs reconciliation."""
+    import json as _json
+
+    data = _json.loads(path.read_text(encoding="utf-8"))
+    projects = data.get("projects", {}) if isinstance(data, dict) else {}
+    deleted = set((data.get("deleted_projects", {}) if isinstance(data, dict) else {}).keys())
+    if not isinstance(projects, dict):
+        return [], deleted
+    names = sorted(
+        (str(name) for name in projects.keys()),
+        key=lambda item: len(str(item or "")),
+        reverse=True,
+    )
+    return names, deleted
+
+
+def _registered_project_registry_snapshot(path: Path) -> Tuple[List[str], Set[str]]:
+    global _registered_project_registry_cache
+
+    now = time.monotonic()
+    cache = _registered_project_registry_cache
+    path_key = str(path)
+    if cache and cache.get("path") == path_key and now < float(cache.get("expires_at", 0.0) or 0.0):
+        return list(cache.get("project_names") or []), set(cache.get("deleted") or set())
+
+    stat = path.stat()
+    signature = (stat.st_mtime_ns, stat.st_size)
+    if (
+        cache
+        and cache.get("path") == path_key
+        and cache.get("signature") == signature
+    ):
+        cache["expires_at"] = now + _REGISTERED_PROJECT_REGISTRY_CACHE_TTL_S
+        return list(cache.get("project_names") or []), set(cache.get("deleted") or set())
+
+    project_names, deleted = _load_registered_project_registry(path)
+    _registered_project_registry_cache = {
+        "path": path_key,
+        "signature": signature,
+        "expires_at": now + _REGISTERED_PROJECT_REGISTRY_CACHE_TTL_S,
+        "project_names": list(project_names),
+        "deleted": set(deleted),
+    }
+    return project_names, deleted
+
+
 def _registered_project_name_in_query(lowered_query: str) -> Optional[str]:
     """Return a mentioned project name without triggering docs reconciliation."""
     import re as _re
@@ -20386,18 +20437,13 @@ def _registered_project_name_in_query(lowered_query: str) -> Optional[str]:
         return False
 
     try:
-        import json as _json
         from lib.instance import shared_registry_path
 
         path = shared_registry_path()
         if not path.is_file():
             return None
-        data = _json.loads(path.read_text(encoding="utf-8"))
-        projects = data.get("projects", {}) if isinstance(data, dict) else {}
-        deleted = set((data.get("deleted_projects", {}) if isinstance(data, dict) else {}).keys())
-        if not isinstance(projects, dict):
-            return None
-        for name in sorted(projects.keys(), key=lambda item: len(str(item or "")), reverse=True):
+        project_names, deleted = _registered_project_registry_snapshot(path)
+        for name in project_names:
             clean = str(name or "").strip().lower()
             if clean and name not in deleted and _mentions_project(clean):
                 return str(name)
