@@ -915,8 +915,11 @@ class DocsRegistry:
                 resolved = self._resolve_path(value).resolve(strict=False)
             except TypeError:
                 resolved = self._resolve_path(value).resolve()
-            except Exception:
-                resolved = Path(value).expanduser()
+            except Exception as exc:
+                logger.warning("Skipping invalid project source path %r: %s", value, exc)
+                if _fail_hard_enabled():
+                    raise RuntimeError(f"Invalid project source path {value!r}") from exc
+                continue
             if resolved.exists() and resolved.is_file():
                 resolved = resolved.parent
             elif not resolved.exists() and resolved.suffix:

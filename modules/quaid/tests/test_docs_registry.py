@@ -511,6 +511,40 @@ class TestRegisterAndGet:
         assert entry["auto_update"] is True
         assert entry["source_files"] == ["src/routes.js", "src/server.js"]
 
+    def test_register_skips_outside_source_root_when_fail_open(self, setup_env, monkeypatch, caplog):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        outside = setup_env.parents[2] / "outside-source.py"
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level(logging.WARNING):
+            r.register(
+                "docs/generated.md",
+                project="outside-source-proj",
+                source_files=[str(outside)],
+            )
+
+        defn = r.get_project_definition("outside-source-proj")
+        assert defn is not None
+        assert str(outside) not in (defn.source_roots or [])
+        assert "Skipping invalid project source path" in caplog.text
+
+    def test_register_raises_on_outside_source_root_when_fail_hard(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        outside = setup_env.parents[2] / "outside-source.py"
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Invalid project source path") as excinfo:
+            r.register(
+                "docs/generated.md",
+                project="outside-source-proj",
+                source_files=[str(outside)],
+            )
+        assert isinstance(excinfo.value.__cause__, ValueError)
+
     def test_register_with_identity_context(self, setup_env):
         r = _get_registry()
         r.register(
