@@ -20067,6 +20067,76 @@ class TestProcessSignalRetryOnException:
             "Signal must be preserved for retry after extraction failure"
         )
 
+    def test_process_signal_cleans_temp_file_when_temp_write_fails(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+        sig_path = extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id="sess-temp-write-fails",
+            transcript_path=str(transcript),
+        )
+        signal_data = extraction_daemon.read_pending_signals()[0]
+        temp_file = tmp_path / "partial-temp.jsonl"
+
+        class _FailingTemp:
+            name = str(temp_file)
+
+            def __enter__(self):
+                temp_file.write_text("partial", encoding="utf-8")
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def writelines(self, _lines):
+                raise OSError("disk full")
+
+        class _Adapter(_OwnedTestAdapterMixin):
+            pass
+
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry.is_registered_subagent = lambda sid: False
+        fake_registry.get_harvestable = lambda sid: []
+        fake_registry.mark_harvested = lambda sid, cid: None
+        fake_registry._registry_dir = lambda: tmp_path / "registry"
+        real_registry = sys.modules.get("core.subagent_registry")
+        sys.modules["core.subagent_registry"] = fake_registry
+
+        from lib.adapter import reset_adapter, set_adapter
+
+        set_adapter(_Adapter())
+        try:
+            monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+            monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-id")
+            monkeypatch.setattr(extraction_daemon, "_tmp_dir", lambda: tmp_path)
+            monkeypatch.setattr(extraction_daemon, "read_cursor", lambda sid: {"line_offset": 0, "transcript_path": str(transcript)})
+            monkeypatch.setattr(extraction_daemon, "count_transcript_lines", lambda p: 1)
+            monkeypatch.setattr(extraction_daemon, "read_transcript_slice", lambda path, from_line: ["line1\n"])
+            monkeypatch.setattr(extraction_daemon, "read_rolling_state", lambda sid: {})
+            monkeypatch.setattr(extraction_daemon, "write_rolling_state", lambda *args, **kwargs: None)
+            monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
+            monkeypatch.setattr(extraction_daemon, "_cursor_or_adapter_owns_transcript_path", lambda *args, **kwargs: True)
+            monkeypatch.setattr(
+                extraction_daemon,
+                "_buffer_transcript_tail",
+                lambda transcript_path, offset, staged_state, **kwargs: (staged_state, {"parse_failed": 0}),
+            )
+            monkeypatch.setattr(extraction_daemon.tempfile, "NamedTemporaryFile", lambda *args, **kwargs: _FailingTemp())
+
+            extraction_daemon.process_signal(signal_data)
+        finally:
+            reset_adapter()
+            if real_registry is not None:
+                sys.modules["core.subagent_registry"] = real_registry
+            else:
+                sys.modules.pop("core.subagent_registry", None)
+
+        assert sig_path.exists()
+        assert not temp_file.exists()
+
 
 # ---------------------------------------------------------------------------
 # Effective idle check interval calculation

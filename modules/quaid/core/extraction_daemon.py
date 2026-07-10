@@ -7181,8 +7181,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 mode="w", suffix=".jsonl", delete=False, encoding="utf-8",
                 dir=str(tmp_dir),
             ) as tmp:
-                tmp.writelines(new_lines)
                 tmp_path = tmp.name
+                tmp.writelines(new_lines)
             if adapter is None:
                 from lib.adapter import get_adapter
                 adapter = get_adapter()
