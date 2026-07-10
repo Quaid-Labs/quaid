@@ -24698,16 +24698,10 @@ def store_contradiction(node_a_id: str, node_b_id: str, explanation: str) -> Opt
                 return str(existing["id"])
             return None
     except Exception as exc:
-        try:
-            from lib.fail_policy import is_fail_hard_enabled
-            if is_fail_hard_enabled():
-                raise RuntimeError(
-                    f"Failed to store contradiction for {a_id} vs {b_id}"
-                ) from exc
-        except RuntimeError:
-            raise
-        except Exception:
-            pass
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                f"Failed to store contradiction for {a_id} vs {b_id}"
+            ) from exc
         logger.warning(
             "store_contradiction failed for node_a=%s node_b=%s: %s",
             a_id,

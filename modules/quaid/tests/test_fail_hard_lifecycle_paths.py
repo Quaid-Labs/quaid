@@ -43,7 +43,26 @@ def test_store_contradiction_raises_when_fail_hard_enabled():
             return _BrokenConn()
 
     with patch("datastore.memorydb.memory_graph.get_graph", return_value=_BrokenGraph()), \
-         patch("lib.fail_policy.is_fail_hard_enabled", return_value=True):
+         patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="Failed to store contradiction"):
+            memory_graph.store_contradiction("a-node", "b-node", "reason")
+
+
+def test_store_contradiction_uses_memory_graph_failhard_helper():
+    class _BrokenConn:
+        def __enter__(self):
+            raise sqlite3.OperationalError("db down")
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _BrokenGraph:
+        def _get_conn(self):
+            return _BrokenConn()
+
+    with patch("datastore.memorydb.memory_graph.get_graph", return_value=_BrokenGraph()), \
+         patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True), \
+         patch("lib.fail_policy.is_fail_hard_enabled", side_effect=ImportError("policy import down")):
         with pytest.raises(RuntimeError, match="Failed to store contradiction"):
             memory_graph.store_contradiction("a-node", "b-node", "reason")
 
@@ -61,7 +80,7 @@ def test_store_contradiction_soft_mode_returns_none_on_db_error():
             return _BrokenConn()
 
     with patch("datastore.memorydb.memory_graph.get_graph", return_value=_BrokenGraph()), \
-         patch("lib.fail_policy.is_fail_hard_enabled", return_value=False):
+         patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False):
         assert memory_graph.store_contradiction("a-node", "b-node", "reason") is None
 
 
