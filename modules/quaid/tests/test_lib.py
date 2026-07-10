@@ -115,9 +115,16 @@ class TestPackUnpackEmbedding:
         result = unpack_embedding(b"")
         assert result == []
 
-    def test_unpack_null_blob(self):
+    def test_unpack_null_blob(self, monkeypatch):
+        monkeypatch.setattr("lib.embeddings.is_fail_hard_enabled", lambda: False)
         result = unpack_embedding(None)
         assert result == []
+
+    def test_unpack_null_blob_raises_when_fail_hard(self, monkeypatch):
+        monkeypatch.setattr("lib.embeddings.is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(ValueError, match="NULL embedding blob"):
+            unpack_embedding(None)
 
     def test_large_vector_round_trip(self):
         """128-dim vector survives pack/unpack."""

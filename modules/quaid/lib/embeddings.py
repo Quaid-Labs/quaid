@@ -338,6 +338,10 @@ def pack_embedding(embedding: List[float]) -> bytes:
 
 def unpack_embedding(blob: Optional[bytes]) -> List[float]:
     """Unpack embedding from binary blob."""
+    if blob is None:
+        if is_fail_hard_enabled():
+            raise ValueError("NULL embedding blob while failHard is enabled")
+        return []
     if not blob:
         return []
     count = len(blob) // 4  # 4 bytes per float
