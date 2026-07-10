@@ -1735,7 +1735,7 @@ class DocsRegistry:
         if not project_md_path.exists():
             return []
 
-        content = project_md_path.read_text()
+        content = project_md_path.read_text(encoding="utf-8")
         newly_registered = []
 
         # Parse External Files table
@@ -1751,12 +1751,13 @@ class DocsRegistry:
             if in_external and stripped.startswith("|") and not stripped.startswith("| File") and not stripped.startswith("|---"):
                 parts = [p.strip() for p in stripped.split("|") if p.strip()]
                 if len(parts) >= 1:
-                    file_path = parts[0].strip("`").replace("~/", "").replace("~", "")
-                    # Resolve ~ paths
-                    if file_path.startswith("/"):
+                    raw_file_path = parts[0].strip("`").strip()
+                    expanded_file_path = Path(raw_file_path).expanduser()
+                    file_path = raw_file_path
+                    if expanded_file_path.is_absolute():
                         # Absolute path — make relative to workspace
                         try:
-                            file_path = _to_registry_path(Path(file_path))
+                            file_path = _to_registry_path(expanded_file_path)
                         except ValueError as exc:
                             logger.warning(
                                 "External file path %s is outside registry roots; keeping absolute path: %s",

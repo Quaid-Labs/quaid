@@ -1792,6 +1792,35 @@ Test project.
         assert entry is not None
         assert entry["project"] == "db-external-proj"
 
+    def test_sync_external_files_expands_home_relative_paths(self, setup_env, monkeypatch):
+        tmp_path = setup_env.parents[1]
+        r = _get_registry()
+        monkeypatch.setenv("HOME", str(tmp_path))
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        (docs_dir / "home-external.md").write_text("# Home External\n", encoding="utf-8")
+
+        proj_dir = tmp_path / "projects" / "test-project"
+        project_md = proj_dir / "PROJECT.md"
+        project_md.write_text("""# Project: Test
+
+## Files & Assets
+
+### External Files
+| File | Purpose | Auto-Update |
+|------|---------|-------------|
+| ~/docs/home-external.md | Home-relative docs | No |
+
+## Documents
+""", encoding="utf-8")
+
+        found = r.sync_external_files("test-project")
+
+        assert found == ["docs/home-external.md"]
+        entry = r.get("docs/home-external.md")
+        assert entry is not None
+        assert entry["description"] == "Home-relative docs"
+
     def test_idempotent(self, setup_env):
         tmp_path = setup_env
         r = _get_registry()
