@@ -500,8 +500,6 @@ def append_project_logs(
                 from config import load_config as _reload_cfg
                 fresh_cfg = _reload_cfg()
                 defn = fresh_cfg.projects.definitions.get(project_name)
-                if not defn:
-                    defn = docs_registry.DocsRegistry().get_project_definition(project_name)
             except Exception as exc:
                 if is_fail_hard_enabled():
                     raise
@@ -510,6 +508,17 @@ def append_project_logs(
                     project_name,
                     exc,
                 )
+            if not defn:
+                try:
+                    defn = docs_registry.DocsRegistry().get_project_definition(project_name)
+                except Exception as exc:
+                    if is_fail_hard_enabled():
+                        raise
+                    logger.warning(
+                        "append_project_logs: registry reload fallback failed for project=%s: %s",
+                        project_name,
+                        exc,
+                    )
         if not defn:
             # Filesystem fallback: project may have been deleted from the
             # registry during the session but its directory still exists.

@@ -672,6 +672,71 @@ class TestAppendProjectLogs:
         out = capsys.readouterr().out
         assert "[project-log] unknown project: does-not-exist" in out
 
+    def test_registry_fallback_runs_when_config_reload_fails(self, setup_env, monkeypatch, caplog):
+        from config import ProjectDefinition
+        import config as config_mod
+        from datastore.docsdb import project_updater
+
+        project_name = "registry-reload-project"
+        project_dir = setup_env / "registry-reload-project"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        project_md = project_dir / "PROJECT.md"
+        project_md.write_text(
+            render_project_md_template(
+                label="Registry Reload Project",
+                description="Resolved only through DocsRegistry fallback.",
+                project_home=str(project_dir),
+                source_roots=[str(setup_env / "src")],
+                exclude_patterns=["*.log", "*.db"],
+            ),
+            encoding="utf-8",
+        )
+        defn = ProjectDefinition(
+            label="Registry Reload Project",
+            home_dir=str(project_dir),
+            source_roots=[str(setup_env / "src")],
+            auto_index=True,
+            patterns=["*.md"],
+            exclude=["*.log", "*.db", "__pycache__/"],
+            description="Resolved only through DocsRegistry fallback.",
+            state="active",
+        )
+        registry_instances = []
+
+        class _Registry:
+            def __init__(self, *args, **kwargs):
+                self.index = len(registry_instances)
+                registry_instances.append(self)
+
+            def get_project_definition(self, name):
+                if name == project_name and self.index > 0:
+                    return defn
+                return None
+
+        def _reload_fails():
+            raise RuntimeError("config reload unavailable")
+
+        stale_cfg = config_mod.get_config()
+        monkeypatch.setattr(project_updater.docs_registry, "DocsRegistry", _Registry)
+        monkeypatch.setattr(project_updater, "get_config", lambda: stale_cfg)
+        monkeypatch.setattr(config_mod, "load_config", _reload_fails)
+        monkeypatch.setattr(project_updater, "is_fail_hard_enabled", lambda: False)
+        caplog.set_level("WARNING")
+
+        metrics = project_updater.append_project_logs(
+            {project_name: ["Session 1: registry fallback survived reload failure"]},
+            trigger="Compaction",
+            date_str="2026-03-03",
+            dry_run=False,
+            index_history=False,
+        )
+
+        assert len(registry_instances) >= 2
+        assert metrics["projects_updated"] == 1
+        assert metrics["entries_written"] == 1
+        assert "registry fallback survived reload failure" in project_md.read_text(encoding="utf-8")
+        assert "config reload fallback failed" in caplog.text
+
     def test_unknown_project_filesystem_fallback_raises_when_fail_hard(self, setup_env, monkeypatch):
         from datastore.docsdb import project_updater
 
