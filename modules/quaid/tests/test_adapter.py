@@ -1095,7 +1095,7 @@ class TestOpenClawAdapter:
         assert "Assistant: First assistant event" in transcript
         assert adapter.filter_system_messages("What about HEARTBEAT mechanisms?") is False
 
-    def test_parse_session_jsonl_filters_host_memory_policy_paths_structurally(self, tmp_path):
+    def test_parse_session_jsonl_preserves_openclaw_memory_paths_for_extraction(self, tmp_path):
         session_file = tmp_path / "oc-memory-policy-path.jsonl"
         session_file.write_text(
             "\n".join(
@@ -1135,15 +1135,9 @@ class TestOpenClawAdapter:
         adapter = OpenClawAdapter()
         transcript = adapter.parse_session_jsonl(session_file)
 
-        assert "memory/2026-06-15-user-note.md" not in transcript
+        assert "memory/2026-06-15-user-note.md" in transcript
         assert "Your appointment is tomorrow at 3pm." in transcript
         assert "Durable memory is a product feature" in transcript
-
-    def test_host_memory_policy_reply_does_not_use_english_phrase_gate(self):
-        assert not OpenClawAdapter._is_host_memory_policy_reply(
-            "assistant",
-            "Durable memory won't store that unless you want me to.",
-        )
 
     def test_openclaw_startup_wrapper_predicate_is_adapter_owned(self):
         adapter = OpenClawAdapter()
@@ -4991,7 +4985,7 @@ class TestCodexAdapter:
         assert "Assistant: Quaid is noisy on startup here" in transcript
         assert "User: My espresso setup uses a Baratza Encore grinder." in transcript
 
-    def test_parse_session_jsonl_strips_openclaw_memory_paths_without_dropping_reply(self, tmp_path):
+    def test_parse_session_jsonl_preserves_openclaw_memory_paths_in_assistant_reply(self, tmp_path):
         path = tmp_path / "rollout-openclaw-memory-ack.jsonl"
         path.write_text(
             "\n".join(
@@ -5024,8 +5018,8 @@ class TestCodexAdapter:
         adapter = OpenClawAdapter()
         transcript = adapter.parse_session_jsonl(path)
         assert "cobalt-postage-oc" in transcript
-        assert "memory/2026-04-25-1909.md" not in transcript
-        assert "openclaw-workspace" not in transcript
+        assert "memory/2026-04-25-1909.md" in transcript
+        assert "openclaw-workspace" in transcript
         assert "I have remembered cobalt-postage-oc" in transcript
 
     def test_parse_session_jsonl_preserves_openclaw_durable_memory_refusal_without_path_marker(self, tmp_path):
