@@ -1308,6 +1308,142 @@ def test_refresh_runtime_config_if_changed_uses_persisted_snapshot_for_fresh_hoo
     assert cleared == [{"provider", "llm_config", "embeddings"}]
 
 
+def test_read_runtime_config_snapshot_state_warns_and_returns_none_fail_open(tmp_path, monkeypatch, caplog):
+    from core.interface import hooks
+
+    state_path = tmp_path / "runtime-config-snapshot.json"
+    state_path.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(hooks, "_runtime_config_snapshot_state_path", lambda: state_path)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        assert hooks._read_runtime_config_snapshot_state() is None
+
+    assert "Failed reading runtime config snapshot state" in caplog.text
+    assert "runtime-config-snapshot.json" in caplog.text
+
+
+def test_read_runtime_config_snapshot_state_raises_when_fail_hard(tmp_path, monkeypatch, caplog):
+    from core.interface import hooks
+
+    state_path = tmp_path / "runtime-config-snapshot.json"
+    state_path.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(hooks, "_runtime_config_snapshot_state_path", lambda: state_path)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"), pytest.raises(json.JSONDecodeError):
+        hooks._read_runtime_config_snapshot_state()
+
+    assert "Failed reading runtime config snapshot state" in caplog.text
+
+
+def test_write_runtime_config_snapshot_state_warns_and_cleans_temp_fail_open(tmp_path, monkeypatch, caplog):
+    from core.interface import hooks
+
+    state_path = tmp_path / "runtime-config-snapshot.json"
+    monkeypatch.setattr(hooks, "_runtime_config_snapshot_state_path", lambda: state_path)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(
+        hooks.os,
+        "replace",
+        lambda _src, _dst: (_ for _ in ()).throw(OSError("replace denied")),
+    )
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        hooks._write_runtime_config_snapshot_state((("config.json", 1),))
+
+    assert "Failed writing runtime config snapshot state" in caplog.text
+    assert not state_path.exists()
+    assert not list(tmp_path.glob("runtime-config-snapshot.tmp.*"))
+
+
+def test_write_runtime_config_snapshot_state_raises_when_fail_hard(tmp_path, monkeypatch, caplog):
+    from core.interface import hooks
+
+    state_path = tmp_path / "runtime-config-snapshot.json"
+    monkeypatch.setattr(hooks, "_runtime_config_snapshot_state_path", lambda: state_path)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        hooks.os,
+        "replace",
+        lambda _src, _dst: (_ for _ in ()).throw(OSError("replace denied")),
+    )
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"), pytest.raises(OSError, match="replace denied"):
+        hooks._write_runtime_config_snapshot_state((("config.json", 1),))
+
+    assert "Failed writing runtime config snapshot state" in caplog.text
+    assert not list(tmp_path.glob("runtime-config-snapshot.tmp.*"))
+
+
+def test_read_prompt_model_probe_state_warns_and_returns_empty_fail_open(tmp_path, monkeypatch, caplog):
+    from core.interface import hooks
+
+    state_path = tmp_path / "prompt-model-config-probe.json"
+    state_path.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(hooks, "_prompt_model_probe_state_path", lambda: state_path)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        assert hooks._read_prompt_model_probe_state() == {}
+
+    assert "Failed reading prompt model probe state" in caplog.text
+    assert "prompt-model-config-probe.json" in caplog.text
+
+
+def test_read_prompt_model_probe_state_raises_when_fail_hard(tmp_path, monkeypatch, caplog):
+    from core.interface import hooks
+
+    state_path = tmp_path / "prompt-model-config-probe.json"
+    state_path.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(hooks, "_prompt_model_probe_state_path", lambda: state_path)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"), pytest.raises(json.JSONDecodeError):
+        hooks._read_prompt_model_probe_state()
+
+    assert "Failed reading prompt model probe state" in caplog.text
+
+
+def test_write_prompt_model_probe_state_warns_and_cleans_temp_fail_open(tmp_path, monkeypatch, caplog):
+    from core.interface import hooks
+
+    state_path = tmp_path / "prompt-model-config-probe.json"
+    monkeypatch.setattr(hooks, "_prompt_model_probe_state_path", lambda: state_path)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(
+        hooks.os,
+        "replace",
+        lambda _src, _dst: (_ for _ in ()).throw(OSError("replace denied")),
+    )
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        hooks._write_prompt_model_probe_state({"fingerprint": "abc"})
+
+    assert "Failed writing prompt model probe state" in caplog.text
+    assert not state_path.exists()
+    assert not list(tmp_path.glob("prompt-model-config-probe.tmp.*"))
+
+
+def test_write_prompt_model_probe_state_raises_when_fail_hard(tmp_path, monkeypatch, caplog):
+    from core.interface import hooks
+
+    state_path = tmp_path / "prompt-model-config-probe.json"
+    monkeypatch.setattr(hooks, "_prompt_model_probe_state_path", lambda: state_path)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        hooks.os,
+        "replace",
+        lambda _src, _dst: (_ for _ in ()).throw(OSError("replace denied")),
+    )
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"), pytest.raises(OSError, match="replace denied"):
+        hooks._write_prompt_model_probe_state({"fingerprint": "abc"})
+
+    assert "Failed writing prompt model probe state" in caplog.text
+    assert not list(tmp_path.glob("prompt-model-config-probe.tmp.*"))
+
+
 def test_runtime_config_reload_invalidates_cached_model_config_error(monkeypatch, tmp_path):
     from core.interface import hooks
 

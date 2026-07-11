@@ -678,7 +678,10 @@ def _read_runtime_config_snapshot_state() -> tuple[tuple[str, int], ...] | None:
                 return None
             items.append((str(item[0]), int(item[1])))
         return tuple(items)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed reading runtime config snapshot state %s: %s", path, exc)
+        if _fail_hard_enabled():
+            raise
         return None
 
 
@@ -692,12 +695,15 @@ def _write_runtime_config_snapshot_state(snapshot: tuple[tuple[str, int], ...]) 
         tmp_path = path.with_suffix(f".tmp.{os.getpid()}")
         tmp_path.write_text(json.dumps({"snapshot": list(snapshot)}), encoding="utf-8")
         os.replace(tmp_path, path)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed writing runtime config snapshot state %s: %s", path, exc)
         if tmp_path is not None:
             try:
                 tmp_path.unlink()
             except Exception:
                 pass
+        if _fail_hard_enabled():
+            raise
 
 
 def _reset_runtime_resolution_caches() -> None:
@@ -970,8 +976,10 @@ def _read_prompt_model_probe_state() -> Dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
-    except Exception:
-        logger.warning("Failed reading prompt model probe state", exc_info=True)
+    except Exception as exc:
+        logger.warning("Failed reading prompt model probe state %s: %s", path, exc)
+        if _fail_hard_enabled():
+            raise
         return {}
 
 
@@ -985,13 +993,15 @@ def _write_prompt_model_probe_state(payload: Dict[str, Any]) -> None:
         tmp_path = path.with_suffix(f".tmp.{os.getpid()}")
         tmp_path.write_text(json.dumps(payload), encoding="utf-8")
         os.replace(tmp_path, path)
-    except Exception:
-        logger.warning("Failed writing prompt model probe state", exc_info=True)
+    except Exception as exc:
+        logger.warning("Failed writing prompt model probe state %s: %s", path, exc)
         if tmp_path is not None:
             try:
                 tmp_path.unlink()
             except Exception:
                 pass
+        if _fail_hard_enabled():
+            raise
 
 
 def _invalidate_prompt_model_probe_error_state(reason: str) -> bool:
