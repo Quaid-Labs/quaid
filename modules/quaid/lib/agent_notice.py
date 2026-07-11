@@ -140,7 +140,7 @@ def _uses_turn_scoped_provider_notices(adapter: Any, *, severity: str, source: s
     try:
         return adapter.get_capability("turn_scoped_provider_notices", False) is True
     except Exception as exc:
-        logger.debug("_uses_turn_scoped_provider_notices failed: %s", exc)
+        logger.warning("_uses_turn_scoped_provider_notices failed: %s", exc)
         if is_fail_hard_enabled():
             raise
         return False
@@ -214,7 +214,8 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     tmp_path.replace(path)
     try:
         path.chmod(0o600)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed setting notice state file permissions for %s: %s", path, exc)
         pass
 
 

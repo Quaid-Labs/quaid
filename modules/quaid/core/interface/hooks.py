@@ -143,7 +143,9 @@ def _wake_daemon_after_signal() -> None:
         if read_pid() is not None:
             return
     except Exception as exc:
-        logger.debug("Failed checking daemon PID after signal write: %s", exc)
+        logger.warning("Failed checking daemon PID after signal write: %s", exc)
+        if _fail_hard_enabled():
+            raise
 
     try:
         _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
@@ -156,7 +158,9 @@ def _wake_daemon_after_signal() -> None:
             env=_daemon_start_env(),
         )
     except Exception as exc:
-        logger.debug("Failed waking extraction daemon after signal write: %s", exc)
+        logger.warning("Failed waking extraction daemon after signal write: %s", exc)
+        if _fail_hard_enabled():
+            raise
 
 _CODEX_TOOL_OUTPUT_KEYS = (
     "tool_output",
@@ -611,7 +615,10 @@ def _get_quaid_agents_baseline_context() -> str:
             f"{body}\n"
             "</quaid_system_message>"
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed reading Quaid AGENTS.md baseline context: %s", exc, exc_info=True)
+        if _fail_hard_enabled():
+            raise
         return ""
 
 
@@ -653,13 +660,15 @@ def _runtime_config_snapshot_state_path() -> Path | None:
         from lib.adapter import get_adapter
 
         data_dir = get_adapter().data_dir()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving runtime config snapshot data dir: %s", exc)
         if _fail_hard_enabled():
             raise
         return None
     try:
         return Path(data_dir) / "runtime-config-snapshot.json"
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving runtime config snapshot state path: %s", exc)
         if _fail_hard_enabled():
             raise
         return None
@@ -711,7 +720,8 @@ def _reset_runtime_resolution_caches() -> None:
         from lib.embeddings import reset_embeddings_provider
 
         reset_embeddings_provider()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resetting embeddings provider cache: %s", exc)
         if _fail_hard_enabled():
             raise
         pass
@@ -719,7 +729,8 @@ def _reset_runtime_resolution_caches() -> None:
         from lib.llm_clients import reset_model_config_cache
 
         reset_model_config_cache()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resetting model config cache: %s", exc)
         if _fail_hard_enabled():
             raise
         try:
@@ -729,7 +740,8 @@ def _reset_runtime_resolution_caches() -> None:
             llm_clients._fast_reasoning_model = ""
             llm_clients._deep_reasoning_model = ""
             llm_clients._pricing_loaded = False
-        except Exception:
+        except Exception as fallback_exc:
+            logger.warning("Failed resetting model config fallback cache flags: %s", fallback_exc)
             if _fail_hard_enabled():
                 raise
             pass
@@ -919,13 +931,15 @@ def _prompt_model_probe_state_path() -> Path | None:
         from lib.adapter import get_adapter
 
         data_dir = get_adapter().data_dir()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving prompt model probe data dir: %s", exc)
         if _fail_hard_enabled():
             raise
         return None
     try:
         return Path(data_dir) / "prompt-model-config-probe.json"
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving prompt model probe state path: %s", exc)
         if _fail_hard_enabled():
             raise
         return None
@@ -1101,7 +1115,8 @@ def _first_useful_line_from_prefix(path: Path, *, max_bytes: int = 8192) -> str:
         with path.open("rb") as fh:
             prefix = fh.read(max_bytes)
         text = prefix.decode("utf-8", errors="replace")
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving useful line from %s: %s", path, exc)
         return ""
     for line in text.splitlines():
         stripped = line.strip()
@@ -1114,7 +1129,8 @@ def _path_contains(base: Path, candidate: Path) -> bool:
     try:
         base_resolved = base.resolve()
         candidate_resolved = candidate.resolve()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving project context paths base=%s candidate=%s: %s", base, candidate, exc)
         base_resolved = base
         candidate_resolved = candidate
     base_str = str(base_resolved)
@@ -1128,7 +1144,8 @@ def _is_active_project_context(project_dir: Path, registry_entry: Dict[str, Any]
         return False
     try:
         cwd = Path(raw_cwd)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving active project cwd %s: %s", raw_cwd, exc)
         return False
     candidates: List[Path] = [project_dir]
     for key in ("canonical_path", "source_root"):
@@ -1152,7 +1169,10 @@ def _current_quaid_instance_id() -> str:
         from lib.instance import instance_id as _instance_id
 
         return str(_instance_id() or "").strip()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving current Quaid instance id: %s", exc)
+        if _fail_hard_enabled():
+            raise
         return ""
 
 
@@ -1338,8 +1358,10 @@ def _write_hook_trace(event: str, payload: dict | None = None) -> None:
         trace_path.parent.mkdir(parents=True, exist_ok=True)
         with trace_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except Exception:
-        logger.debug("Failed writing hook trace event %s to %s", event, trace_path, exc_info=True)
+    except Exception as exc:
+        logger.warning("Failed writing hook trace event %s to %s: %s", event, trace_path, exc, exc_info=True)
+        if _fail_hard_enabled():
+            raise
 
 
 def _preinject_evidence_details(rows: List[Dict], limit: int = 10) -> List[Dict]:
@@ -1659,7 +1681,9 @@ def _infer_docs_project_from_cwd(cwd: str) -> str | None:
                         best_match = str(project_name).strip()
         return best_match or None
     except Exception as exc:
-        logger.debug("docs project hint inference failed cwd=%s: %s", value, exc)
+        logger.warning("docs project hint inference failed cwd=%s: %s", value, exc)
+        if _fail_hard_enabled():
+            raise
         return None
 
 
@@ -2518,7 +2542,10 @@ def _current_adapter_id() -> str:
         from lib.adapter import get_adapter
 
         return str(get_adapter().adapter_id() or "").strip().lower()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving current adapter id: %s", exc)
+        if _fail_hard_enabled():
+            raise
         return ""
 
 
@@ -2600,13 +2627,15 @@ def _context_refresh_guard() -> Dict[str, int]:
         parsed = int(guard.get("min_interval_minutes", min_interval_minutes))
         if parsed > 0:
             min_interval_minutes = parsed
-    except Exception:
+    except Exception as exc:
+        logger.warning("Invalid context_refresh_guard.min_interval_minutes; using default: %s", exc)
         pass
     try:
         parsed = int(guard.get("min_turns", min_turns))
         if parsed > 0:
             min_turns = parsed
-    except Exception:
+    except Exception as exc:
+        logger.warning("Invalid context_refresh_guard.min_turns; using default: %s", exc)
         pass
     return {
         "min_interval_minutes": min_interval_minutes,
@@ -2622,7 +2651,8 @@ def _context_refresh_state_path() -> Path | None:
         if not isinstance(data_dir, (str, Path)):
             return None
         return Path(data_dir) / "context-refresh-state.json"
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving context refresh state path: %s", exc)
         if _fail_hard_enabled():
             raise
         return None
@@ -2636,7 +2666,8 @@ def _context_refresh_timeout_marker_path(session_id: str) -> Path | None:
         from lib.adapter import get_adapter
 
         return get_adapter().data_dir() / "context-refresh-timeout" / f"{sid}.json"
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving context refresh timeout marker path for session=%s: %s", sid, exc)
         if _fail_hard_enabled():
             raise
         return None
@@ -2650,7 +2681,8 @@ def _context_refresh_compaction_marker_path(session_id: str) -> Path | None:
         from lib.adapter import get_adapter
 
         return get_adapter().data_dir() / "context-refresh-compaction" / f"{sid}.json"
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving context refresh compaction marker path for session=%s: %s", sid, exc)
         if _fail_hard_enabled():
             raise
         return None
@@ -2661,7 +2693,8 @@ def _context_refresh_compaction_latest_marker_path() -> Path | None:
         from lib.adapter import get_adapter
 
         return get_adapter().data_dir() / "context-refresh-compaction" / "_latest.json"
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving latest context refresh compaction marker path: %s", exc)
         if _fail_hard_enabled():
             raise
         return None
@@ -2702,7 +2735,8 @@ def _arm_compaction_refresh_marker(
                 json.dumps(marker_payload, ensure_ascii=True, indent=2) + "\n",
                 encoding="utf-8",
             )
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed writing compaction refresh marker for session=%s path=%s: %s", session_id, marker_path, exc)
         if _fail_hard_enabled():
             raise
         pass
@@ -2749,7 +2783,8 @@ def _consume_compaction_refresh_marker(session_id: str) -> bool:
         return False
     try:
         latest_path.unlink()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed deleting latest compaction refresh marker %s: %s", latest_path, exc)
         pass
     if marker_session_id:
         old_marker_path = _context_refresh_compaction_marker_path(marker_session_id)
@@ -2788,7 +2823,8 @@ def _consume_timeout_refresh_marker(session_id: str) -> bool:
         return False
     try:
         marker_path.unlink()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed deleting timeout refresh marker %s: %s", marker_path, exc)
         pass
     return True
 
@@ -2802,7 +2838,10 @@ def _load_context_refresh_state() -> Dict[str, Any]:
             payload = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(payload, dict):
                 return payload
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed loading context refresh state %s: %s", path, exc)
+        if _fail_hard_enabled():
+            raise
         pass
     return {}
 
@@ -2846,7 +2885,8 @@ def _store_context_refresh_state(state: Dict[str, Any]) -> None:
         tmp_path.write_text(json.dumps(state_to_write, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp_path, path)
         tmp_path = None
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed storing context refresh state %s: %s", path, exc)
         if _fail_hard_enabled():
             raise
     finally:
@@ -2878,7 +2918,8 @@ def _update_context_refresh_state_locked(update_func):
         lock_path = path.with_suffix(path.suffix + ".lock")
         lock_file = lock_path.open("a+", encoding="utf-8")
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed locking context refresh state %s: %s", path, exc)
         if lock_file is not None:
             try:
                 lock_file.close()
@@ -2907,7 +2948,8 @@ def _update_context_refresh_state_locked(update_func):
             tmp_path.write_text(json.dumps(state, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
             os.replace(tmp_path, path)
             tmp_path = None
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed writing context refresh state under lock %s: %s", path, exc)
             if _fail_hard_enabled():
                 raise
         return result

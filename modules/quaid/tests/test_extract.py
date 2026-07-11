@@ -9342,12 +9342,14 @@ class TestGetOwnerId:
         from ingest.extract import _get_owner_id
         assert _get_owner_id("custom") == "custom"
 
-    def test_fallback_default(self):
+    def test_fallback_default(self, caplog):
         from ingest.extract import _get_owner_id
         # With config mocked to fail
         with patch("ingest.extract.get_config", side_effect=Exception("no config")), \
-             patch("ingest.extract.is_fail_hard_enabled", return_value=False):
+             patch("ingest.extract.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="ingest.extract"):
             assert _get_owner_id(None) == "default"
+        assert "extract owner resolution failed; using default owner" in caplog.text
 
     def test_fallback_raises_when_fail_hard_enabled(self):
         from ingest.extract import _get_owner_id

@@ -252,8 +252,9 @@ def test_wake_daemon_after_signal_logs_pid_probe_failure(monkeypatch, caplog):
 
     monkeypatch.setattr(extraction_daemon, "read_pid", lambda: (_ for _ in ()).throw(RuntimeError("pid broken")))
     monkeypatch.setattr(hooks.subprocess, "Popen", lambda *args, **kwargs: None)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
 
-    with caplog.at_level("DEBUG", logger="core.interface.hooks"):
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
         hooks._wake_daemon_after_signal()
 
     assert "Failed checking daemon PID after signal write: pid broken" in caplog.text
@@ -265,11 +266,50 @@ def test_wake_daemon_after_signal_logs_start_failure(monkeypatch, caplog):
 
     monkeypatch.setattr(extraction_daemon, "read_pid", lambda: None)
     monkeypatch.setattr(hooks.subprocess, "Popen", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("spawn failed")))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
 
-    with caplog.at_level("DEBUG", logger="core.interface.hooks"):
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
         hooks._wake_daemon_after_signal()
 
     assert "Failed waking extraction daemon after signal write: spawn failed" in caplog.text
+
+
+def test_quaid_agents_baseline_context_logs_and_returns_empty_fail_open(monkeypatch, caplog):
+    from core.interface import hooks
+
+    monkeypatch.setattr(hooks, "_get_projects_dir", lambda: (_ for _ in ()).throw(OSError("projects unavailable")))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        assert hooks._get_quaid_agents_baseline_context() == ""
+
+    assert "Failed reading Quaid AGENTS.md baseline context" in caplog.text
+
+
+def test_quaid_agents_baseline_context_raises_when_fail_hard(monkeypatch):
+    from core.interface import hooks
+
+    monkeypatch.setattr(hooks, "_get_projects_dir", lambda: (_ for _ in ()).throw(OSError("projects unavailable")))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(OSError, match="projects unavailable"):
+        hooks._get_quaid_agents_baseline_context()
+
+
+def test_current_instance_and_adapter_ids_log_fail_open(monkeypatch, caplog):
+    from core.interface import hooks
+
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.setattr("lib.instance.instance_id", lambda: (_ for _ in ()).throw(RuntimeError("instance unavailable")))
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: (_ for _ in ()).throw(RuntimeError("adapter unavailable")))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        assert hooks._current_quaid_instance_id() == ""
+        assert hooks._current_adapter_id() == ""
+
+    assert "Failed resolving current Quaid instance id" in caplog.text
+    assert "Failed resolving current adapter id" in caplog.text
 
 
 def test_get_pending_context_logs_and_returns_empty_when_fail_open(monkeypatch, caplog):
@@ -1726,6 +1766,9 @@ def mock_adapter(tmp_path, sessions_dir, monkeypatch):
     adapter.get_pending_context.return_value = ""
     adapter.resolve_prompt_submit_signal.return_value = None
     adapter.instance_root.return_value = tmp_path
+    projects_dir = tmp_path / "projects"
+    projects_dir.mkdir()
+    adapter.projects_dir.return_value = projects_dir
 
     monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
     monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
@@ -1771,8 +1814,9 @@ def test_hook_trace_logs_write_failures(tmp_path, monkeypatch, caplog):
     logs_path = tmp_path / "instances" / "trace-test" / "logs"
     logs_path.parent.mkdir(parents=True)
     logs_path.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
 
-    with caplog.at_level("DEBUG", logger="core.interface.hooks"):
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
         hooks._write_hook_trace("test.event", {"value": "ok"})
 
     assert "Failed writing hook trace event test.event" in caplog.text
@@ -2343,6 +2387,25 @@ def test_store_context_refresh_state_preserves_existing_file_when_merge_fails_fa
     assert state_path.read_text(encoding="utf-8") == original_state
 
 
+def test_load_context_refresh_state_logs_fail_open_and_raises_fail_hard(tmp_path, monkeypatch, caplog):
+    from core.interface import hooks
+
+    state_path = tmp_path / "data" / "context-refresh-state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(hooks, "_context_refresh_state_path", lambda: state_path)
+
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        assert hooks._load_context_refresh_state() == {}
+
+    assert "Failed loading context refresh state" in caplog.text
+
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+    with pytest.raises(json.JSONDecodeError):
+        hooks._load_context_refresh_state()
+
+
 def test_turn_based_refresh_preserves_existing_file_when_state_parse_fails(tmp_path, monkeypatch, caplog):
     from core.interface import hooks
 
@@ -2742,6 +2805,7 @@ def test_hook_extract_precompact_accepts_fresh_cc_camelcase_payload(
 
     monkeypatch.setattr("core.interface.hooks._maybe_compaction_refresh_context_artifacts", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("core.interface.hooks.subprocess.Popen", lambda *a, **kw: None)
+    monkeypatch.setattr("core.extraction_daemon.read_pid", lambda: None)
     monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
     monkeypatch.setattr("core.extraction_daemon.write_staged_payload_flush_signals", lambda *_args, **_kwargs: [])
 
@@ -3832,7 +3896,7 @@ class TestHookInjectRecallResilience:
         from core.interface import hooks
 
         projects_dir = tmp_path / "projects"
-        projects_dir.mkdir()
+        projects_dir.mkdir(exist_ok=True)
         identity_dir = tmp_path / "identity"
         identity_dir.mkdir()
         rules_dir = tmp_path / "rules"

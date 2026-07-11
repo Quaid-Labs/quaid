@@ -828,6 +828,7 @@ def _get_owner_id(override: Optional[str] = None) -> str:
     except Exception as exc:
         if is_fail_hard_enabled():
             raise RuntimeError(f"extract owner resolution failed: {exc}") from exc
+        logger.warning("extract owner resolution failed; using default owner: %s", exc)
         return "default"
 
 
