@@ -1405,18 +1405,6 @@ class OpenClawAdapter(QuaidAdapter):
             },
         }
 
-    def installer_supports_live_model_validation(self) -> bool:
-        return False
-
-    def installer_validate_model_pair_live(
-        self,
-        provider: str,
-        deep_model: str,
-        fast_model: str,
-    ) -> dict:
-        _ = (provider, deep_model, fast_model)
-        return {"supported": False, "ok": True, "message": "", "results": []}
-
     def _get_agent_config_dir(self) -> Path:
         """Path to the gateway's agent config directory."""
         return self._openclaw_root_dir() / "agents" / "main" / "agent"

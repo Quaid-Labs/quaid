@@ -2573,18 +2573,6 @@ class TestOpenClawAdapter:
         assert review["deep"]["provider"] == "openai"
         assert review["fast"]["provider"] == "openai"
 
-    def test_installer_validate_model_pair_live_is_disabled(self, monkeypatch):
-        adapter = OpenClawAdapter()
-        result = adapter.installer_validate_model_pair_live(
-            "openai",
-            "gpt-5.4",
-            "gpt-5.4-mini",
-        )
-
-        assert result["supported"] is False
-        assert result["ok"] is True
-        assert result["results"] == []
-
     def test_list_agent_instance_ids_logs_gateway_config_failure_when_fail_open(
         self,
         monkeypatch,
@@ -3511,7 +3499,6 @@ class TestCodexAdapter:
         }
         assert adapter.get_deep_provider_default() == "anthropic"
         assert adapter.get_fast_provider_default() == "anthropic"
-        assert adapter.installer_supports_live_model_validation() is False
 
     def test_installer_install_state_reports_missing_codex_cli(self, tmp_path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda _name: None)

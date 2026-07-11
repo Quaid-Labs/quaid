@@ -1310,18 +1310,6 @@ class CodexAdapter(QuaidAdapter):
             }
         return None
 
-    def installer_supports_live_model_validation(self) -> bool:
-        return False
-
-    def installer_validate_model_pair_live(
-        self,
-        provider: str,
-        deep_model: str,
-        fast_model: str,
-    ) -> dict:
-        _ = (provider, deep_model, fast_model)
-        return {"supported": False, "ok": True, "message": "", "results": []}
-
     def get_fast_provider_default(self) -> str:
         return "anthropic"
 

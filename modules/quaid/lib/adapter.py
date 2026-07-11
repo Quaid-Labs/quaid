@@ -1003,26 +1003,6 @@ class QuaidAdapter(abc.ABC):
             },
         }
 
-    def installer_supports_live_model_validation(self) -> bool:
-        """Whether this adapter can validate install-time model pairs live."""
-        return False
-
-    def installer_validate_model_pair_live(
-        self,
-        provider: str,
-        deep_model: str,
-        fast_model: str,
-    ) -> Dict[str, Any]:
-        """Validate deep/fast models against the live provider when supported."""
-        _ = (provider, deep_model, fast_model)
-        return {
-            "supported": False,
-            "ok": True,
-            "message": "",
-            "results": [],
-        }
-
-
 class StandaloneAdapter(QuaidAdapter):
     """Default adapter for standalone Quaid installations.
 

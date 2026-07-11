@@ -799,7 +799,7 @@ PYEOF
 ```bash
 ssh REMOTE_HOST 'curl -sf http://localhost:18789/v1/models | python3 -c "import json,sys; ms=[m[\"id\"] for m in json.load(sys.stdin).get(\"data\",[])]; print(\"Models:\", ms)"'
 ```
-Note: gpt-5.4 and gpt-5.4-mini may not appear in /v1/models even on a healthy gateway. The OC adapter's `installer_validate_model_pair_live` returns `supported: False` (no live check). The installer uses hardcoded static defaults per provider and calls `installer_ensure_gateway_model_allowlist` to register models in `agents.defaults.models` after install. This /v1/models query is informational only — the install does NOT require these models to appear here.
+Note: gpt-5.4 and gpt-5.4-mini may not appear in /v1/models even on a healthy gateway. The installer uses hardcoded static defaults per provider and calls `installer_ensure_gateway_model_allowlist` to register models in `agents.defaults.models` after install. This /v1/models query is informational only — the install does NOT require these models to appear here.
 
 **CC only** — clear any stale Quaid hooks before install:
 ```bash
