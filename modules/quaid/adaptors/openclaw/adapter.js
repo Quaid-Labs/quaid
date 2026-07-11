@@ -5132,6 +5132,18 @@ ${sessionScope}` : "";
         source: String(selected.source || "")
       };
     };
+    const embeddedPromptBuildFallbackHasFreshMessageReceivedTurn = (event, ctx) => {
+      const sessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+      const cachedUserText = String(lastUserMessageQuery?.text || "").trim();
+      const { userText: fallbackUserText } = embeddedPromptBuildFallbackSelection(event, ctx);
+      const cacheAgeMs = Date.now() - Number(lastUserMessageQuery?.seenAtMs || 0);
+      return {
+        matched: Boolean(
+          cachedUserText && fallbackUserText && cachedUserText === fallbackUserText && cacheAgeMs >= 0 && cacheAgeMs <= 1e4 && lastUserMessageQueryMatchesSession(lastUserMessageQuery, sessionId)
+        ),
+        cacheAgeMs
+      };
+    };
     const embeddedPromptBuildFallbackStartEventKey = (agentLabel, event, ctx) => {
       const sessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
       const sessionScope = embeddedPromptBuildFallbackSessionScope(event, ctx);
@@ -5424,6 +5436,16 @@ notify_user(${JSON.stringify(message)})
         return result;
       }
       if (openClawScopeUpgradePending()) {
+        const freshMessageReceivedTurn = embeddedPromptBuildFallbackHasFreshMessageReceivedTurn(event, ctx);
+        if (freshMessageReceivedTurn.matched) {
+          writeHookTrace("hook.before_agent_start.embedded_prompt_build_fallback_skipped", {
+            session_id: String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || ""),
+            session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
+            reason: "message_received_will_prompt_build",
+            cache_age_ms: freshMessageReceivedTurn.cacheAgeMs
+          });
+          return result;
+        }
         const startEventKey = embeddedPromptBuildFallbackStartEventKey(startAgentLabel, event, ctx);
         const duplicateStartRun = getEmbeddedPromptBuildFallbackStartRun(startEventKey);
         if (duplicateStartRun) {

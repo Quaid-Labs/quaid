@@ -1428,10 +1428,14 @@ describe("openclaw deferred notices", () => {
     const beforeAgentStartCall = api.on.mock.calls.find((call: any[]) =>
       call?.[0] === "before_agent_start" && call?.[2]?.name === "memory-injection"
     );
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
     const messageReceivedCall = api.on.mock.calls.find((call: any[]) =>
       call?.[0] === "message_received" && call?.[2]?.name === "message-received-command-memory-extraction"
     );
     expect(beforeAgentStartCall).toBeTruthy();
+    expect(beforePromptBuildCall).toBeTruthy();
     expect(messageReceivedCall).toBeTruthy();
 
     const statement = "Ready for the next check.";
@@ -1473,6 +1477,17 @@ describe("openclaw deferred notices", () => {
       },
       ctx,
     );
+    const promptResult = await beforePromptBuildCall?.[1](
+      {
+        prependContext: "",
+        prompt: statement,
+        messages: [{ role: "user", content: statement }],
+        sessionId,
+        sessionKey,
+      },
+      ctx,
+    );
+    expect(String(promptResult?.prependContext || "")).toContain("next check should continue");
 
     const preservedTranscript = path.join(
       fixture.hiddenHome,
@@ -1487,12 +1502,13 @@ describe("openclaw deferred notices", () => {
     expect(readExtractionSignals(fixture.hiddenHome, "openclaw-main")).toHaveLength(0);
 
     const traceRows = readHookTraceEvents(fixture.hiddenHome, "openclaw-main");
-    expect(traceRows.map((row) => String(row.event || ""))).toContain(
-      "hook.before_agent_start.embedded_fallback_session_end_skipped",
-    );
+    const traceEvents = traceRows.map((row) => String(row.event || ""));
+    expect(traceEvents).toContain("hook.before_agent_start.embedded_prompt_build_fallback_skipped");
+    expect(traceEvents).toContain("hook.before_prompt_build.injection_applied");
+    expect(traceEvents).not.toContain("hook.before_agent_start.embedded_fallback_transcript_preserved");
     expect(traceRows).toContainEqual(expect.objectContaining({
-      event: "hook.before_agent_start.embedded_fallback_session_end_skipped",
-      reason: "message_received_preserved_turn",
+      event: "hook.before_agent_start.embedded_prompt_build_fallback_skipped",
+      reason: "message_received_will_prompt_build",
     }));
 
     fetchMock.mockRestore();
