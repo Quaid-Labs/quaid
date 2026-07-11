@@ -19016,6 +19016,18 @@ class TestRecallFastHookInjectContract:
 
         assert [entity.name for entity in entities] == ["美玲"]
 
+    def test_extract_entities_from_text_matches_lowercase_ascii_script_db_entity(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        nguyen = mg.Node.create("Person", "Nguyen Van An", owner_id="quaid")
+        graph.add_node(nguyen, embed=False)
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            entities = mg.extract_entities_from_text("nguyen van an gia dinh")
+
+        assert [entity.name for entity in entities] == ["Nguyen Van An"]
+
     def test_should_expand_graph_uses_unicode_person_entities_with_owner_name(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
@@ -21761,6 +21773,25 @@ class TestRecallFastHookInjectContract:
             assert mg._relation_chain_groups_for_query("兄の妻は何をしていますか") == ["sibling", "spouse"]
             assert mg._has_relation_chain_structure("兄の妻は何をしていますか") is True
             assert mg._has_generic_graph_signal("兄の妻は何をしていますか") is True
+
+    def test_relation_chain_activity_score_uses_structural_terminal_fact_not_english_vocab(self):
+        import datastore.memorydb.memory_graph as mg
+
+        row = {
+            "via": "graph_attached_fact",
+            "text": "美玲は陶芸作品を作っている。",
+            "graph_relation_groups": ["sibling", "spouse", "has_fact"],
+        }
+
+        with patch.object(
+            mg,
+            "get_edge_keywords",
+            return_value={
+                "sibling_of": ["兄"],
+                "spouse_of": ["妻"],
+            },
+        ):
+            assert mg._relation_chain_activity_answer_score("兄の妻は職業?", row) == 2
 
     def test_generic_graph_signal_uses_structural_entity_pairs_not_english_cues(self):
         import datastore.memorydb.memory_graph as mg

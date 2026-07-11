@@ -4410,56 +4410,27 @@ def _terminal_relation_chain_match(row_groups: List[str], intent_groups: List[st
     return int(path_groups == intent_groups)
 
 
-_RELATION_CHAIN_ACTIVITY_QUERY_TERMS = {
-    "career",
-    "careers",
-    "employed",
-    "employment",
-    "employer",
-    "job",
-    "jobs",
-    "occupation",
-    "occupations",
-    "profession",
-    "professions",
-    "role",
-    "roles",
-    "work",
-    "works",
-}
-_RELATION_CHAIN_ACTIVITY_FACT_TERMS = {
-    "career",
-    "careers",
-    "employed",
-    "employment",
-    "employer",
-    "job",
-    "jobs",
-    "occupation",
-    "occupations",
-    "profession",
-    "professions",
-    "role",
-    "roles",
-    "work",
-    "worked",
-    "working",
-    "works",
-}
-
-
 def _relation_chain_activity_answer_score(query: Optional[str], row: Dict[str, Any]) -> int:
-    query_tokens = set(_normalize_relation_query_tokens(query or ""))
-    relation_chain_query = len(_relation_chain_groups_for_query(query or "")) >= 2
-    activity_query = bool(query_tokens & _RELATION_CHAIN_ACTIVITY_QUERY_TERMS) or relation_chain_query
-    if not activity_query:
+    relation_groups = _relation_chain_groups_for_query(query or "")
+    if len(relation_groups) < 2:
+        return 0
+    row_groups = _graph_row_relation_groups(row)
+    if not row_groups or row_groups[-1] != "has_fact":
+        return 0
+    if not _terminal_relation_chain_match(row_groups, relation_groups):
         return 0
     searchable = " ".join([
         str((row or {}).get("text") or ""),
         str((row or {}).get("keywords") or ""),
-        str((row or {}).get("graph_path") or ""),
-    ]).lower()
-    return int(any(_text_contains_anchor_term(searchable, term) for term in _RELATION_CHAIN_ACTIVITY_FACT_TERMS))
+    ])
+    relation_descriptors = _relation_descriptor_tokens()
+    if relation_descriptors and any(
+        _text_contains_anchor_term(searchable, term)
+        for term in relation_descriptors
+        if str(term or "").strip()
+    ):
+        return 1
+    return 2
 
 
 def _rank_graph_row_for_relation_chain(
@@ -4957,8 +4928,8 @@ def has_owner_pronoun(query: str) -> bool:
 def extract_entities_from_text(text: str) -> List[Node]:
     """Extract entity names from text and look them up in the graph.
 
-    Uses simple heuristics: capitalized words (proper nouns) that exist
-    as Person/Place/Entity nodes in the database.
+    Uses literal graph-backed name matching so entity detection is not tied to
+    English capitalization conventions.
 
     Args:
         text: Text to extract entities from
@@ -4968,130 +4939,57 @@ def extract_entities_from_text(text: str) -> List[Node]:
     """
     graph = get_graph()
 
-    # Extract capitalized words (potential proper nouns)
-    # Skip common stopwords and short words
-    words = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text)
-
-    # Also get single capitalized words
-    single_caps = re.findall(r'\b[A-Z][a-z]{2,}\b', text)
-    words.extend(single_caps)
-    # Non-ASCII names often do not have case markers or whitespace segmentation.
-    # Add exact Unicode token candidates, then supplement below with DB-backed
-    # substring matching for known entity names.
-    words.extend(
-        w for w in re.findall(r"[^\W\d_][\w'_-]*(?:\s+[^\W\d_][\w'_-]*)?", text, flags=re.UNICODE)
-        if _has_non_ascii(w)
-    )
-
-    # Dedupe while preserving order
-    seen = set()
-    unique_words = []
-    for w in words:
-        key = _identifier_key(w) if _has_non_ascii(w) else w.lower()
-        if key not in seen:
-            seen.add(key)
-            unique_words.append(w)
-
-    # Look up each candidate — exact match first, then prefix match on entity types
     entities = []
     entity_ids = set()
-    for word in unique_words[:10]:  # Limit to prevent excessive lookups
-        node = graph.find_node_by_name(word)
-        if not node:
-            # Case-insensitive exact, then prefix match on entity types
-            with graph._get_conn() as conn:
-                row = conn.execute(
-                    """
-                    SELECT n.*
-                    FROM nodes n
-                    WHERE LOWER(n.name) = LOWER(?)
-                      AND n.type IN ('Person', 'Place', 'Pet', 'Entity', 'Concept')
-                    ORDER BY
-                        CASE WHEN n.deleted_at IS NULL THEN 0 ELSE 1 END,
-                        CASE WHEN n.superseded_by IS NULL THEN 0 ELSE 1 END,
-                        CASE WHEN n.status IS NULL OR n.status IN ('active', 'approved', 'pending') THEN 0 ELSE 1 END,
-                        (
-                            SELECT COUNT(*)
-                            FROM edges e
-                            WHERE e.source_id = n.id OR e.target_id = n.id
-                        ) DESC,
-                        COALESCE(n.updated_at, n.created_at, n.accessed_at, '') DESC,
-                        n.rowid DESC
-                    LIMIT 1
-                    """,
-                    (word,)
-                ).fetchone()
-                if not row:
-                    row = conn.execute(
-                        """
-                        SELECT n.*
-                        FROM nodes n
-                        WHERE n.name LIKE ? ESCAPE '\\'
-                          AND n.type IN ('Person', 'Place', 'Pet', 'Organization')
-                        ORDER BY
-                            LENGTH(n.name),
-                            CASE WHEN n.deleted_at IS NULL THEN 0 ELSE 1 END,
-                            CASE WHEN n.superseded_by IS NULL THEN 0 ELSE 1 END,
-                            CASE WHEN n.status IS NULL OR n.status IN ('active', 'approved', 'pending') THEN 0 ELSE 1 END,
-                            (
-                                SELECT COUNT(*)
-                                FROM edges e
-                                WHERE e.source_id = n.id OR e.target_id = n.id
-                            ) DESC,
-                            COALESCE(n.updated_at, n.created_at, n.accessed_at, '') DESC,
-                            n.rowid DESC
-                        LIMIT 1
-                        """,
-                        (_escape_like_pattern(word) + "%",)
-                    ).fetchone()
-                if row:
-                    node = graph._row_to_node(row)
-        if node and node.type in ("Person", "Place", "Entity", "Pet", "Concept") and node.id not in entity_ids:
-            entity_ids.add(node.id)
-            entities.append(node)
-
-    if _has_non_ascii(text):
-        normalized_text = _identifier_key(text)
-        try:
-            with graph._get_conn() as conn:
-                rows = conn.execute(
-                    """
-                    SELECT n.*
-                    FROM nodes n
-                    WHERE n.type IN ('Person', 'Place', 'Pet', 'Entity', 'Concept')
-                    ORDER BY
-                        LENGTH(n.name) DESC,
-                        CASE WHEN n.deleted_at IS NULL THEN 0 ELSE 1 END,
-                        CASE WHEN n.superseded_by IS NULL THEN 0 ELSE 1 END,
-                        CASE WHEN n.status IS NULL OR n.status IN ('active', 'approved', 'pending') THEN 0 ELSE 1 END,
-                        (
-                            SELECT COUNT(*)
-                            FROM edges e
-                            WHERE e.source_id = n.id OR e.target_id = n.id
-                        ) DESC,
-                        COALESCE(n.updated_at, n.created_at, n.accessed_at, '') DESC,
-                        n.rowid DESC
-                    LIMIT 500
-                    """
-                ).fetchall()
-            for row in rows:
-                name = str(row["name"] or "").strip()
-                if not name or not _has_non_ascii(name):
-                    continue
-                name_key = _identifier_key(name)
+    normalized_text = _identifier_key(text)
+    folded_text = _unicode_casefold(text)
+    try:
+        with graph._get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT n.*
+                FROM nodes n
+                WHERE n.type IN ('Person', 'Place', 'Pet', 'Entity', 'Concept')
+                ORDER BY
+                    LENGTH(n.name) DESC,
+                    CASE WHEN n.deleted_at IS NULL THEN 0 ELSE 1 END,
+                    CASE WHEN n.superseded_by IS NULL THEN 0 ELSE 1 END,
+                    CASE WHEN n.status IS NULL OR n.status IN ('active', 'approved', 'pending') THEN 0 ELSE 1 END,
+                    (
+                        SELECT COUNT(*)
+                        FROM edges e
+                        WHERE e.source_id = n.id OR e.target_id = n.id
+                    ) DESC,
+                    COALESCE(n.updated_at, n.created_at, n.accessed_at, '') DESC,
+                    n.rowid DESC
+                LIMIT 500
+                """
+            ).fetchall()
+        for row in rows:
+            name = str(row["name"] or "").strip()
+            if not name:
+                continue
+            name_key = _identifier_key(name)
+            if _has_non_ascii(name):
                 if len(name_key) < 2 or name_key not in normalized_text:
                     continue
-                node = graph._row_to_node(row)
-                if node.id in entity_ids:
+            else:
+                if len(name_key) < 3:
                     continue
-                entity_ids.add(node.id)
-                entities.append(node)
-                if len(entities) >= 10:
-                    break
-        except Exception as exc:
-            if _is_fail_hard_mode():
-                raise
-            logger.warning("Unicode entity scan failed during entity extraction: %s", exc)
+                name_folded = re.escape(_unicode_casefold(name))
+                if not re.search(rf"(?<![A-Za-z0-9_]){name_folded}(?![A-Za-z0-9_])", folded_text):
+                    continue
+            node = graph._row_to_node(row)
+            if node.id in entity_ids:
+                continue
+            entity_ids.add(node.id)
+            entities.append(node)
+            if len(entities) >= 10:
+                break
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise
+        logger.warning("Graph entity scan failed during entity extraction: %s", exc)
 
     return entities
 
