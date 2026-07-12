@@ -6006,6 +6006,43 @@ class TestTimestampOverride:
         assert mentioned_rows[0]["temporal_filter_basis"] == "mentioned"
         assert record_rows[0]["temporal_filter_basis"] == "record"
 
+    def test_mentioned_temporal_filter_accepts_utc_day_for_offset_timestamp(self):
+        """Mention-time filters include offset-aware facts across UTC/local day boundaries."""
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "boundary-mention",
+                "text": "Local evening fact learned near a UTC day boundary",
+                "mentioned_at": "2026-07-12T23:30:00-07:00",
+                "created_at": "2026-07-13T06:31:00Z",
+            }
+        ]
+
+        utc_day = mg._filter_recall_rows_by_date_bounds(
+            rows,
+            date_from="2026-07-13",
+            date_to="2026-07-13",
+            temporal_dimension="mentioned",
+        )
+        local_day = mg._filter_recall_rows_by_date_bounds(
+            rows,
+            date_from="2026-07-12",
+            date_to="2026-07-12",
+            temporal_dimension="mentioned",
+        )
+        outside = mg._filter_recall_rows_by_date_bounds(
+            rows,
+            date_from="2026-07-14",
+            date_to="2026-07-14",
+            temporal_dimension="mentioned",
+        )
+
+        assert [row["id"] for row in utc_day] == ["boundary-mention"]
+        assert [row["id"] for row in local_day] == ["boundary-mention"]
+        assert outside == []
+        assert utc_day[0]["temporal_filter_basis"] == "mentioned"
+
     def test_asof_recall_prefers_newer_eligible_occurred_rows(self):
         """Open-ended as-of recall ranks newer in-window event evidence before stale rows."""
         import datastore.memorydb.memory_graph as mg

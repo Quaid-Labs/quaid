@@ -17733,6 +17733,29 @@ def _temporal_date_part_for_bounds(value: Any, field_name: str) -> str:
     return date
 
 
+def _temporal_utc_date_part_for_bounds(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not re.match(r"^\d{4}-\d{2}-\d{2}[T ]", raw):
+        return ""
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return ""
+    if parsed.tzinfo is None:
+        return ""
+    return parsed.astimezone(timezone.utc).date().isoformat()
+
+
+def _temporal_date_parts_for_bounds(value: Any, field_name: str) -> Tuple[str, ...]:
+    local_date = _temporal_date_part_for_bounds(value, field_name)
+    if not local_date:
+        return ()
+    utc_date = _temporal_utc_date_part_for_bounds(value)
+    if utc_date and utc_date != local_date:
+        return tuple(sorted({local_date, utc_date}))
+    return (local_date,)
+
+
 def _normalize_recall_date_bound(value: Any) -> Optional[str]:
     raw = str(value or "").strip()
     if not raw:
@@ -17782,14 +17805,16 @@ def _temporal_date_bounds_from_values(
     start_field: str = "temporal_start",
     end_field: str = "temporal_end",
 ) -> Tuple[str, str]:
-    start = _temporal_date_part_for_bounds(start_value, start_field)
-    end = _temporal_date_part_for_bounds(end_value, end_field)
+    start_parts = _temporal_date_parts_for_bounds(start_value, start_field)
+    end_parts = _temporal_date_parts_for_bounds(end_value, end_field)
+    start = min(start_parts) if start_parts else ""
+    end = max(end_parts) if end_parts else ""
+    if start_parts and not end_parts:
+        end = max(start_parts)
+    if end_parts and not start_parts:
+        start = min(end_parts)
     if start and end and end < start:
         start, end = end, start
-    if start and not end:
-        end = start
-    if end and not start:
-        start = end
     return start, end
 
 
