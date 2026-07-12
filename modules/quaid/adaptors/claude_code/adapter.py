@@ -305,6 +305,9 @@ class ClaudeCodeAdapter(QuaidAdapter):
     def adapter_id(self) -> str:
         return "claude-code"
 
+    def semantic_transcript_window_mode(self) -> str:
+        return "single_line"
+
     def get_instance_type(self) -> str:
         return "folder"
 

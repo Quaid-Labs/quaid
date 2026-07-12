@@ -240,6 +240,14 @@ class QuaidAdapter(abc.ABC):
         """
         return "standalone"
 
+    def semantic_transcript_window_mode(self) -> str:
+        """Return adapter-owned semantic transcript window parsing mode.
+
+        Empty string means the adapter does not support incremental semantic
+        window parsing and core should fall back to raw-line sizing.
+        """
+        return ""
+
     @abc.abstractmethod
     def get_instance_name(self) -> str:
         """Return the stable instance name for the current project/agent context.
@@ -1069,6 +1077,9 @@ class StandaloneAdapter(QuaidAdapter):
     def get_instance_name(self) -> str:
         """Return instance name from env, or empty string for standalone."""
         return os.environ.get("QUAID_INSTANCE", "").strip()
+
+    def semantic_transcript_window_mode(self) -> str:
+        return "single_line"
 
     def get_sessions_dir(self) -> Optional[Path]:
         d = self.quaid_home() / "sessions"

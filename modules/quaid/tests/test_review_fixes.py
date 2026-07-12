@@ -118,6 +118,7 @@ class TestProviderUnavailableError:
         monkeypatch.setattr(extraction_daemon, "process_signal", fake_process_signal)
         monkeypatch.setattr(extraction_daemon.time, "sleep", fake_sleep)
         monkeypatch.setattr(extraction_daemon.signal, "signal", lambda *_a, **_k: None)
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
 
         # Should NOT raise ProviderUnavailableError — it should be caught and retried.
         # We stop the loop via _StopLoop from fake_sleep.

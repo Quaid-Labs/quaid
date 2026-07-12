@@ -81,6 +81,14 @@ def _active_adapter_instance() -> "QuaidAdapter | None":
     return peek_adapter()
 
 
+def _adapter_path(adapter: object, method_name: str) -> Path | None:
+    method = getattr(adapter, method_name, None)
+    if not callable(method):
+        return None
+    value = method()
+    return value if isinstance(value, Path) else Path(value)
+
+
 def get_workspace_dir() -> Path:
     """Return the active hidden instance root directory.
 
@@ -89,7 +97,9 @@ def get_workspace_dir() -> Path:
     """
     adapter = _active_adapter_instance()
     if adapter is not None:
-        return adapter.instance_root()
+        adapter_root = _adapter_path(adapter, "instance_root")
+        if adapter_root is not None:
+            return adapter_root
     env_root = _env_instance_root()
     if env_root is not None:
         return env_root
@@ -103,7 +113,9 @@ def get_quaid_home() -> Path:
     """Return the hidden QUAID_HOME root (not the per-instance silo)."""
     adapter = _active_adapter_instance()
     if adapter is not None:
-        return adapter.quaid_home()
+        adapter_home = _adapter_path(adapter, "quaid_home")
+        if adapter_home is not None:
+            return adapter_home
     env_home = _env_quaid_home()
     if env_home is not None:
         return env_home
@@ -113,7 +125,9 @@ def get_quaid_home() -> Path:
 def get_visible_workspace_dir() -> Path:
     adapter = _active_adapter_instance()
     if adapter is not None:
-        return adapter.visible_instance_root()
+        adapter_root = _adapter_path(adapter, "visible_instance_root")
+        if adapter_root is not None:
+            return adapter_root
     env_root = _env_visible_instance_root()
     if env_root is not None:
         return env_root
@@ -126,7 +140,9 @@ def get_visible_workspace_dir() -> Path:
 def get_visible_quaid_home() -> Path:
     adapter = _active_adapter_instance()
     if adapter is not None:
-        return adapter.visible_home()
+        adapter_home = _adapter_path(adapter, "visible_home")
+        if adapter_home is not None:
+            return adapter_home
     env_home = _env_visible_quaid_home()
     if env_home is not None:
         return env_home
@@ -136,7 +152,9 @@ def get_visible_quaid_home() -> Path:
 def get_projects_dir() -> Path:
     adapter = _active_adapter_instance()
     if adapter is not None:
-        return adapter.projects_dir()
+        adapter_dir = _adapter_path(adapter, "projects_dir")
+        if adapter_dir is not None:
+            return adapter_dir
     env_home = _env_visible_quaid_home()
     if env_home is not None:
         return env_home / "projects"
@@ -146,7 +164,9 @@ def get_projects_dir() -> Path:
 def get_identity_dir() -> Path:
     adapter = _active_adapter_instance()
     if adapter is not None:
-        return adapter.identity_dir()
+        adapter_dir = _adapter_path(adapter, "identity_dir")
+        if adapter_dir is not None:
+            return adapter_dir
     env_root = _env_visible_instance_root()
     if env_root is not None:
         return env_root
@@ -156,7 +176,9 @@ def get_identity_dir() -> Path:
 def get_data_dir() -> Path:
     adapter = _active_adapter_instance()
     if adapter is not None:
-        return adapter.data_dir()
+        adapter_dir = _adapter_path(adapter, "data_dir")
+        if adapter_dir is not None:
+            return adapter_dir
     env_root = _env_instance_root()
     if env_root is not None:
         return env_root / "data"
@@ -169,7 +191,9 @@ def get_data_dir() -> Path:
 def get_logs_dir() -> Path:
     adapter = _active_adapter_instance()
     if adapter is not None:
-        return adapter.logs_dir()
+        adapter_dir = _adapter_path(adapter, "logs_dir")
+        if adapter_dir is not None:
+            return adapter_dir
     env_root = _env_instance_root()
     if env_root is not None:
         return env_root / "logs"

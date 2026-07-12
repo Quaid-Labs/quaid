@@ -80,6 +80,7 @@ def test_run_llm_batches_parallel_preserves_order(monkeypatch):
 
 
 def test_run_llm_batches_parallel_preserves_exception_type(monkeypatch):
+    monkeypatch.setattr(ops, "is_fail_hard_enabled", lambda: False)
     monkeypatch.setattr(
         ops,
         "_cfg",
@@ -107,6 +108,7 @@ def test_run_llm_batches_parallel_preserves_exception_type(monkeypatch):
 
 
 def test_run_llm_batches_parallel_honors_overall_timeout(monkeypatch):
+    monkeypatch.setattr(ops, "is_fail_hard_enabled", lambda: False)
     monkeypatch.setattr(
         ops,
         "_cfg",
@@ -133,6 +135,7 @@ def test_run_llm_batches_parallel_honors_overall_timeout(monkeypatch):
 
 
 def test_run_llm_batches_parallel_adaptive_timeout_backoff_and_recovery(monkeypatch):
+    monkeypatch.setattr(ops, "is_fail_hard_enabled", lambda: False)
     monkeypatch.setattr(
         ops,
         "_cfg",

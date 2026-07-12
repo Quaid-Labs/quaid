@@ -97,7 +97,8 @@ class TestSignalCycle:
         assert data["session_id"] == "sess-1"
         assert data["adapter"] == "claude_code"
 
-    def test_unknown_signal_type_defaults_to_session_end(self):
+    def test_unknown_signal_type_defaults_to_session_end(self, monkeypatch):
+        monkeypatch.setattr(daemon, "_fail_hard_enabled", lambda: False)
         path = daemon.write_signal(
             signal_type="bogus_type",
             session_id="sess-1",
@@ -133,6 +134,7 @@ class TestSignalCycle:
         assert "_signal_path" in signals[0]
 
     def test_read_pending_signals_skips_malformed_json(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(daemon, "_fail_hard_enabled", lambda: False)
         sig_dir = tmp_path / "data" / "extraction-signals"
         sig_dir.mkdir(parents=True)
         (sig_dir / "bad.json").write_text("}{not json")
@@ -237,4 +239,3 @@ class TestTranscriptUtils:
 # ---------------------------------------------------------------------------
 # read_carryover / write_carryover / clear_carryover
 # ---------------------------------------------------------------------------
-

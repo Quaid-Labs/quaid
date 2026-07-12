@@ -141,6 +141,9 @@ class CodexAdapter(QuaidAdapter):
     def adapter_id(self) -> str:
         return "codex"
 
+    def semantic_transcript_window_mode(self) -> str:
+        return "response_items"
+
     def get_instance_type(self) -> str:
         return "folder"
 

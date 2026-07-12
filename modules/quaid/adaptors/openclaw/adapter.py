@@ -443,6 +443,9 @@ class OpenClawAdapter(QuaidAdapter):
     def adapter_id(self) -> str:
         return "openclaw"
 
+    def semantic_transcript_window_mode(self) -> str:
+        return "single_line"
+
     def get_instance_name(self) -> str:
         """Return the current agent's instance name.
 

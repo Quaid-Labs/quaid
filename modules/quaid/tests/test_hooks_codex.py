@@ -38,6 +38,7 @@ def _adapter_mock():
 
     adapter.get_capability.side_effect = _get_capability
     adapter.cached_rules_dir.return_value = None
+    adapter.projects_dir.return_value = Path("/__quaid_test_missing_projects__")
     return adapter
 
 

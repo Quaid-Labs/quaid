@@ -360,6 +360,8 @@ def test_daemon_lifecycle_observation_is_idempotent(monkeypatch, tmp_path):
     from datastore.sessiondb.session_store import list_lifecycle_observations
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.delenv("MEMORY_DB_PATH", raising=False)
+    monkeypatch.delenv("SESSION_DB_PATH", raising=False)
     signal_data = {
         "type": "session_end",
         "session_id": "sess-daemon-idem",
@@ -399,6 +401,8 @@ def test_daemon_lifecycle_observation_uses_env_instance_root_without_adapter_ins
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "daemon-inst")
+    monkeypatch.delenv("MEMORY_DB_PATH", raising=False)
+    monkeypatch.delenv("SESSION_DB_PATH", raising=False)
     monkeypatch.setattr(adapter_mod, "get_adapter", lambda: object())
 
     with caplog.at_level("WARNING", logger="lib.config"):

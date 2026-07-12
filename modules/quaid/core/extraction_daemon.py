@@ -4678,14 +4678,21 @@ def _parse_transcript_lines(lines: List[str], adapter=None, *, raise_on_parse_er
                 pass
 
 
-def _adapter_id_for_semantic_window(adapter) -> str:
+_TRANSCRIPT_WINDOW_MODE_RESPONSE_ITEMS = "response_items"
+_TRANSCRIPT_WINDOW_MODE_SINGLE_LINE = "single_line"
+
+
+def _semantic_transcript_window_mode(adapter) -> str:
     try:
-        adapter_id = getattr(adapter, "adapter_id", None)
-        if callable(adapter_id):
-            return str(adapter_id() or "").strip().lower()
-    except Exception:
+        mode_fn = getattr(adapter, "semantic_transcript_window_mode", None)
+        if callable(mode_fn):
+            return str(mode_fn() or "").strip().lower()
+    except Exception as exc:
+        logger.warning("failed resolving semantic transcript window mode: %s", exc)
+        if _fail_hard_enabled():
+            raise RuntimeError("failed resolving semantic transcript window mode") from exc
         return ""
-    return str(getattr(adapter, "adapter_id", "") or "").strip().lower()
+    return ""
 
 
 class _SingleLineAdapterTranscriptAccumulator:
@@ -4823,10 +4830,10 @@ class _CodexTranscriptAccumulator:
 
 
 def _transcript_window_accumulator(adapter, *, raise_on_parse_error: bool = False):
-    adapter_id = _adapter_id_for_semantic_window(adapter)
-    if adapter_id == "codex":
+    mode = _semantic_transcript_window_mode(adapter)
+    if mode == _TRANSCRIPT_WINDOW_MODE_RESPONSE_ITEMS:
         return _CodexTranscriptAccumulator(adapter)
-    if adapter_id in {"claude-code", "openclaw", "standalone"}:
+    if mode == _TRANSCRIPT_WINDOW_MODE_SINGLE_LINE:
         return _SingleLineAdapterTranscriptAccumulator(
             adapter,
             raise_on_parse_error=raise_on_parse_error,

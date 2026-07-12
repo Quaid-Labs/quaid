@@ -13,7 +13,7 @@ import re
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from lib.runtime_context import get_workspace_dir
 from lib.instance import quaid_home as _quaid_home
@@ -646,9 +646,20 @@ _config: Optional[MemoryConfig] = None
 _config_loading: bool = False  # Re-entrancy guard (load_config → get_db_path → get_config)
 _config_lock = threading.RLock()
 _config_instance_id: Optional[str] = None  # QUAID_INSTANCE active when _config was cached
+_config_env_signature: Optional[Tuple[str, str, str, str]] = None
 _warned_unknown_config_keys: set[str] = set()
 _config_callbacks_lock = threading.RLock()
 _config_callbacks: Dict[str, List[Callable[[Any, "MemoryConfig"], None]]] = {}
+
+
+def _current_config_env_signature() -> Tuple[str, str, str, str]:
+    return (
+        os.environ.get("QUAID_HOME", "").strip(),
+        os.environ.get("QUAID_VISIBLE_HOME", "").strip(),
+        os.environ.get("QUAID_INSTANCE", "").strip(),
+        os.environ.get("QUAID_ADAPTER_TYPE", "").strip(),
+    )
+
 
 _KNOWN_TOP_LEVEL_CONFIG_KEYS = {
     "adapter",
@@ -1007,14 +1018,15 @@ def _coerce_list_field(value: Any, *, field_name: str, default: Optional[List[An
 
 def load_config() -> MemoryConfig:
     """Load configuration from file or use defaults."""
-    global _config, _config_loading, _config_instance_id
+    global _config, _config_loading, _config_instance_id, _config_env_signature
 
     with _config_lock:
         current_instance = os.environ.get("QUAID_INSTANCE", "").strip()
-        if _config is not None and current_instance == _config_instance_id:
+        current_signature = _current_config_env_signature()
+        if _config is not None and current_signature == _config_env_signature:
             return _config
-        # QUAID_INSTANCE changed — reload for the new instance
-        if _config is not None and current_instance != _config_instance_id:
+        # The resolved config path depends on the active instance and home roots.
+        if _config is not None and current_signature != _config_env_signature:
             _config = None
 
         # Re-entrancy guard: load_config() → get_db_path() → _get_cfg() → load_config()
@@ -1025,14 +1037,18 @@ def load_config() -> MemoryConfig:
 
         _config_loading = True
         try:
-            return _load_config_inner()
+            loaded = _load_config_inner()
+            if _config is not None and _config_env_signature is None:
+                _config_env_signature = current_signature
+                _config_instance_id = current_instance
+            return loaded
         finally:
             _config_loading = False
 
 
 def _load_config_inner() -> MemoryConfig:
     """Inner config loader (called with re-entrancy guard held)."""
-    global _config, _config_instance_id
+    global _config, _config_instance_id, _config_env_signature
 
     raw_config: Dict[str, Any] = {}
     loaded_paths: List[Path] = []
@@ -1804,6 +1820,7 @@ def _load_config_inner() -> MemoryConfig:
 
     _config = candidate
     _config_instance_id = os.environ.get("QUAID_INSTANCE", "").strip()
+    _config_env_signature = _current_config_env_signature()
     return _config
 
 
@@ -1814,12 +1831,13 @@ def get_config() -> MemoryConfig:
 
 def reload_config() -> MemoryConfig:
     """Force reload configuration from file."""
-    global _config, _config_loading
+    global _config, _config_loading, _config_env_signature
     from core.runtime.plugins import reset_plugin_runtime
     from prompt_sets import reset_registry
 
     with _config_lock:
         _config = None
+        _config_env_signature = None
         # Allow nested reloads (for example from config callbacks) to rebuild
         # config instead of short-circuiting to a bare MemoryConfig().
         _config_loading = False
