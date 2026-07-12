@@ -1,7 +1,5 @@
 # Codex Compatibility Notes
 
-Source: `docs/COMPATIBILITY.md` plus operator-approved Run 152 compatibility notes. Keep this short and action-oriented.
-
 ## `/new` extraction latency
 
 Symptom: an immediate question after `/new` can miss facts from the prior session.

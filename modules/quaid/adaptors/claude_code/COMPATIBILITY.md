@@ -1,7 +1,5 @@
 # Claude Code Compatibility Notes
 
-Source: `docs/COMPATIBILITY.md`. Keep this short and action-oriented.
-
 ## Async lifecycle extraction
 
 Symptom: a recall immediately after `/compact`, `/clear`, or session end can miss facts from the just-ended content.
@@ -22,6 +20,6 @@ Action: when Quaid injects a notice, relay it briefly to the user before answeri
 
 Symptom: freshly edited identity files may not appear through `.claude/rules/quaid-*.md` alone on the first post-compact question.
 
-Cause: Claude Code loads rules files at session start, but current 2.1.x builds do not reliably reload rewritten rules files into model-visible context immediately after `/compact`.
+Cause: Claude Code loads rules files at session start, but the tested builds do not reliably reload rewritten rules files into model-visible context immediately after `/compact`.
 
 Action: Quaid sends a small identity-only bridge on the next turn after `/compact`; answer from that identity context when relevant. If project/tool context still looks stale, ask again after a moment or start a fresh session.

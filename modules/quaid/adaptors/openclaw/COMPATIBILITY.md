@@ -1,7 +1,5 @@
 # OpenClaw Compatibility Notes
 
-Source: `docs/COMPATIBILITY.md`. Keep this short and action-oriented.
-
 ## Compaction-controlled refresh
 
 Symptom: identity or project context can look stale until the session refreshes.

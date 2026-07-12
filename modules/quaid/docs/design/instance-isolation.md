@@ -2,150 +2,172 @@
 
 ## Problem
 
-Everything currently shares one `QUAID_HOME` (`~/.quaid/`). One config, one
-DB, one daemon. Switching adapters requires restart and risks silent data
-corruption (daemon caches adapter, parses wrong transcript format).
+Quaid can run against multiple host adapters and multiple user/work contexts on
+the same machine. Runtime state, identity files, project links, daemons, and logs
+must stay isolated per memory instance so one adapter or workspace cannot
+silently read, write, or extract another instance's state.
 
 ## Core Concept
 
-**INSTANCE_ID** — a short identifier (valid folder name) that uniquely
-identifies a Quaid memory instance. Two terminals with the same INSTANCE_ID
-share the same memory. Examples: `openclaw`, `claude-code`, `work`, `personal`.
+**INSTANCE_ID** is the silo identifier for one Quaid memory instance. Two
+processes with the same `INSTANCE_ID` share the same Quaid memory state.
+Conventional values include `openclaw`, `claude-code`, `codex`, `personal`, and
+`work`.
+
+The current layout has two roots:
+
+- `QUAID_HOME`: hidden runtime root. Defaults to `~/.quaid`.
+- `QUAID_VISIBLE_HOME`: user-facing markdown/project root. Defaults to the
+  visible sibling of `QUAID_HOME` when `QUAID_HOME` starts with a dot, for
+  example `~/.quaid` -> `~/quaid`.
 
 ```
 QUAID_HOME/
-├── shared/                         # Reserved
-│   └── projects/                   # Cross-instance project docs
-│       └── my-app/
-│           ├── PROJECT.md
-│           ├── TOOLS.md
-│           └── AGENTS.md
-├── <INSTANCE_ID>/                  # Per-instance silo
-│   ├── config/config.json          # Instance config (no adapter.type toggle)
-│   ├── data/
-│   │   ├── memory.db               # Own database
-│   │   ├── extraction-signals/
-│   │   ├── session-cursors/
-│   │   ├── extraction-daemon.pid   # Own daemon
-│   │   └── ...
-│   ├── identity/
-│   │   ├── USER.md
-│   │   ├── SOUL.md
-│   │   └── ENVIRONMENT.md
-│   ├── journal/
-│   ├── logs/
-│   ├── *.snippets.md
-│   └── project-registry.json       # Instance's view of projects
+├── instances/
+│   └── <INSTANCE_ID>/              # Hidden per-instance silo
+│       ├── config.json             # Instance config
+│       ├── data/
+│       │   ├── memory.db           # Instance memory database
+│       │   ├── extraction-signals/
+│       │   ├── session-cursors/
+│       │   ├── extraction-daemon.pid
+│       │   └── ...
+│       └── logs/
+├── project-registry.json           # Global project registry metadata
 └── shared/
-    └── project-registry.json       # Global registry (projects -> instances)
+    └── config/                     # Platform-shared config, when present
+
+QUAID_VISIBLE_HOME/
+├── instances/
+│   └── <INSTANCE_ID>/              # Visible per-instance markdown root
+│       ├── USER.md
+│       ├── SOUL.md
+│       ├── ENVIRONMENT.md
+│       ├── journal/
+│       └── *.snippets.md
+└── projects/                       # Cross-instance project docs/symlinks
+    └── my-app/
+        ├── PROJECT.md
+        ├── TOOLS.md
+        └── AGENTS.md
 ```
 
 ## INSTANCE_ID Rules
 
-- Must be a valid directory name (no `/`, no whitespace, no `.` prefix)
-- Must NOT be a reserved name: `shared`, `projects`, `config`, `data`,
-  `logs`, `temp`, `tmp`, `quaid`, `plugins`, `lib`, `core`
-- Conventional values: `openclaw`, `claude-code`, `personal`, `work`
-- Passed via env: `QUAID_INSTANCE` (or `QUAID_ID`)
-- Resolved: `QUAID_HOME / INSTANCE_ID` = instance root
+- Must be a valid directory name: no `/`, no whitespace, no `.` prefix.
+- Must not be a reserved name: `shared`, `projects`, `config`, `data`, `logs`,
+  `temp`, `tmp`, `quaid`, `plugins`, `lib`, `core`.
+- Passed via env: `QUAID_INSTANCE`.
+- Resolved hidden root: `$QUAID_HOME/instances/$QUAID_INSTANCE`.
+- Resolved visible root: `$QUAID_VISIBLE_HOME/instances/$QUAID_INSTANCE`.
 
 ## Environment Variables
 
 | Var | Purpose | Example |
 |-----|---------|---------|
-| `QUAID_HOME` | Root dir (contains all instances) | `~/quaid` |
-| `QUAID_INSTANCE` | Instance identifier (folder name) | `openclaw` |
+| `QUAID_HOME` | Hidden runtime root containing all instance silos | `~/.quaid` |
+| `QUAID_VISIBLE_HOME` | Visible markdown/project root | `~/quaid` |
+| `QUAID_INSTANCE` | Instance identifier | `openclaw` |
 
-Instance root = `$QUAID_HOME/$QUAID_INSTANCE`
-
-## What Changes
+## What Changes Per Instance
 
 ### Daemon
-- One daemon per instance (keyed by INSTANCE_ID)
-- PID file: `<instance_root>/data/extraction-daemon.pid`
-- No adapter caching bug — each daemon IS its adapter
-- Signal dir: `<instance_root>/data/extraction-signals/`
+
+- One daemon per instance, keyed by `QUAID_INSTANCE`.
+- PID file: `<instance_root>/data/extraction-daemon.pid`.
+- Signal dir: `<instance_root>/data/extraction-signals/`.
+- Cursors and runtime extraction state live under `<instance_root>/data/`.
 
 ### Config
-- Per-instance: `<instance_root>/config/config.json`
-- No `adapter.type` toggle — the instance IS the adapter
-- Adapter type derived from instance config or inferred from INSTANCE_ID
 
-### Hooks (CC)
-- `QUAID_HOME=/Users/x/quaid QUAID_INSTANCE=claude-code quaid hook-inject`
-- Hook commands include both env vars
+- Per-instance config: `<instance_root>/config.json`.
+- Adapter type is derived from instance config or inferred from the selected
+  adapter/instance path.
 
-### OC Adapter
-- `QUAID_INSTANCE=openclaw` set by OC plugin at boot
-- Reads from `$QUAID_HOME/openclaw/`
+### Hooks
+
+Hook commands select their instance through environment, for example:
+
+```bash
+QUAID_HOME=/Users/x/.quaid QUAID_VISIBLE_HOME=/Users/x/quaid \
+  QUAID_INSTANCE=claude-code quaid hook-inject
+```
+
+Adapters set `QUAID_INSTANCE` for their own hook/runtime processes.
+
+### OpenClaw Adapter
+
+- `QUAID_INSTANCE` is selected by the OpenClaw plugin at boot.
+- Hidden runtime state is read from `$QUAID_HOME/instances/<INSTANCE_ID>/`.
+- Visible identity markdown is read from
+  `$QUAID_VISIBLE_HOME/instances/<INSTANCE_ID>/`.
 
 ### Shared Projects
-- Live at `$QUAID_HOME/projects/`
-- Global registry at `$QUAID_HOME/projects/project-registry.json`
-- Each project has `instances: ["openclaw", "claude-code"]`
-- Sync engine copies from `projects/` to OC workspace
-- CC reads `projects/` directly (via hook_session_init)
 
-### Path Resolution (lib/adapter.py)
-- `quaid_home()` → `$QUAID_HOME` (root)
-- `instance_root()` → `$QUAID_HOME/$QUAID_INSTANCE`
-- `data_dir()` → `instance_root/data/`
-- `config_dir()` → `instance_root/config/`
-- `identity_dir()` → `instance_root/identity/`
-- `projects_dir()` → `$QUAID_HOME/projects/` (shared!)
-- `logs_dir()` → `instance_root/logs/`
+- Project docs/symlinks live at `$QUAID_VISIBLE_HOME/projects/`.
+- Global project metadata lives at `$QUAID_HOME/project-registry.json`.
+- Each project tracks linked instances in its registry entry.
+- Hooks read visible project docs through `adapter.projects_dir()`.
+
+### Path Resolution (`lib/adapter.py`)
+
+| Method | Current path |
+|--------|--------------|
+| `quaid_home()` | `$QUAID_HOME` |
+| `visible_home()` | `$QUAID_VISIBLE_HOME`, or visible sibling of `QUAID_HOME` |
+| `instance_root()` | `$QUAID_HOME/instances/$QUAID_INSTANCE` |
+| `visible_instance_root()` | `$QUAID_VISIBLE_HOME/instances/$QUAID_INSTANCE` |
+| `data_dir()` | `instance_root()/data` |
+| `config_dir()` | `instance_root()` |
+| `identity_dir()` | `visible_instance_root()` |
+| `projects_dir()` | `visible_home()/projects` |
+| `logs_dir()` | `instance_root()/logs` |
+| `journal_dir()` | `visible_instance_root()/journal` |
 
 ### Key Passed Around
-- `INSTANCE_ID` is the primary key in:
-  - Project registry (`instances` list)
-  - Daemon PID management
-  - Notification routing
-  - Sync engine (target resolution)
-  - CLI commands (`quaid openclaw stats`)
+
+`INSTANCE_ID` is the primary key for:
+
+- Project registry instance links.
+- Daemon PID management.
+- Notification routing.
+- Project-doc visibility and sync decisions.
+- Hook/runtime command selection through `QUAID_INSTANCE`.
 
 ## Installation
 
-INSTANCE_ID is entered by the user during installation:
+INSTANCE_ID is selected during installation or derived by adapter bootstrap.
+The installer/runtime path should:
 
-1. Installer prompts: "Enter an instance name (e.g. openclaw, claude-code, work):"
-2. Validates against INSTANCE_ID rules (valid dir name, not reserved)
-3. Scans `$QUAID_HOME/` for existing instance dirs and displays them:
-   ```
-   Existing instances:
-     • openclaw (adapter: openclaw)
-     • claude-code (adapter: claude-code)
-   Enter instance name: ▌
-   ```
-4. If name matches an existing instance, warns and asks to confirm (join vs create new)
-5. Creates instance dir structure under `$QUAID_HOME/<INSTANCE_ID>/`
-6. Sets `QUAID_INSTANCE=<INSTANCE_ID>` in the adapter's env config
+1. Validate the name against the instance rules.
+2. Check for an existing hidden config at
+   `$QUAID_HOME/instances/<INSTANCE_ID>/config.json`.
+3. Check for existing visible markdown at
+   `$QUAID_VISIBLE_HOME/instances/<INSTANCE_ID>/`.
+4. Create missing hidden and visible instance directories.
+5. Persist `QUAID_INSTANCE=<INSTANCE_ID>` in the adapter's environment config.
 
 Detection of existing instances:
-- List dirs in `$QUAID_HOME/` that are not reserved names and contain `config/config.json`
-- Each discovered instance shows its adapter type (from config)
+
+- List directories under `$QUAID_HOME/instances/` that contain `config.json`.
+- Show the adapter type from each instance config when available.
 
 ## CLI
 
-Instance is always the first argument:
-
-```
-quaid <instance> <command> [args...]
-```
+The shipped CLI selects an instance through environment or adapter-derived
+runtime configuration, not through a positional instance argument.
 
 Examples:
-- `quaid openclaw stats`
-- `quaid claude-code project list`
-- `quaid openclaw memory_store "some text"`
-- `quaid claude-code hook-inject`
 
-The instance must exist (`$QUAID_HOME/<instance>/config/config.json` present)
-or the CLI throws an error. No implicit defaults — instance is always explicit.
+```bash
+QUAID_INSTANCE=openclaw quaid project list
+QUAID_INSTANCE=claude-code quaid recall "what do you remember?"
+QUAID_INSTANCE=codex quaid hook-inject
+```
 
-For hooks, `QUAID_INSTANCE` env var is also accepted (set by adapter at boot):
-```
-QUAID_INSTANCE=claude-code quaid hook-inject
-```
-If both CLI arg and env var are present, CLI arg wins.
+If `QUAID_INSTANCE` is missing, adapter bootstrap may derive it from the host
+adapter config. Commands that require a specific instance should set
+`QUAID_INSTANCE` explicitly.
 
 ## TODO: CC Slash Command for Instance Switching
 
@@ -155,13 +177,14 @@ instance mid-session.
 
 **Open question:** Does switching instances mid-session risk mixing contexts?
 The extraction daemon, pending notifications, and identity files would all shift.
-May need a "session boundary" — flush pending state before switching. Or disallow
+May need a session boundary - flush pending state before switching. Or disallow
 mid-session switching and require it at CC launch via env var only.
 
 Investigate whether this is better as:
-- A CC skill (`/quaid:set-memory`) that sets `QUAID_INSTANCE` for subsequent hooks
-- An env var set before CC launch (simpler, no context mixing risk)
-- A per-project `.claude/settings.json` config (auto-resolved, no user action)
+
+- A CC skill (`/quaid:set-memory`) that sets `QUAID_INSTANCE` for subsequent hooks.
+- An env var set before CC launch.
+- A per-project `.claude/settings.json` config.
 
 ## Reserved Names
 
