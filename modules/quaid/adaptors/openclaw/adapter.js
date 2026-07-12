@@ -6004,14 +6004,11 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
             prependSystemContext = prependSystemContext ? `${deferredNoticePromptContext}
 
 ${prependSystemContext}` : deferredNoticePromptContext;
-            appendSystemContext = appendSystemContext ? `${appendSystemContext}
-
-${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
             writeHookTrace("deferred_notice.prompt_visible_preamble", {
               agent_label: promptAgentLabel,
               session_id: promptSessionId,
               has_preamble: Boolean(deferredNoticePreamble),
-              targets: ["prependContext", "prependSystemContext", "appendSystemContext"]
+              targets: ["prependContext", "prependSystemContext"]
             });
           }
         }
@@ -6361,22 +6358,18 @@ ${String(event.prependContext)}` : deferredNoticePromptContext;
       const prependSystemContext = event?.prependSystemContext ? `${deferredNoticePromptContext}
 
 ${String(event.prependSystemContext)}` : deferredNoticePromptContext;
-      const appendSystemContext = event?.appendSystemContext ? `${String(event.appendSystemContext)}
-
-${relayContext}` : relayContext;
       if (event && typeof event === "object") {
         event.prependContext = prependContext;
         event.prependSystemContext = prependSystemContext;
-        event.appendSystemContext = appendSystemContext;
       }
       writeHookTrace("deferred_notice.prompt_visible_preamble", {
         agent_label: promptAgentLabel,
         session_id: promptSessionId,
         has_preamble: Boolean(buildOpenClawDeferredNoticePromptPreamble(relayContext)),
-        targets: ["prependContext", "prependSystemContext", "appendSystemContext"],
+        targets: ["prependContext", "prependSystemContext"],
         source: "deferred-notice-channel-relay"
       });
-      return { prependContext, prependSystemContext, appendSystemContext };
+      return { prependContext, prependSystemContext };
     }, {
       name: "deferred-notice-channel-relay",
       priority: 5,

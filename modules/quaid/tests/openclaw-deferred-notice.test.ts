@@ -1830,7 +1830,7 @@ describe("openclaw deferred notices", () => {
     expect(String(result?.prependSystemContext || "")).toContain("silver lantern is ready");
     expect(String((event as any).prependContext || "")).toContain("silver lantern is ready");
     expect(String((event as any).prependSystemContext || "")).toContain("silver lantern is ready");
-    expect(String((event as any).appendSystemContext || "")).toContain("silver lantern is ready");
+    expect(String((event as any).appendSystemContext || "")).not.toContain("silver lantern is ready");
 
     const drained = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
     const pending = Array.isArray(drained?.requests)
@@ -1896,6 +1896,8 @@ describe("openclaw deferred notices", () => {
     const relayResult = await deferredPromptCall?.[1](event, ctx);
     expect(String(relayResult?.prependContext || "")).toMatch(/^QUAID NOTICE FOR THIS REPLY:/);
     expect(String(relayResult?.prependContext || "")).toContain("Cached prompt-build notice must reach the model");
+    expect(String(relayResult?.appendSystemContext || "")).not.toContain("Cached prompt-build notice must reach the model");
+    expect(String((event as any).appendSystemContext || "")).not.toContain("Cached prompt-build notice must reach the model");
 
     const afterRelay = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
     expect(

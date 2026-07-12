@@ -7301,14 +7301,11 @@ notify_user(${JSON.stringify(message)})
             prependSystemContext = prependSystemContext
               ? `${deferredNoticePromptContext}\n\n${prependSystemContext}`
               : deferredNoticePromptContext;
-            appendSystemContext = appendSystemContext
-              ? `${appendSystemContext}\n\n${deferredNoticeRelayContext}`
-              : deferredNoticeRelayContext;
             writeHookTrace("deferred_notice.prompt_visible_preamble", {
               agent_label: promptAgentLabel,
               session_id: promptSessionId,
               has_preamble: Boolean(deferredNoticePreamble),
-              targets: ["prependContext", "prependSystemContext", "appendSystemContext"],
+              targets: ["prependContext", "prependSystemContext"],
             });
           }
         }
@@ -7711,22 +7708,18 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       const prependSystemContext = event?.prependSystemContext
         ? `${deferredNoticePromptContext}\n\n${String(event.prependSystemContext)}`
         : deferredNoticePromptContext;
-      const appendSystemContext = event?.appendSystemContext
-        ? `${String(event.appendSystemContext)}\n\n${relayContext}`
-        : relayContext;
       if (event && typeof event === "object") {
         event.prependContext = prependContext;
         event.prependSystemContext = prependSystemContext;
-        event.appendSystemContext = appendSystemContext;
       }
       writeHookTrace("deferred_notice.prompt_visible_preamble", {
         agent_label: promptAgentLabel,
         session_id: promptSessionId,
         has_preamble: Boolean(buildOpenClawDeferredNoticePromptPreamble(relayContext)),
-        targets: ["prependContext", "prependSystemContext", "appendSystemContext"],
+        targets: ["prependContext", "prependSystemContext"],
         source: "deferred-notice-channel-relay",
       });
-      return { prependContext, prependSystemContext, appendSystemContext };
+      return { prependContext, prependSystemContext };
     }, {
       name: "deferred-notice-channel-relay",
       priority: 5,
