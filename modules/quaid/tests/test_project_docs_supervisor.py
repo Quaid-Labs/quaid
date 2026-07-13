@@ -125,6 +125,7 @@ def test_supervisor_tick_starts_instance_monitors_and_janitor_workers(monkeypatc
 
     started_instances = []
     started_janitors = []
+    emitted_events = []
 
     class _DoneProc:
         def poll(self):
@@ -143,10 +144,14 @@ def test_supervisor_tick_starts_instance_monitors_and_janitor_workers(monkeypatc
     monkeypatch.setattr(supervisor, "_start_janitor_worker", lambda name: started_janitors.append(name) or _DoneProc())
     monkeypatch.setattr(supervisor, "_janitor_check_interval_seconds", lambda: 0.5)
     monkeypatch.setattr(supervisor, "_interval_from_env", lambda _name, default: default)
+    monkeypatch.setattr(supervisor, "_emit_project_docs_maintenance_event", lambda **kwargs: emitted_events.append(kwargs))
 
     assert supervisor.run_supervisor(once=True, interval_seconds=0.5) == 0
     assert started_instances == ["alpha", "beta"]
     assert started_janitors == ["alpha", "beta"]
+    assert emitted_events
+    assert emitted_events[0]["auto_register_requested"] is True
+    assert emitted_events[0]["stale_index_requested"] is True
 
 
 def test_supervisor_main_records_failure_marker(monkeypatch, tmp_path):

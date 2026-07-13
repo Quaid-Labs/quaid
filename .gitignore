@@ -50,6 +50,7 @@ data/
 # Livetest fixtures under livetest-guide/data are tracked
 !modules/quaid/tests/livetest/livetest-guide/data/
 !modules/quaid/tests/livetest/livetest-guide/data/**
+modules/quaid/tests/livetest/livetest-guide/data/**/__pycache__/
 # Review/working files
 *-review.tsv
 *-review.jsonl

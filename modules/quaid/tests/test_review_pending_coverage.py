@@ -12,8 +12,8 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ["MEMORY_DB_PATH"] = ":memory:"
 
+from datastore.memorydb import maintenance_ops
 from datastore.memorydb.memory_graph import MemoryGraph, Node
-from datastore.memorydb.maintenance_ops import JanitorMetrics, review_pending_memories
 
 
 def _fake_embedding_dim():
@@ -55,15 +55,15 @@ def test_review_pending_memories_retries_missing_decisions(tmp_path):
     graph = _make_graph(tmp_path)
     n1 = _add_pending_fact(graph, "My mother is Wendy")
     n2 = _add_pending_fact(graph, "My father is Kent")
-    metrics = JanitorMetrics()
+    metrics = maintenance_ops.JanitorMetrics()
 
     responses = [
         (json.dumps([{"id": n1.id, "action": "KEEP"}]), 0.1),  # Missing n2 in first pass.
         (json.dumps([{"id": n2.id, "action": "KEEP"}]), 0.1),  # Retry covers missing id.
     ]
 
-    with patch("datastore.memorydb.maintenance_ops.call_deep_reasoning", side_effect=responses):
-        result = review_pending_memories(graph, dry_run=False, metrics=metrics, max_items=10)
+    with patch.object(maintenance_ops, "call_deep_reasoning", side_effect=responses):
+        result = maintenance_ops.review_pending_memories(graph, dry_run=False, metrics=metrics, max_items=10)
 
     assert result["total_reviewed"] == 2
     assert result["review_coverage_ratio"] == 1.0
@@ -81,7 +81,7 @@ def test_review_pending_memories_raises_on_incomplete_coverage_after_retry(tmp_p
     graph = _make_graph(tmp_path)
     n1 = _add_pending_fact(graph, "I live in Austin")
     n2 = _add_pending_fact(graph, "My dog is Madu")
-    metrics = JanitorMetrics()
+    metrics = maintenance_ops.JanitorMetrics()
 
     responses = [
         (json.dumps([{"id": n1.id, "action": "KEEP"}]), 0.1),  # Missing n2
@@ -89,9 +89,9 @@ def test_review_pending_memories_raises_on_incomplete_coverage_after_retry(tmp_p
         (json.dumps([]), 0.1),  # Targeted retry still missing n2
     ]
 
-    with patch("datastore.memorydb.maintenance_ops.call_deep_reasoning", side_effect=responses):
+    with patch.object(maintenance_ops, "call_deep_reasoning", side_effect=responses):
         with pytest.raises(RuntimeError, match="incomplete decision coverage after targeted retry"):
-            review_pending_memories(graph, dry_run=False, metrics=metrics, max_items=10)
+            maintenance_ops.review_pending_memories(graph, dry_run=False, metrics=metrics, max_items=10)
 
     with graph._get_conn() as conn:
         pending = conn.execute("SELECT COUNT(*) FROM nodes WHERE status = 'pending'").fetchone()[0]
@@ -102,7 +102,7 @@ def test_review_pending_memories_accepts_wrapped_decisions_payload(tmp_path):
     graph = _make_graph(tmp_path)
     n1 = _add_pending_fact(graph, "My mother is Wendy")
     n2 = _add_pending_fact(graph, "My father is Kent")
-    metrics = JanitorMetrics()
+    metrics = maintenance_ops.JanitorMetrics()
 
     wrapped = {
         "decisions": [
@@ -111,8 +111,8 @@ def test_review_pending_memories_accepts_wrapped_decisions_payload(tmp_path):
         ]
     }
 
-    with patch("datastore.memorydb.maintenance_ops.call_deep_reasoning", return_value=(json.dumps(wrapped), 0.1)):
-        result = review_pending_memories(graph, dry_run=False, metrics=metrics, max_items=10)
+    with patch.object(maintenance_ops, "call_deep_reasoning", return_value=(json.dumps(wrapped), 0.1)):
+        result = maintenance_ops.review_pending_memories(graph, dry_run=False, metrics=metrics, max_items=10)
 
     assert result["total_reviewed"] == 2
     assert result["review_coverage_ratio"] == 1.0
@@ -128,11 +128,11 @@ def test_review_pending_memories_accepts_wrapped_decisions_payload(tmp_path):
 def test_review_pending_memories_aborts_on_connection_errors(tmp_path):
     graph = _make_graph(tmp_path)
     _add_pending_fact(graph, "My favorite editor is vim")
-    metrics = JanitorMetrics()
+    metrics = maintenance_ops.JanitorMetrics()
 
-    with patch("datastore.memorydb.maintenance_ops.call_deep_reasoning", side_effect=ConnectionError("gateway unavailable")):
+    with patch.object(maintenance_ops, "call_deep_reasoning", side_effect=ConnectionError("gateway unavailable")):
         with pytest.raises(RuntimeError, match="gateway unavailable"):
-            review_pending_memories(graph, dry_run=False, metrics=metrics, max_items=10)
+            maintenance_ops.review_pending_memories(graph, dry_run=False, metrics=metrics, max_items=10)
     with graph._get_conn() as conn:
         pending = conn.execute("SELECT COUNT(*) FROM nodes WHERE status = 'pending'").fetchone()[0]
     assert pending == 1

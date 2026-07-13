@@ -19,7 +19,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # Set env to avoid touching real DB or calling Ollama
 os.environ.setdefault("MEMORY_DB_PATH", ":memory:")
-os.environ.setdefault("MOCK_EMBEDDINGS", "1")
 
 import pytest
 
@@ -29,6 +28,11 @@ from datastore.memorydb.memory_graph import MemoryGraph, Node, Edge
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
 # ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _mock_embeddings_env(monkeypatch):
+    monkeypatch.setenv("MOCK_EMBEDDINGS", "1")
+
 
 @pytest.fixture(autouse=True)
 def _disable_external_reranker(monkeypatch):

@@ -1671,9 +1671,10 @@ def test_recall_once_reranker_falls_back_when_failhard_disabled(tmp_path):
     assert any(row["id"] == created["id"] for row in rows)
 
 
-def test_ollama_healthy_retries_before_marking_provider_unhealthy():
+def test_ollama_healthy_retries_before_marking_provider_unhealthy(monkeypatch):
     import datastore.memorydb.memory_graph as mg
 
+    monkeypatch.delenv("MOCK_EMBEDDINGS", raising=False)
     if hasattr(mg._ollama_healthy, "_cache"):
         delattr(mg._ollama_healthy, "_cache")
 
@@ -1691,9 +1692,10 @@ def test_ollama_healthy_retries_before_marking_provider_unhealthy():
             delattr(mg._ollama_healthy, "_cache")
 
 
-def test_ollama_healthy_rechecks_false_cache_quickly():
+def test_ollama_healthy_rechecks_false_cache_quickly(monkeypatch):
     import datastore.memorydb.memory_graph as mg
 
+    monkeypatch.delenv("MOCK_EMBEDDINGS", raising=False)
     if hasattr(mg._ollama_healthy, "_cache"):
         delattr(mg._ollama_healthy, "_cache")
 

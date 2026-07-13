@@ -262,9 +262,8 @@ class TestMarkComplete:
 
     def test_write_failure_degrades_when_fail_hard_disabled(self, tmp_path, monkeypatch, caplog):
         import core.subagent_registry as registry
-        from core.subagent_registry import register, mark_complete
 
-        register("parent-1", "child-A")
+        registry.register("parent-1", "child-A")
         before = _registry_file(tmp_path, "parent-1").read_text(encoding="utf-8")
         monkeypatch.setattr(registry, "_fail_hard_enabled", lambda: False)
 
@@ -278,7 +277,7 @@ class TestMarkComplete:
         monkeypatch.setattr(registry.Path, "write_text", fail_registry_tmp_write)
 
         with caplog.at_level("ERROR", logger="core.subagent_registry"):
-            mark_complete("parent-1", "child-A", transcript_path="/sessions/child-A.jsonl")
+            registry.mark_complete("parent-1", "child-A", transcript_path="/sessions/child-A.jsonl")
 
         assert "failed to write" in caplog.text
         assert _registry_file(tmp_path, "parent-1").read_text(encoding="utf-8") == before
@@ -403,14 +402,13 @@ class TestIsRegisteredSubagent:
     def test_survives_malformed_json_file(self, tmp_path, monkeypatch):
         """Malformed registry files are skipped without raising."""
         import core.subagent_registry as registry
-        from core.subagent_registry import register, is_registered_subagent
 
         monkeypatch.setattr(registry, "_fail_hard_enabled", lambda: False)
-        register("parent-1", "child-A")
+        registry.register("parent-1", "child-A")
         # Corrupt a registry file manually
         bad = tmp_path / "instances" / "pytest-runner" / "data" / "subagent-registry" / "bad-parent.json"
         bad.write_text("not json {{{", encoding="utf-8")
-        assert is_registered_subagent("child-A") is True  # Still finds child-A
+        assert registry.is_registered_subagent("child-A") is True  # Still finds child-A
 
     def test_malformed_json_file_raises_when_fail_hard(self, tmp_path, monkeypatch):
         import core.subagent_registry as registry
@@ -599,13 +597,12 @@ class TestAtomicWrite:
     def test_malformed_existing_file_falls_back_to_empty(self, tmp_path, monkeypatch):
         """If the registry file is corrupted, register() recovers gracefully."""
         import core.subagent_registry as registry
-        from core.subagent_registry import register
 
         monkeypatch.setattr(registry, "_fail_hard_enabled", lambda: False)
         reg_dir = tmp_path / "instances" / "pytest-runner" / "data" / "subagent-registry"
         reg_dir.mkdir(parents=True, exist_ok=True)
         (reg_dir / "parent-1.json").write_text("}{invalid json", encoding="utf-8")
-        register("parent-1", "child-A")
+        registry.register("parent-1", "child-A")
         data = _read_raw(tmp_path, "parent-1")
         assert "child-A" in data["children"]
 

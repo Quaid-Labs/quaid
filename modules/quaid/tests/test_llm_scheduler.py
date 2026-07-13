@@ -73,11 +73,19 @@ def test_scheduler_retries_only_incomplete_items_after_timeout():
     scheduler = GlobalLlmScheduler(max_workers=8)
     workload = "test.retry_remaining_only"
     calls = {}
+    calls_lock = threading.Lock()
+    first_item_started = threading.Event()
+    release_first_item = threading.Event()
 
     def _fn(item: int) -> int:
-        calls[item] = calls.get(item, 0) + 1
-        if item == 0 and calls[item] == 1:
-            time.sleep(0.05)
+        with calls_lock:
+            calls[item] = calls.get(item, 0) + 1
+            call_number = calls[item]
+        if item == 0 and call_number == 1:
+            first_item_started.set()
+            release_first_item.wait(timeout=1.0)
+        else:
+            assert first_item_started.wait(timeout=1.0)
         return item
 
     try:
@@ -96,6 +104,7 @@ def test_scheduler_retries_only_incomplete_items_after_timeout():
         assert calls[2] == 1
         assert calls[0] == 2
     finally:
+        release_first_item.set()
         scheduler.shutdown(wait=False)
 
 
