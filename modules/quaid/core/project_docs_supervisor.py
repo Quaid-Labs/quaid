@@ -489,6 +489,30 @@ def _project_worker_start_skip_reason(project: str, entry: Dict[str, object]) ->
     )
 
 
+def _record_project_worker_start_skip(project: str, skip_reason: str) -> None:
+    last_error = f"worker start skipped: {skip_reason}"
+    state = project_docs.read_state(project)
+    if (
+        str(state.get("status") or "").strip().lower() == "error"
+        and str(state.get("last_error") or "").strip() == last_error
+    ):
+        _LOGGER.debug("project docs worker start still skipped for %s: %s", project, skip_reason)
+        return
+    _LOGGER.warning(
+        "project docs worker start skipped for %s: %s",
+        project,
+        skip_reason,
+    )
+    project_docs.merge_state(
+        project,
+        {
+            "status": "error",
+            "last_error": last_error,
+            "last_failed_at": project_docs.utc_now(),
+        },
+    )
+
+
 def _handle_recorded_clean_worker_exit(project: str, known_pid: int) -> bool:
     exit_marker = project_docs.read_worker_exit(project)
     if not exit_marker:
@@ -587,8 +611,6 @@ def _handle_known_project_worker_exit(project: str, known_workers: Dict[str, int
             },
         )
     known_workers.pop(project, None)
-    if _fail_hard_enabled():
-        raise RuntimeError(message)
     return True
 
 
@@ -1190,19 +1212,7 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
                 project_docs.reap_stale_worker(project, stale_after_seconds=stale_after)
                 skip_reason = _project_worker_start_skip_reason(project, projects.get(project) or {})
                 if skip_reason:
-                    _LOGGER.warning(
-                        "project docs worker start skipped for %s: %s",
-                        project,
-                        skip_reason,
-                    )
-                    project_docs.merge_state(
-                        project,
-                        {
-                            "status": "error",
-                            "last_error": f"worker start skipped: {skip_reason}",
-                            "last_failed_at": project_docs.utc_now(),
-                        },
-                    )
+                    _record_project_worker_start_skip(project, skip_reason)
                     known_workers.pop(project, None)
                     continue
                 pid = project_docs.start_worker(project)

@@ -546,7 +546,7 @@ def test_supervisor_worker_start_failure_raises_when_failhard(monkeypatch, caplo
     assert "project docs worker start failed for demo" in caplog.text
 
 
-def test_known_project_worker_exit_raises_when_failhard(monkeypatch, caplog):
+def test_known_project_worker_exit_marks_error_without_supervisor_crash(monkeypatch, caplog):
     from core import project_docs_supervisor as supervisor
 
     merged = []
@@ -561,8 +561,7 @@ def test_known_project_worker_exit_raises_when_failhard(monkeypatch, caplog):
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
 
     with caplog.at_level("WARNING", logger=supervisor.__name__):
-        with pytest.raises(RuntimeError, match="project docs worker for demo exited unexpectedly pid=1234"):
-            supervisor._handle_known_project_worker_exit("demo", known_workers)
+        assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
 
     assert "project docs worker for demo exited unexpectedly pid=1234" in caplog.text
     assert known_workers == {}
@@ -631,7 +630,7 @@ def test_known_project_worker_exit_after_project_delete_does_not_raise_failhard(
     assert "exited unexpectedly" not in caplog.text
 
 
-def test_known_project_worker_exit_marker_pid_mismatch_still_raises_failhard(monkeypatch):
+def test_known_project_worker_exit_marker_pid_mismatch_marks_error_without_supervisor_crash(monkeypatch):
     from core import project_docs_supervisor as supervisor
 
     known_workers = {"demo": 1234}
@@ -645,14 +644,17 @@ def test_known_project_worker_exit_marker_pid_mismatch_still_raises_failhard(mon
     monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: None)
     monkeypatch.setattr(supervisor.project_docs, "read_state", lambda _project: {})
     monkeypatch.setattr(supervisor.project_docs, "project_is_registered_for_worker", lambda _project: True)
-    monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda *_args, **_kwargs: {})
+    merged = []
+    monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda project, updates: merged.append((project, updates)) or {})
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
 
-    with pytest.raises(RuntimeError, match="project docs worker for demo exited unexpectedly pid=1234"):
-        supervisor._handle_known_project_worker_exit("demo", known_workers)
+    assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
+    assert known_workers == {}
+    assert merged[0][0] == "demo"
+    assert merged[0][1]["status"] == "error"
 
 
-def test_known_project_worker_exit_failed_marker_still_raises_failhard(monkeypatch, caplog):
+def test_known_project_worker_exit_failed_marker_marks_error_without_supervisor_crash(monkeypatch, caplog):
     from core import project_docs_supervisor as supervisor
 
     known_workers = {"demo": 1234}
@@ -666,13 +668,15 @@ def test_known_project_worker_exit_failed_marker_still_raises_failhard(monkeypat
     monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: None)
     monkeypatch.setattr(supervisor.project_docs, "read_state", lambda _project: {})
     monkeypatch.setattr(supervisor.project_docs, "project_is_registered_for_worker", lambda _project: True)
-    monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda *_args, **_kwargs: {})
+    merged = []
+    monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda project, updates: merged.append((project, updates)) or {})
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
 
     with caplog.at_level("WARNING", logger=supervisor.__name__):
-        with pytest.raises(RuntimeError, match="project docs worker for demo exited unexpectedly pid=1234"):
-            supervisor._handle_known_project_worker_exit("demo", known_workers)
+        assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
 
+    assert known_workers == {}
+    assert merged[0][1]["status"] == "error"
     assert "recorded non-clean exit status=failed" in caplog.text
 
 
@@ -907,6 +911,34 @@ def test_supervisor_skips_ambiguous_multi_instance_project_without_crashing_fail
     assert merged[0][0] == "demo"
     assert merged[0][1]["status"] == "error"
     assert "valid_linked_instances=2" in merged[0][1]["last_error"]
+
+
+def test_repeated_project_worker_start_skip_does_not_warn_or_rewrite(monkeypatch, caplog):
+    from core import project_docs_supervisor as supervisor
+
+    skip_reason = (
+        "cannot resolve QUAID_INSTANCE for project quaid; queued request must include "
+        "requested_instance or project must be linked to exactly one valid instance "
+        "(valid_linked_instances=0: none)"
+    )
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "read_state",
+        lambda _project: {
+            "status": "error",
+            "last_error": f"worker start skipped: {skip_reason}",
+        },
+    )
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "merge_state",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("repeated skip should not rewrite state")),
+    )
+
+    with caplog.at_level("WARNING", logger=supervisor.__name__):
+        supervisor._record_project_worker_start_skip("quaid", skip_reason)
+
+    assert "project docs worker start skipped for quaid" not in caplog.text
 
 
 def test_supervisor_stops_removed_instance_monitor(monkeypatch):
