@@ -201,7 +201,7 @@ afterEach(() => {
 });
 
 describe("openclaw auto-provision", () => {
-  it("unrefs the session index watcher interval on register", async () => {
+  it("unrefs the session index watcher interval on first before_agent_start", async () => {
     const home = makeTempDir("quaid-oc-watcher-unref-home-");
     const hiddenHome = path.join(home, ".quaid");
     const visibleHome = path.join(home, "quaid");
@@ -257,6 +257,20 @@ describe("openclaw auto-provision", () => {
     const api = makeFakeApi();
     plugin.register(api as any);
 
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+    const beforeAgentStartCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_agent_start" && call?.[2]?.name === "memory-injection"
+    );
+    expect(beforeAgentStartCall).toBeTruthy();
+    const beforeAgentStartHandler = beforeAgentStartCall?.[1];
+    await beforeAgentStartHandler(
+      { prependContext: "" },
+      {
+        sessionId: "31995f0d-dc0b-44a5-86d8-d1e7d1f2eb8f",
+        sessionKey: "agent:main:tui-watcher-bootstrap",
+      },
+    );
+
     expect(setIntervalSpy).toHaveBeenCalled();
     expect(unref).toHaveBeenCalledOnce();
 
@@ -276,6 +290,7 @@ describe("openclaw auto-provision", () => {
     const repoModulesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
     const linkedModulesRoot = path.join(hiddenHome, "modules", "quaid");
     const mainConfigPath = path.join(hiddenHome, "instances", "openclaw-main", "config.json");
+    const mainLogsPath = path.join(hiddenHome, "instances", "openclaw-main", "logs");
 
     fs.mkdirSync(path.dirname(linkedModulesRoot), { recursive: true });
     fs.symlinkSync(repoModulesRoot, linkedModulesRoot, "dir");
@@ -315,6 +330,7 @@ describe("openclaw auto-provision", () => {
     plugin.register(api as any);
 
     expect(fs.existsSync(mainConfigPath)).toBe(false);
+    expect(fs.existsSync(mainLogsPath)).toBe(false);
     expect(childProcessState.datastoreStatsSyncCalls).toHaveLength(0);
     expect(childProcessState.datastoreStatsSpawnCalls).toHaveLength(0);
 
@@ -332,6 +348,7 @@ describe("openclaw auto-provision", () => {
     );
 
     expect(fs.existsSync(mainConfigPath)).toBe(true);
+    expect(fs.existsSync(mainLogsPath)).toBe(true);
     await vi.waitFor(() => {
       expect(childProcessState.datastoreStatsSpawnCalls).toHaveLength(2);
     });
@@ -352,7 +369,7 @@ describe("openclaw auto-provision", () => {
     fs.rmSync(home, { recursive: true, force: true });
   });
 
-  it("does not fail plugin register when boot daemon warmup misses under failHard", async () => {
+  it("defers daemon warmup failures to before_agent_start under failHard", async () => {
     const home = makeTempDir("quaid-oc-boot-daemon-soft-home-");
     const hiddenHome = path.join(home, ".quaid");
     const visibleHome = path.join(home, "quaid");
@@ -400,9 +417,22 @@ describe("openclaw auto-provision", () => {
     const { plugin } = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath);
     const api = makeFakeApi();
     expect(() => plugin.register(api as any)).not.toThrow();
+    expect(readTraceEvents(hiddenHome, "openclaw-main")).toEqual([]);
+    const beforeAgentStartCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_agent_start" && call?.[2]?.name === "memory-injection"
+    );
+    expect(beforeAgentStartCall).toBeTruthy();
+    const beforeAgentStartHandler = beforeAgentStartCall?.[1];
+    await expect(beforeAgentStartHandler(
+      { prependContext: "" },
+      {
+        sessionId: "6d5e2d09-51df-49b7-a233-e8bcf1d2ce57",
+        sessionKey: "agent:main:tui-daemon-failhard",
+      },
+    )).rejects.toThrow("ensure_alive failed");
     expect(
       readTraceEvents(hiddenHome, "openclaw-main").some(
-        (event) => event.event === "daemon.ensure_alive.boot_warmup_failed" &&
+        (event) => event.event === "daemon.ensure_alive.hook_bootstrap_failed" &&
           event.fail_hard === true,
       ),
     ).toBe(true);

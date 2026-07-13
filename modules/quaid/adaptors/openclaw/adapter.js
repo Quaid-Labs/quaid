@@ -2897,18 +2897,21 @@ function pingDaemonAliveIfNeeded(instanceId = _QUAID_INSTANCE, nowMs = Date.now(
   _lastDaemonAliveCheckMsByInstance.set(target, nowMs);
   ensureDaemonAlive(target);
 }
-function warmDaemonAliveAtBoot(instanceId = _QUAID_INSTANCE) {
+function warmDaemonAliveOnHookBootstrap(instanceId = _QUAID_INSTANCE) {
   try {
     ensureDaemonAlive(instanceId);
-    console.log("[quaid][daemon] extraction daemon ensure_alive called at boot");
+    console.log("[quaid][daemon] extraction daemon ensure_alive called during hook bootstrap");
   } catch (err) {
     const message = String(err?.message || err);
-    writeHookTrace("daemon.ensure_alive.boot_warmup_failed", {
+    writeHookTrace("daemon.ensure_alive.hook_bootstrap_failed", {
       instance_id: String(instanceId || _QUAID_INSTANCE || "default"),
       error: message.slice(0, 500),
       fail_hard: isFailHardEnabled()
     });
-    console.warn(`[quaid][daemon] boot warmup failed: ${message}`);
+    console.warn(`[quaid][daemon] hook bootstrap warmup failed: ${message}`);
+    if (isFailHardEnabled()) {
+      throw err;
+    }
   }
 }
 for (const p of [
@@ -2916,15 +2919,28 @@ for (const p of [
   QUAID_TMP_DIR,
   QUAID_NOTES_DIR,
   QUAID_INJECTION_LOG_DIR,
-  QUAID_NOTIFY_DIR,
-  QUAID_LOGS_DIR,
-  QUAID_TIMEOUT_LOG_DIR,
-  QUAID_SESSION_PRESERVE_DIR
+  QUAID_NOTIFY_DIR
 ]) {
   try {
     fs.mkdirSync(p, { recursive: true });
   } catch (err) {
     console.error(`[quaid][startup] failed to create runtime dir: ${p}`, err?.message || String(err));
+  }
+}
+function ensureSiloRuntimeDirsForHook() {
+  for (const p of [
+    QUAID_LOGS_DIR,
+    QUAID_TIMEOUT_LOG_DIR,
+    QUAID_SESSION_PRESERVE_DIR
+  ]) {
+    try {
+      fs.mkdirSync(p, { recursive: true });
+    } catch (err) {
+      console.error(`[quaid][startup] failed to create runtime dir: ${p}`, err?.message || String(err));
+      if (isFailHardEnabled()) {
+        throw err;
+      }
+    }
   }
 }
 function _jsonSafe(value) {
@@ -4924,6 +4940,7 @@ const quaidPlugin = {
     const readSessionMessagesFile = (sessionFile) => facade.readSessionMessagesFile(sessionFile);
     const wrapHookHandler = (registrationType, eventName, handler) => {
       return async (...args) => {
+        ensureSiloRuntimeDirsForHook();
         const event = args?.[0];
         const ctx = args?.[1];
         const sessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
@@ -4979,13 +4996,6 @@ const quaidPlugin = {
       console.log(
         `[quaid][debug][hook.register] registration=on event=${eventName} name=${String(options?.name || "")} priority=${String(options?.priority || "")} timeout=${String(options?.timeout || "")}`
       );
-      writeHookTrace("hook.register", {
-        registration_type: "on",
-        hook_event: eventName,
-        name: String(options?.name || ""),
-        priority: Number(options?.priority || 0),
-        timeout: Number(options?.timeout || 0)
-      });
       return api.on(eventName, wrapHookHandler("on", eventName, handler), options);
     };
     const registerInternalHookChecked = (eventName, handler, options) => {
@@ -4995,13 +5005,6 @@ const quaidPlugin = {
       console.log(
         `[quaid][debug][hook.register] event=${eventName} name=${String(options?.name || "")} priority=${String(options?.priority || "")} timeout=${String(options?.timeout || "")}`
       );
-      writeHookTrace("hook.register", {
-        registration_type: "registerHook",
-        hook_event: eventName,
-        name: String(options?.name || ""),
-        priority: Number(options?.priority || 0),
-        timeout: Number(options?.timeout || 0)
-      });
       return api.registerHook(eventName, wrapHookHandler("registerHook", eventName, handler), options);
     };
     const registerHttpRouteChecked = (route) => {
@@ -5023,11 +5026,48 @@ const quaidPlugin = {
     const embeddedPromptBuildFallbackStartRuns = /* @__PURE__ */ new Map();
     const embeddedFallbackLifecycleSignalSizes = /* @__PURE__ */ new Map();
     let mainBootstrapAttempted = false;
+    const ensureTimeoutManager = () => {
+      if (timeoutManager) {
+        return timeoutManager;
+      }
+      timeoutManager = new SessionTimeoutManager({
+        workspace: QUAID_INSTANCE_ROOT,
+        logDir: QUAID_TIMEOUT_LOG_DIR,
+        timeoutMinutes: () => facade.getCaptureTimeoutMinutes(),
+        failHardEnabled: () => isFailHardEnabled2(),
+        isBootstrapOnly: (messages) => facade.isResetBootstrapOnlyConversation(messages),
+        shouldSkipText: (text) => shouldSkipTranscriptText(text),
+        readSessionMessages: (sessionId) => facade.readTimeoutSessionMessages(sessionId),
+        listSessionActivity: () => facade.listTimeoutSessionActivity(),
+        hasPendingSessionNotes: (sessionId) => facade.hasPendingMemoryNotes(sessionId),
+        logger: (msg) => {
+          const lowered = String(msg || "").toLowerCase();
+          if (lowered.includes("fail") || lowered.includes("error")) {
+            console.warn(msg);
+            return;
+          }
+          console.log(msg);
+        },
+        extract: async (_msgs, sid, label) => {
+          if (sid) {
+            writeDaemonSignal(sid, "timeout", {
+              source: "timeout_extract",
+              label: label || "Timeout",
+              compact_on_timeout: true
+            });
+            console.log(`[quaid][timeout] daemon signal for idle session=${sid} label=${label || "Timeout"}`);
+          }
+        }
+      });
+      return timeoutManager;
+    };
     const EMBEDDED_PROMPT_BUILD_FALLBACK_TTL_MS = 3e4;
     const EMBEDDED_PROMPT_BUILD_FALLBACK_START_TTL_MS = 5e3;
     const ensureMainDatastoreBootstrapOnHookCall = () => {
       if (mainBootstrapAttempted) return;
       mainBootstrapAttempted = true;
+      ensureSiloRuntimeDirsForHook();
+      ensureTimeoutManager();
       const mainProvisioned = ensureAgentInstanceProvisioned("main", "before_agent_start_bootstrap", { wakeDaemon: false });
       if (!mainProvisioned) {
         const err = new Error("failed to provision primary OpenClaw instance during hook bootstrap");
@@ -5058,6 +5098,10 @@ const quaidPlugin = {
           `[quaid] stats probe failed: ${String(err?.message || err)}`
         );
       });
+      warmDaemonAliveOnHookBootstrap();
+      repairSessionCursorPathsFromQuaidEventLogs();
+      purgeInternalSessionArtifacts();
+      startSessionIndexWatcher();
     };
     const readOptionalOpenClawDeviceJson = (filePath) => {
       if (!fs.existsSync(filePath)) return {};
@@ -7639,39 +7683,6 @@ ${String(event.prependSystemContext)}` : deferredNoticePromptContext;
       name: "session-memory-extraction",
       priority: 10
     });
-    timeoutManager = new SessionTimeoutManager({
-      workspace: QUAID_INSTANCE_ROOT,
-      logDir: QUAID_TIMEOUT_LOG_DIR,
-      timeoutMinutes: () => facade.getCaptureTimeoutMinutes(),
-      failHardEnabled: () => isFailHardEnabled2(),
-      isBootstrapOnly: (messages) => facade.isResetBootstrapOnlyConversation(messages),
-      shouldSkipText: (text) => shouldSkipTranscriptText(text),
-      readSessionMessages: (sessionId) => facade.readTimeoutSessionMessages(sessionId),
-      listSessionActivity: () => facade.listTimeoutSessionActivity(),
-      hasPendingSessionNotes: (sessionId) => facade.hasPendingMemoryNotes(sessionId),
-      logger: (msg) => {
-        const lowered = String(msg || "").toLowerCase();
-        if (lowered.includes("fail") || lowered.includes("error")) {
-          console.warn(msg);
-          return;
-        }
-        console.log(msg);
-      },
-      extract: async (_msgs, sid, label) => {
-        if (sid) {
-          writeDaemonSignal(sid, "timeout", {
-            source: "timeout_extract",
-            label: label || "Timeout",
-            compact_on_timeout: true
-          });
-          console.log(`[quaid][timeout] daemon signal for idle session=${sid} label=${label || "Timeout"}`);
-        }
-      }
-    });
-    warmDaemonAliveAtBoot();
-    repairSessionCursorPathsFromQuaidEventLogs();
-    purgeInternalSessionArtifacts();
-    startSessionIndexWatcher();
     const beforeAgentStartSessionTransitionHandler = async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
       const newSessionId = String(ctx?.sessionId || event?.sessionId || "").trim();

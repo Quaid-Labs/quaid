@@ -3628,20 +3628,21 @@ function pingDaemonAliveIfNeeded(instanceId: string = _QUAID_INSTANCE, nowMs: nu
   ensureDaemonAlive(target);
 }
 
-function warmDaemonAliveAtBoot(instanceId: string = _QUAID_INSTANCE): void {
+function warmDaemonAliveOnHookBootstrap(instanceId: string = _QUAID_INSTANCE): void {
   try {
     ensureDaemonAlive(instanceId);
-    console.log("[quaid][daemon] extraction daemon ensure_alive called at boot");
+    console.log("[quaid][daemon] extraction daemon ensure_alive called during hook bootstrap");
   } catch (err: unknown) {
-    // Register-time daemon warmup must not disable the whole OC plugin. Later
-    // signal/prompt wakeups still use ensureDaemonAlive() and preserve failHard.
     const message = String((err as Error)?.message || err);
-    writeHookTrace("daemon.ensure_alive.boot_warmup_failed", {
+    writeHookTrace("daemon.ensure_alive.hook_bootstrap_failed", {
       instance_id: String(instanceId || _QUAID_INSTANCE || "default"),
       error: message.slice(0, 500),
       fail_hard: isFailHardEnabled(),
     });
-    console.warn(`[quaid][daemon] boot warmup failed: ${message}`);
+    console.warn(`[quaid][daemon] hook bootstrap warmup failed: ${message}`);
+    if (isFailHardEnabled()) {
+      throw err;
+    }
   }
 }
 
@@ -3651,14 +3652,28 @@ for (const p of [
   QUAID_NOTES_DIR,
   QUAID_INJECTION_LOG_DIR,
   QUAID_NOTIFY_DIR,
-  QUAID_LOGS_DIR,
-  QUAID_TIMEOUT_LOG_DIR,
-  QUAID_SESSION_PRESERVE_DIR,
 ]) {
   try {
     fs.mkdirSync(p, { recursive: true });
   } catch (err: unknown) {
     console.error(`[quaid][startup] failed to create runtime dir: ${p}`, (err as Error)?.message || String(err));
+  }
+}
+
+function ensureSiloRuntimeDirsForHook(): void {
+  for (const p of [
+    QUAID_LOGS_DIR,
+    QUAID_TIMEOUT_LOG_DIR,
+    QUAID_SESSION_PRESERVE_DIR,
+  ]) {
+    try {
+      fs.mkdirSync(p, { recursive: true });
+    } catch (err: unknown) {
+      console.error(`[quaid][startup] failed to create runtime dir: ${p}`, (err as Error)?.message || String(err));
+      if (isFailHardEnabled()) {
+        throw err;
+      }
+    }
   }
 }
 
@@ -6076,6 +6091,7 @@ const quaidPlugin = {
     const readSessionMessagesFile = (sessionFile: string) => facade.readSessionMessagesFile(sessionFile);
     const wrapHookHandler = (registrationType: "on" | "registerHook", eventName: string, handler: any) => {
       return async (...args: any[]) => {
+        ensureSiloRuntimeDirsForHook();
         const event = args?.[0];
         const ctx = args?.[1];
         const sessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
@@ -6134,13 +6150,6 @@ const quaidPlugin = {
       console.log(
         `[quaid][debug][hook.register] registration=on event=${eventName} name=${String(options?.name || "")} priority=${String(options?.priority || "")} timeout=${String(options?.timeout || "")}`
       );
-      writeHookTrace("hook.register", {
-        registration_type: "on",
-        hook_event: eventName,
-        name: String(options?.name || ""),
-        priority: Number(options?.priority || 0),
-        timeout: Number(options?.timeout || 0),
-      });
       return api.on(eventName as any, wrapHookHandler("on", eventName, handler), options);
     };
     const registerInternalHookChecked = (eventName: string, handler: any, options?: any) => {
@@ -6150,13 +6159,6 @@ const quaidPlugin = {
       console.log(
         `[quaid][debug][hook.register] event=${eventName} name=${String(options?.name || "")} priority=${String(options?.priority || "")} timeout=${String(options?.timeout || "")}`
       );
-      writeHookTrace("hook.register", {
-        registration_type: "registerHook",
-        hook_event: eventName,
-        name: String(options?.name || ""),
-        priority: Number(options?.priority || 0),
-        timeout: Number(options?.timeout || 0),
-      });
       return api.registerHook(eventName as any, wrapHookHandler("registerHook", eventName, handler), options);
     };
     const registerHttpRouteChecked = (route: { path: string; auth: "gateway" | "plugin"; handler: any }) => {
@@ -6188,12 +6190,55 @@ const quaidPlugin = {
     const embeddedPromptBuildFallbackStartRuns = new Map<string, EmbeddedPromptBuildFallbackStartRun>();
     const embeddedFallbackLifecycleSignalSizes = new Map<string, number>();
     let mainBootstrapAttempted = false;
+    const ensureTimeoutManager = (): SessionTimeoutManager => {
+      if (timeoutManager) {
+        return timeoutManager;
+      }
+      timeoutManager = new SessionTimeoutManager({
+        workspace: QUAID_INSTANCE_ROOT,
+        logDir: QUAID_TIMEOUT_LOG_DIR,
+        timeoutMinutes: () => facade.getCaptureTimeoutMinutes(),
+        failHardEnabled: () => isFailHardEnabled(),
+        isBootstrapOnly: (messages: any[]) => facade.isResetBootstrapOnlyConversation(messages),
+        shouldSkipText: (text: string) => shouldSkipTranscriptText(text),
+        readSessionMessages: (sessionId: string) => facade.readTimeoutSessionMessages(sessionId),
+        listSessionActivity: () => facade.listTimeoutSessionActivity(),
+        hasPendingSessionNotes: (sessionId: string) => facade.hasPendingMemoryNotes(sessionId),
+        logger: (msg: string) => {
+          const lowered = String(msg || "").toLowerCase();
+          if (lowered.includes("fail") || lowered.includes("error")) {
+            console.warn(msg);
+            return;
+          }
+          console.log(msg);
+        },
+        extract: async (_msgs: any[], sid?: string, label?: string) => {
+          // Extraction now delegated to the shared Python daemon.
+          // The timeout manager calls this on idle-session timeout;
+          // write a daemon signal so the daemon handles it.
+          if (sid) {
+            writeDaemonSignal(sid, "timeout", {
+              source: "timeout_extract",
+              label: label || "Timeout",
+              compact_on_timeout: true,
+            });
+            console.log(`[quaid][timeout] daemon signal for idle session=${sid} label=${label || "Timeout"}`);
+          }
+        },
+      });
+      // TS signal worker disabled — shared Python daemon processes extraction signals.
+      // The daemon is started on first hook use and polls data/extraction-signals/ for work.
+      // timeoutManager.startWorker() is no longer called.
+      return timeoutManager;
+    };
     const EMBEDDED_PROMPT_BUILD_FALLBACK_TTL_MS = 30_000;
     const EMBEDDED_PROMPT_BUILD_FALLBACK_START_TTL_MS = 5_000;
     const ensureMainDatastoreBootstrapOnHookCall = (): void => {
       if (mainBootstrapAttempted) return;
       mainBootstrapAttempted = true;
 
+      ensureSiloRuntimeDirsForHook();
+      ensureTimeoutManager();
       const mainProvisioned = ensureAgentInstanceProvisioned("main", "before_agent_start_bootstrap", { wakeDaemon: false });
       if (!mainProvisioned) {
         const err = new Error("failed to provision primary OpenClaw instance during hook bootstrap");
@@ -6230,6 +6275,11 @@ const quaidPlugin = {
             `[quaid] stats probe failed: ${String((err as Error)?.message || err)}`
           );
         });
+
+      warmDaemonAliveOnHookBootstrap();
+      repairSessionCursorPathsFromQuaidEventLogs();
+      purgeInternalSessionArtifacts();
+      startSessionIndexWatcher();
     };
     const readOptionalOpenClawDeviceJson = (filePath: string): Record<string, any> => {
       if (!fs.existsSync(filePath)) return {};
@@ -9238,49 +9288,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       name: "session-memory-extraction",
       priority: 10,
     });
-
-    // Extraction promise gate is facade-owned so adapters remain swappable.
-    timeoutManager = new SessionTimeoutManager({
-      workspace: QUAID_INSTANCE_ROOT,
-      logDir: QUAID_TIMEOUT_LOG_DIR,
-      timeoutMinutes: () => facade.getCaptureTimeoutMinutes(),
-      failHardEnabled: () => isFailHardEnabled(),
-      isBootstrapOnly: (messages: any[]) => facade.isResetBootstrapOnlyConversation(messages),
-      shouldSkipText: (text: string) => shouldSkipTranscriptText(text),
-      readSessionMessages: (sessionId: string) => facade.readTimeoutSessionMessages(sessionId),
-      listSessionActivity: () => facade.listTimeoutSessionActivity(),
-      hasPendingSessionNotes: (sessionId: string) => facade.hasPendingMemoryNotes(sessionId),
-      logger: (msg: string) => {
-        const lowered = String(msg || "").toLowerCase();
-        if (lowered.includes("fail") || lowered.includes("error")) {
-          console.warn(msg);
-          return;
-        }
-        console.log(msg);
-      },
-      extract: async (_msgs: any[], sid?: string, label?: string) => {
-        // Extraction now delegated to the shared Python daemon.
-        // The timeout manager calls this on idle-session timeout;
-        // write a daemon signal so the daemon handles it.
-        if (sid) {
-          writeDaemonSignal(sid, "timeout", {
-            source: "timeout_extract",
-            label: label || "Timeout",
-            compact_on_timeout: true,
-          });
-          console.log(`[quaid][timeout] daemon signal for idle session=${sid} label=${label || "Timeout"}`);
-        }
-      },
-    });
-    // TS signal worker disabled — shared Python daemon processes extraction signals.
-    // The daemon is started on boot and polls data/extraction-signals/ for work.
-    // timeoutManager.startWorker() is no longer called.
-
-    // Start the shared extraction daemon
-    warmDaemonAliveAtBoot();
-    repairSessionCursorPathsFromQuaidEventLogs();
-    purgeInternalSessionArtifacts();
-    startSessionIndexWatcher();
 
     // Session-transition fallback for OC TUI /new visual-only transitions:
     // When /new is typed in OC TUI, OC creates a new session internally but does NOT
