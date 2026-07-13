@@ -1037,11 +1037,7 @@ def load_config() -> MemoryConfig:
 
         _config_loading = True
         try:
-            loaded = _load_config_inner()
-            if _config is not None and _config_env_signature is None:
-                _config_env_signature = current_signature
-                _config_instance_id = current_instance
-            return loaded
+            return _load_config_inner()
         finally:
             _config_loading = False
 

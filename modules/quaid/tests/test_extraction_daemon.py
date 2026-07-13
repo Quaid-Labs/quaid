@@ -39,6 +39,16 @@ class _OwnedTestAdapterMixin:
             return home.with_name(home.name[1:])
         return home
 
+    def instance_root(self):
+        instance = os.environ.get("QUAID_INSTANCE", "").strip()
+        home = self.quaid_home()
+        return home / "instances" / instance if instance else home
+
+    def visible_instance_root(self):
+        instance = os.environ.get("QUAID_INSTANCE", "").strip()
+        home = self.visible_home()
+        return home / "instances" / instance if instance else home
+
 
 def _stub_successful_session_logs_ingest(monkeypatch):
     import core.ingest_runtime as ingest_runtime

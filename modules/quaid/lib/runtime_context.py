@@ -84,8 +84,18 @@ def _active_adapter_instance() -> "QuaidAdapter | None":
 def _adapter_path(adapter: object, method_name: str) -> Path | None:
     method = getattr(adapter, method_name, None)
     if not callable(method):
+        message = f"Active adapter {type(adapter).__name__} lacks {method_name}(); falling back to environment paths"
+        logger.warning(message)
+        if is_fail_hard_enabled():
+            raise RuntimeError(message)
         return None
     value = method()
+    if value is None:
+        message = f"Active adapter {type(adapter).__name__}.{method_name}() returned no path; falling back to environment paths"
+        logger.warning(message)
+        if is_fail_hard_enabled():
+            raise RuntimeError(message)
+        return None
     return value if isinstance(value, Path) else Path(value)
 
 

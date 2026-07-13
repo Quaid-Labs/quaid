@@ -158,6 +158,53 @@ def test_runtime_context_uses_env_instance_roots_without_adapter(monkeypatch, tm
         assert runtime_context.get_projects_dir() == (visible / "projects").resolve()
 
 
+def test_runtime_context_logs_incomplete_active_adapter_before_env_fallback(monkeypatch, tmp_path, caplog):
+    from lib import runtime_context
+
+    hidden = tmp_path / ".quaid"
+    monkeypatch.setenv("QUAID_HOME", str(hidden))
+    monkeypatch.setenv("QUAID_INSTANCE", "alpha")
+    monkeypatch.setattr(runtime_context, "peek_adapter", lambda: object())
+    monkeypatch.setattr(runtime_context, "is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="lib.runtime_context"):
+        assert runtime_context.get_workspace_dir() == hidden.resolve() / "instances" / "alpha"
+
+    assert "lacks instance_root(); falling back to environment paths" in caplog.text
+
+
+def test_runtime_context_raises_incomplete_active_adapter_when_failhard(monkeypatch, tmp_path):
+    from lib import runtime_context
+
+    hidden = tmp_path / ".quaid"
+    monkeypatch.setenv("QUAID_HOME", str(hidden))
+    monkeypatch.setenv("QUAID_INSTANCE", "alpha")
+    monkeypatch.setattr(runtime_context, "peek_adapter", lambda: object())
+    monkeypatch.setattr(runtime_context, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="lacks instance_root"):
+        runtime_context.get_workspace_dir()
+
+
+def test_runtime_context_none_adapter_path_falls_back_only_when_fail_open(monkeypatch, tmp_path, caplog):
+    from lib import runtime_context
+
+    class AdapterWithNoPath:
+        def instance_root(self):
+            return None
+
+    hidden = tmp_path / ".quaid"
+    monkeypatch.setenv("QUAID_HOME", str(hidden))
+    monkeypatch.setenv("QUAID_INSTANCE", "alpha")
+    monkeypatch.setattr(runtime_context, "peek_adapter", lambda: AdapterWithNoPath())
+    monkeypatch.setattr(runtime_context, "is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="lib.runtime_context"):
+        assert runtime_context.get_workspace_dir() == hidden.resolve() / "instances" / "alpha"
+
+    assert "instance_root() returned no path; falling back to environment paths" in caplog.text
+
+
 def test_runtime_context_uses_env_home_data_and_logs_without_instance(monkeypatch, tmp_path):
     from lib import runtime_context
 
