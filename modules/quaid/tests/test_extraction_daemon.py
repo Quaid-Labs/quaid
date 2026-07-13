@@ -3580,6 +3580,7 @@ def test_start_daemon_exports_quaid_home_to_worker_env(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp/cc-livetest")
     monkeypatch.setenv("QUAID_SUPERVISOR_PID", "12345")
     monkeypatch.setenv("QUAID_SUPERVISOR_TOKEN", "inherited-token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-stale-daemon-env")
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "instances" / "openclaw-main" / "data" / "memory.db"))
     monkeypatch.setenv(
         "MEMORY_ARCHIVE_DB_PATH",
@@ -3613,6 +3614,7 @@ def test_start_daemon_exports_quaid_home_to_worker_env(monkeypatch, tmp_path):
     assert "LANE" not in captured["env"]
     assert "QUAID_ADAPTER_TYPE" not in captured["env"]
     assert "CLAUDE_PROJECT_DIR" not in captured["env"]
+    assert "ANTHROPIC_API_KEY" not in captured["env"]
     assert "QUAID_SUPERVISOR_PID" not in captured["env"]
     assert "QUAID_SUPERVISOR_TOKEN" not in captured["env"]
     assert "MEMORY_DB_PATH" not in captured["env"]

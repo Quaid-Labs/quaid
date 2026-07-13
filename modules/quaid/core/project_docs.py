@@ -28,6 +28,7 @@ SUPERVISOR_ROLE = "project-docs-supervisor"
 WORKER_ROLE = "project-docs-worker"
 _DB_OVERRIDE_ENV_KEYS = ("MEMORY_DB_PATH", "MEMORY_ARCHIVE_DB_PATH")
 _BACKGROUND_PROCESS_SCRUB_ENV_KEYS = (
+    "ANTHROPIC_API_KEY",
     "ART",
     "CLAUDE_PROJECT_DIR",
     "CODEX_PROJECT_DIR",
@@ -91,41 +92,6 @@ def scrub_background_process_env(env: Dict[str, str]) -> Dict[str, str]:
     for key in _BACKGROUND_PROCESS_SCRUB_ENV_KEYS:
         cleaned.pop(key, None)
     return cleaned
-
-
-def _hydrate_anthropic_api_key_from_shared_auth(env: Dict[str, str]) -> Dict[str, str]:
-    """Ensure project-doc subprocesses can use the shared Anthropic credential.
-
-    Project-doc workers are supervisor-owned and may outlive the shell or host
-    hook that had ANTHROPIC_API_KEY in its process environment. The canonical
-    long-lived credential lives in QUAID_HOME/shared/auth/credentials.json.
-    Hydrate only the subprocess env and never overwrite an explicit env var.
-    """
-    if str(env.get("ANTHROPIC_API_KEY") or "").strip():
-        return env
-    raw_home = str(env.get("QUAID_HOME") or "").strip()
-    home = Path(raw_home).expanduser().resolve() if raw_home else get_quaid_home()
-    path = home / "shared" / "auth" / "credentials.json"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-        creds = data.get("credentials", {}) if isinstance(data, dict) else {}
-        if not isinstance(creds, dict):
-            return env
-        for kind in ("anthropic_oauth", "anthropic_api"):
-            payload = creds.get(kind)
-            token = ""
-            if isinstance(payload, dict):
-                token = str(payload.get("token") or "").strip()
-            elif isinstance(payload, str):
-                token = payload.strip()
-            if token:
-                env["ANTHROPIC_API_KEY"] = token
-                return env
-    except Exception as exc:
-        logger.warning("Failed hydrating ANTHROPIC_API_KEY for project-docs subprocess: %s", exc)
-        if _fail_hard_enabled():
-            raise
-    return env
 
 
 def quaid_tracking_dir(quaid_home: Path) -> Path:
@@ -2295,7 +2261,6 @@ def start_supervisor() -> int:
         for key in _DB_OVERRIDE_ENV_KEYS:
             env.pop(key, None)
         env["QUAID_HOME"] = str(get_quaid_home())
-        env = _hydrate_anthropic_api_key_from_shared_auth(env)
         env["QUAID_SUPERVISOR_BOOT"] = "1"
         env.setdefault("QUAID_SUPERVISOR_INTERVAL_SECONDS", "5")
         env["QUAID_SUPERVISOR_TOKEN"] = uuid.uuid4().hex
@@ -2383,7 +2348,6 @@ def start_worker(project: str) -> int:
         env["QUAID_HOME"] = str(get_quaid_home())
         env = _apply_project_runtime_env(env, entry, request=request, project=name, require_instance=True)
         env.setdefault("QUAID_PROJECT_DOCS_WORKER_INTERVAL_SECONDS", "5")
-        env = _hydrate_anthropic_api_key_from_shared_auth(env)
         env["QUAID_PROJECT_DOCS_WORKER_TOKEN"] = uuid.uuid4().hex
         supervisor_pid = read_supervisor_pid()
         if supervisor_pid:

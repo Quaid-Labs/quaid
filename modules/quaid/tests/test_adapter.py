@@ -2669,6 +2669,17 @@ class TestClaudeCodeAdapter:
         with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
             adapter.get_api_key("ANTHROPIC_API_KEY")
 
+    def test_get_api_key_reads_shared_auth_when_env_absent_under_failhard(self, tmp_path, monkeypatch):
+        from adaptors.claude_code import adapter as adapter_mod
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr(adapter_mod, "is_fail_hard_enabled", lambda: True)
+        adapter = ClaudeCodeAdapter()
+        adapter.store_shared_auth_token("anthropic_oauth", "sk-ant-oat01-shared-cc")
+
+        assert adapter.get_api_key("ANTHROPIC_API_KEY") == "sk-ant-oat01-shared-cc"
+
     def test_get_llm_provider_raises_config_failure_when_failhard_enabled(
         self, monkeypatch
     ):

@@ -279,6 +279,11 @@ class ClaudeCodeAdapter(QuaidAdapter):
         if key:
             return key
 
+        if env_var_name == "ANTHROPIC_API_KEY":
+            token = self.read_shared_auth_token(["anthropic_oauth", "anthropic_api"])
+            if token:
+                return token
+
         if is_fail_hard_enabled():
             raise RuntimeError(
                 f"[fail_hard] {env_var_name} is required but not set in the environment."
