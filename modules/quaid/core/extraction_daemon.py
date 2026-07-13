@@ -10521,7 +10521,6 @@ def start_daemon() -> int:
         # Strip host-adapter env vars that must not be inherited by the daemon.
         _skip_prefixes = ("OPENCLAW_",)
         _skip_keys = {
-            "ANTHROPIC_API_KEY",
             "CLAUDE_CODE_OAUTH_TOKEN",
             "MEMORY_DB_PATH",
             "MEMORY_ARCHIVE_DB_PATH",
@@ -10536,6 +10535,7 @@ def start_daemon() -> int:
         env["QUAID_HOME"] = str(_quaid_home())
         env["QUAID_INSTANCE"] = instance
         env["QUAID_DAEMON"] = "1"
+        env = project_docs.prefer_shared_anthropic_auth_over_env(env)
         for key in list(env):
             if key.startswith("QUAID_SUPERVISOR_"):
                 env.pop(key, None)

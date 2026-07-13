@@ -2415,6 +2415,31 @@ def test_start_supervisor_strips_inherited_anthropic_key(project_env, monkeypatc
     assert "ANTHROPIC_API_KEY" not in captured["env"]
 
 
+def test_start_supervisor_preserves_env_anthropic_key_without_shared_auth(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    captured = {}
+
+    class _FakePopen:
+        pid = 33336
+
+        def __init__(self, *_args, **kwargs):
+            captured["env"] = dict(kwargs.get("env") or {})
+
+        def poll(self):
+            return None
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env-only-supervisor")
+    monkeypatch.setattr(project_docs, "read_supervisor_pid", lambda: None)
+    monkeypatch.setattr(project_docs, "_matching_supervisor_pids", lambda **_kwargs: [])
+    monkeypatch.setattr(project_docs.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(project_docs, "_wait_for_pid", lambda *args, **kwargs: 33336)
+
+    assert project_docs.start_supervisor() == 33336
+    assert captured["env"]["ANTHROPIC_API_KEY"] == "sk-ant-env-only-supervisor"
+
+
 def test_start_worker_strips_inherited_memory_db_overrides(project_env, monkeypatch):
     _tmp_path, _src, _entry = project_env
     from core import project_docs
@@ -2456,7 +2481,7 @@ def test_start_worker_strips_inherited_memory_db_overrides(project_env, monkeypa
     assert captured["env"]["QUAID_PROJECT_DOCS_WORKER_TOKEN"]
 
 
-def test_start_worker_strips_inherited_anthropic_key(project_env, monkeypatch):
+def test_start_worker_preserves_env_anthropic_key_without_shared_auth(project_env, monkeypatch):
     _tmp_path, _src, _entry = project_env
     from core import project_docs
 
@@ -2479,7 +2504,7 @@ def test_start_worker_strips_inherited_anthropic_key(project_env, monkeypatch):
     monkeypatch.setattr(project_docs, "_wait_for_pid", lambda *args, **kwargs: 44445)
 
     assert project_docs.start_worker("demo") == 44445
-    assert "ANTHROPIC_API_KEY" not in captured["env"]
+    assert captured["env"]["ANTHROPIC_API_KEY"] == "sk-ant-explicit-worker"
 
 
 def test_start_worker_does_not_pin_shared_auth_anthropic_key(project_env, monkeypatch):
@@ -2503,7 +2528,7 @@ def test_start_worker_does_not_pin_shared_auth_anthropic_key(project_env, monkey
         def poll(self):
             return None
 
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-stale-worker-env")
     monkeypatch.setattr(project_docs, "project_is_registered_for_worker", lambda _name: True)
     monkeypatch.setattr(project_docs, "read_worker_pid", lambda _name: None)
     monkeypatch.setattr(project_docs, "read_supervisor_pid", lambda: 12345)

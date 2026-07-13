@@ -3561,6 +3561,12 @@ def test_start_daemon_lock_open_failure_preserves_fail_open_fallback(monkeypatch
 def test_start_daemon_exports_quaid_home_to_worker_env(monkeypatch, tmp_path):
     pid_path = tmp_path / "extraction-daemon.pid"
     captured = {}
+    auth_path = tmp_path / "home" / "shared" / "auth" / "credentials.json"
+    auth_path.parent.mkdir(parents=True)
+    auth_path.write_text(
+        json.dumps({"credentials": {"anthropic_oauth": {"token": "sk-ant-oat01-current-registry"}}}),
+        encoding="utf-8",
+    )
 
     def fake_read_pid():
         return None
@@ -3619,6 +3625,29 @@ def test_start_daemon_exports_quaid_home_to_worker_env(monkeypatch, tmp_path):
     assert "QUAID_SUPERVISOR_TOKEN" not in captured["env"]
     assert "MEMORY_DB_PATH" not in captured["env"]
     assert "MEMORY_ARCHIVE_DB_PATH" not in captured["env"]
+
+
+def test_start_daemon_preserves_env_anthropic_key_without_shared_auth(monkeypatch, tmp_path):
+    pid_path = tmp_path / "extraction-daemon.pid"
+    captured = {}
+
+    class _FakePopen:
+        pid = 99998
+
+        def __init__(self, *_args, **kwargs):
+            captured["env"] = dict(kwargs.get("env") or {})
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-livetest")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env-only-daemon")
+    monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
+    monkeypatch.setattr(extraction_daemon, "_log_path", lambda: tmp_path / "daemon.log")
+    monkeypatch.setattr(extraction_daemon.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(extraction_daemon.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: None)
+
+    assert extraction_daemon.start_daemon() == -1
+    assert captured["env"]["ANTHROPIC_API_KEY"] == "sk-ant-env-only-daemon"
 
 
 def test_start_daemon_refuses_missing_instance_before_spawn(monkeypatch, tmp_path):

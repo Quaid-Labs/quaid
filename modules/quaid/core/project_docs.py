@@ -28,7 +28,6 @@ SUPERVISOR_ROLE = "project-docs-supervisor"
 WORKER_ROLE = "project-docs-worker"
 _DB_OVERRIDE_ENV_KEYS = ("MEMORY_DB_PATH", "MEMORY_ARCHIVE_DB_PATH")
 _BACKGROUND_PROCESS_SCRUB_ENV_KEYS = (
-    "ANTHROPIC_API_KEY",
     "ART",
     "CLAUDE_PROJECT_DIR",
     "CODEX_PROJECT_DIR",
@@ -91,6 +90,41 @@ def scrub_background_process_env(env: Dict[str, str]) -> Dict[str, str]:
     cleaned = dict(env)
     for key in _BACKGROUND_PROCESS_SCRUB_ENV_KEYS:
         cleaned.pop(key, None)
+    return cleaned
+
+
+def _shared_anthropic_auth_token(env: Dict[str, str]) -> Optional[str]:
+    raw_home = str(env.get("QUAID_HOME") or "").strip()
+    home = Path(raw_home).expanduser().resolve() if raw_home else get_quaid_home()
+    path = home / "shared" / "auth" / "credentials.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        creds = data.get("credentials", {}) if isinstance(data, dict) else {}
+        if not isinstance(creds, dict):
+            return None
+        for kind in ("anthropic_oauth", "anthropic_api"):
+            payload = creds.get(kind)
+            token = ""
+            if isinstance(payload, dict):
+                token = str(payload.get("token") or "").strip()
+            elif isinstance(payload, str):
+                token = payload.strip()
+            if token:
+                return token
+    except Exception as exc:
+        logger.warning("Failed reading shared Anthropic auth registry for background process env: %s", exc)
+        if _fail_hard_enabled():
+            raise
+    return None
+
+
+def prefer_shared_anthropic_auth_over_env(env: Dict[str, str]) -> Dict[str, str]:
+    """Let rotated shared auth win without breaking env-only alpha installs."""
+    cleaned = dict(env)
+    if _shared_anthropic_auth_token(cleaned):
+        cleaned.pop("ANTHROPIC_API_KEY", None)
     return cleaned
 
 
@@ -2261,6 +2295,7 @@ def start_supervisor() -> int:
         for key in _DB_OVERRIDE_ENV_KEYS:
             env.pop(key, None)
         env["QUAID_HOME"] = str(get_quaid_home())
+        env = prefer_shared_anthropic_auth_over_env(env)
         env["QUAID_SUPERVISOR_BOOT"] = "1"
         env.setdefault("QUAID_SUPERVISOR_INTERVAL_SECONDS", "5")
         env["QUAID_SUPERVISOR_TOKEN"] = uuid.uuid4().hex
@@ -2348,6 +2383,7 @@ def start_worker(project: str) -> int:
         env["QUAID_HOME"] = str(get_quaid_home())
         env = _apply_project_runtime_env(env, entry, request=request, project=name, require_instance=True)
         env.setdefault("QUAID_PROJECT_DOCS_WORKER_INTERVAL_SECONDS", "5")
+        env = prefer_shared_anthropic_auth_over_env(env)
         env["QUAID_PROJECT_DOCS_WORKER_TOKEN"] = uuid.uuid4().hex
         supervisor_pid = read_supervisor_pid()
         if supervisor_pid:
