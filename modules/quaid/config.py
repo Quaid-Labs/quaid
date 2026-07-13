@@ -1021,7 +1021,6 @@ def load_config() -> MemoryConfig:
     global _config, _config_loading, _config_instance_id, _config_env_signature
 
     with _config_lock:
-        current_instance = os.environ.get("QUAID_INSTANCE", "").strip()
         current_signature = _current_config_env_signature()
         if _config is not None and current_signature == _config_env_signature:
             return _config
@@ -1037,7 +1036,13 @@ def load_config() -> MemoryConfig:
 
         _config_loading = True
         try:
-            return _load_config_inner()
+            loaded = _load_config_inner()
+            if _config is None:
+                _config = loaded
+            if _config_env_signature is None:
+                _config_instance_id = os.environ.get("QUAID_INSTANCE", "").strip()
+                _config_env_signature = _current_config_env_signature()
+            return loaded
         finally:
             _config_loading = False
 
