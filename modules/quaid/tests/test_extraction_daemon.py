@@ -1681,6 +1681,60 @@ def test_daemon_extract_llm_timeout_and_retries_can_be_tuned(monkeypatch):
     assert extraction_daemon._daemon_extract_llm_max_retries() == 2
 
 
+def test_daemon_extract_llm_timeout_uses_codex_oauth_provider_default(monkeypatch):
+    import config as config_mod
+
+    monkeypatch.delenv("QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setattr(
+        config_mod,
+        "get_config",
+        lambda: types.SimpleNamespace(
+            models=types.SimpleNamespace(
+                deep_reasoning="gpt-5.4",
+                deep_reasoning_provider="default",
+                llm_provider="openai",
+            )
+        ),
+    )
+
+    class _CodexAdapter:
+        __module__ = "adaptors.codex.adapter"
+
+        def get_llm_provider(self, model_tier=None):
+            _ = model_tier
+            raise AssertionError("configured Codex OAuth timeout should not require credentials")
+
+    assert extraction_daemon._daemon_extract_llm_timeout_seconds(
+        adapter=_CodexAdapter(),
+    ) == pytest.approx(600.0)
+
+
+def test_daemon_extract_llm_timeout_keeps_base_default_for_non_codex_provider(monkeypatch):
+    monkeypatch.delenv("QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS", raising=False)
+
+    class _OtherAdapter:
+        def get_llm_provider(self, model_tier=None):
+            assert model_tier == "deep"
+            return object()
+
+    assert extraction_daemon._daemon_extract_llm_timeout_seconds(
+        adapter=_OtherAdapter(),
+    ) == pytest.approx(120.0)
+
+
+def test_daemon_extract_llm_timeout_env_override_bypasses_provider_lookup(monkeypatch):
+    monkeypatch.setenv("QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS", "45.5")
+
+    class _FailingAdapter:
+        def get_llm_provider(self, model_tier=None):
+            _ = model_tier
+            raise AssertionError("env override should bypass provider lookup")
+
+    assert extraction_daemon._daemon_extract_llm_timeout_seconds(
+        adapter=_FailingAdapter(),
+    ) == pytest.approx(45.5)
+
+
 def test_rolling_payload_merge_and_flush_preserve_source_chunk_descriptors():
     state = {
         "raw_facts": [

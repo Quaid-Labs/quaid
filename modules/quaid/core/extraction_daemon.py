@@ -59,6 +59,7 @@ VALID_SIGNAL_TYPES = ("compaction", "reset", "session_end", "timeout", "rolling"
 DAEMON_EXTRACT_CHUNK_MAX_TOKENS = 900
 DAEMON_EXTRACT_CHUNK_RATIO = 0.8
 DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS = 120.0
+DAEMON_EXTRACT_CODEX_OAUTH_LLM_TIMEOUT_SECONDS = 600.0
 DAEMON_EXTRACT_LLM_SLOT_WAIT_SECONDS = 1800.0
 DAEMON_EXTRACT_LLM_MAX_RETRIES = 0
 DAEMON_SIGNAL_TO_LIFECYCLE_EVENT = {
@@ -5242,6 +5243,7 @@ def _stage_semantic_buffer_payload(
     semantic_buffer_metrics: Dict[str, int],
     chunk_budget: int,
     chunk_line_budget: int,
+    adapter: Any = None,
 ) -> Dict[str, Any]:
     transcript_text = str(staged_state.get("semantic_buffer", "") or "").strip()
     staged_state = dict(staged_state or {})
@@ -5291,7 +5293,7 @@ def _stage_semantic_buffer_payload(
         dry_run=True,
         carry_facts=list(staged_state.get("carry_facts", []) or []),
         chunk_tokens_override=_daemon_extract_chunk_tokens(chunk_budget),
-        llm_timeout_seconds=_daemon_extract_llm_timeout_seconds(),
+        llm_timeout_seconds=_daemon_extract_llm_timeout_seconds(adapter=adapter),
         llm_slot_wait_timeout_seconds=_daemon_extract_llm_slot_wait_seconds(),
         llm_max_retries=_daemon_extract_llm_max_retries(),
         raise_on_llm_failure=True,
@@ -5484,31 +5486,129 @@ def _reset_daemon_llm_usage_budget() -> None:
     reset_token_usage()
 
 
-def _daemon_extract_llm_timeout_seconds(default: float = DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS) -> float:
+def _normalize_daemon_provider_id(adapter: Any, provider: str) -> str:
+    raw = str(provider or "").strip().lower()
+    if not raw:
+        return ""
+    normalize = getattr(adapter, "_normalize_installer_provider", None) if adapter is not None else None
+    if callable(normalize):
+        try:
+            normalized = str(normalize(raw) or "").strip().lower()
+            if normalized:
+                return normalized
+        except Exception as exc:
+            logger.debug("daemon extraction provider-id normalization failed for %r: %s", raw, exc)
+    return {"openai-codex": "openai"}.get(raw, raw)
+
+
+def _adapter_config_selects_codex_oauth_provider(adapter: Any) -> bool:
+    """Infer Codex OAuth transport from config without requiring credentials."""
+    if adapter is None:
+        return False
+    module_name = str(getattr(adapter.__class__, "__module__", "") or "")
+    class_name = str(getattr(adapter.__class__, "__name__", "") or "")
+    if not (
+        module_name.startswith("adaptors.codex.")
+        or module_name.startswith("adaptors.openclaw.")
+        or class_name in {"CodexAdapter", "OpenClawAdapter"}
+    ):
+        return False
+    try:
+        from config import get_config
+
+        cfg = get_config()
+        models = getattr(cfg, "models", None)
+        if models is None:
+            return False
+        provider = str(getattr(models, "deep_reasoning_provider", "") or "").strip()
+        if not provider or provider == "default":
+            provider = str(getattr(models, "llm_provider", "") or "").strip()
+        normalized_provider = _normalize_daemon_provider_id(adapter, provider)
+        if normalized_provider in {"openai", "openai-compatible"}:
+            return True
+        if not normalized_provider or normalized_provider == "default":
+            deep_model = str(getattr(models, "deep_reasoning", "") or "").strip().lower()
+            return deep_model.startswith(("gpt-", "o1", "o3", "o4"))
+    except Exception as exc:
+        logger.debug("daemon extraction provider config inference failed: %s", exc)
+    return False
+
+
+def _adapter_instance_is_codex_oauth_provider(adapter: Any) -> bool:
+    if _adapter_config_selects_codex_oauth_provider(adapter):
+        return True
+    provider_getter = getattr(adapter, "get_llm_provider", None) if adapter is not None else None
+    if not callable(provider_getter):
+        return False
+    try:
+        from lib.providers import OpenAICodexOAuthLLMProvider
+
+        provider = provider_getter(model_tier="deep")
+        return isinstance(provider, OpenAICodexOAuthLLMProvider)
+    except Exception as exc:
+        # Provider construction may require live credentials. Extraction itself
+        # remains the failHard boundary; timeout calibration falls back to base.
+        logger.debug("daemon extraction LLM provider instance lookup failed: %s", exc)
+        return False
+
+
+def _daemon_extract_llm_timeout_default(
+    default: float = DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS,
+    *,
+    adapter: Any = None,
+) -> float:
+    """Return the provider-calibrated daemon extraction LLM timeout."""
+    base = max(1.0, float(default))
+    active_adapter = adapter
+    if active_adapter is None:
+        try:
+            from lib.adapter import peek_adapter
+
+            active_adapter = peek_adapter()
+        except Exception as exc:
+            logger.debug("daemon extraction adapter peek failed while choosing timeout default: %s", exc)
+            active_adapter = None
+    if _adapter_instance_is_codex_oauth_provider(active_adapter):
+        timeout = max(base, DAEMON_EXTRACT_CODEX_OAUTH_LLM_TIMEOUT_SECONDS)
+        logger.info(
+            "daemon extraction LLM timeout calibrated for OpenAICodexOAuthLLMProvider: %.1fs",
+            timeout,
+        )
+        return timeout
+    return base
+
+
+def _daemon_extract_llm_timeout_seconds(
+    default: float = DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS,
+    *,
+    adapter: Any = None,
+) -> float:
     """Bound provider calls made while daemon source locks are held."""
     raw = str(os.environ.get("QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS", "") or "").strip()
     if not raw:
-        return max(1.0, float(default))
+        return _daemon_extract_llm_timeout_default(default, adapter=adapter)
     try:
         value = float(raw)
     except Exception as exc:
         if _fail_hard_enabled():
             raise RuntimeError("Invalid QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS") from exc
+        configured_default = _daemon_extract_llm_timeout_default(default, adapter=adapter)
         logger.warning(
             "invalid QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS=%r; using default %.1fs",
             raw,
-            default,
+            configured_default,
         )
-        return max(1.0, float(default))
+        return configured_default
     if value <= 0:
         if _fail_hard_enabled():
             raise RuntimeError("QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS must be positive")
+        configured_default = _daemon_extract_llm_timeout_default(default, adapter=adapter)
         logger.warning(
             "non-positive QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS=%r; using default %.1fs",
             raw,
-            default,
+            configured_default,
         )
-        return max(1.0, float(default))
+        return configured_default
     return max(1.0, value)
 
 
@@ -7716,6 +7816,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     semantic_buffer_metrics=semantic_buffer_metrics,
                     chunk_budget=chunk_budget,
                     chunk_line_budget=chunk_line_budget,
+                    adapter=adapter,
                 )
                 refreshed_semantic_buffer_for_nonrolling = False
             buffered_text = str(staged_state.get("semantic_buffer", "") or "").strip()
@@ -8111,6 +8212,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 semantic_buffer_metrics=semantic_buffer_metrics,
                 chunk_budget=chunk_budget,
                 chunk_line_budget=chunk_line_budget,
+                adapter=adapter,
             )
             staged_state = _record_staged_source_transcript_path(
                 session_id,
@@ -8191,7 +8293,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 dry_run=True,
                 carry_facts=list(staged_state.get("carry_facts", []) or []),
                 chunk_tokens_override=_daemon_extract_chunk_tokens(chunk_budget),
-                llm_timeout_seconds=_daemon_extract_llm_timeout_seconds(),
+                llm_timeout_seconds=_daemon_extract_llm_timeout_seconds(adapter=adapter),
                 llm_slot_wait_timeout_seconds=_daemon_extract_llm_slot_wait_seconds(),
                 llm_max_retries=_daemon_extract_llm_max_retries(),
                 raise_on_llm_failure=True,
@@ -8265,7 +8367,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     session_id=session_id,
                     dry_run=True,
                     carry_facts=[],
-                    llm_timeout_seconds=_daemon_extract_llm_timeout_seconds(),
+                    llm_timeout_seconds=_daemon_extract_llm_timeout_seconds(adapter=adapter),
                     llm_slot_wait_timeout_seconds=_daemon_extract_llm_slot_wait_seconds(),
                     llm_max_retries=_daemon_extract_llm_max_retries(),
                     raise_on_llm_failure=True,
