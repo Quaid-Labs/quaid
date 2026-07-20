@@ -5501,17 +5501,21 @@ def _normalize_daemon_provider_id(adapter: Any, provider: str) -> str:
     return {"openai-codex": "openai"}.get(raw, raw)
 
 
-def _adapter_config_selects_codex_oauth_provider(adapter: Any) -> bool:
-    """Infer Codex OAuth transport from config without requiring credentials."""
+def _adapter_can_use_codex_oauth_provider(adapter: Any) -> bool:
     if adapter is None:
         return False
     module_name = str(getattr(adapter.__class__, "__module__", "") or "")
     class_name = str(getattr(adapter.__class__, "__name__", "") or "")
-    if not (
+    return (
         module_name.startswith("adaptors.codex.")
         or module_name.startswith("adaptors.openclaw.")
         or class_name in {"CodexAdapter", "OpenClawAdapter"}
-    ):
+    )
+
+
+def _adapter_config_selects_codex_oauth_provider(adapter: Any) -> bool:
+    """Infer Codex OAuth transport from config without requiring credentials."""
+    if not _adapter_can_use_codex_oauth_provider(adapter):
         return False
     try:
         from config import get_config
@@ -5537,6 +5541,8 @@ def _adapter_config_selects_codex_oauth_provider(adapter: Any) -> bool:
 def _adapter_instance_is_codex_oauth_provider(adapter: Any) -> bool:
     if _adapter_config_selects_codex_oauth_provider(adapter):
         return True
+    if not _adapter_can_use_codex_oauth_provider(adapter):
+        return False
     provider_getter = getattr(adapter, "get_llm_provider", None) if adapter is not None else None
     if not callable(provider_getter):
         return False

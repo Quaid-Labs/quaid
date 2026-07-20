@@ -1714,8 +1714,8 @@ def test_daemon_extract_llm_timeout_keeps_base_default_for_non_codex_provider(mo
 
     class _OtherAdapter:
         def get_llm_provider(self, model_tier=None):
-            assert model_tier == "deep"
-            return object()
+            _ = model_tier
+            raise AssertionError("non-Codex adapters should not construct providers for timeout selection")
 
     assert extraction_daemon._daemon_extract_llm_timeout_seconds(
         adapter=_OtherAdapter(),
@@ -1733,6 +1733,42 @@ def test_daemon_extract_llm_timeout_env_override_bypasses_provider_lookup(monkey
     assert extraction_daemon._daemon_extract_llm_timeout_seconds(
         adapter=_FailingAdapter(),
     ) == pytest.approx(45.5)
+
+
+def test_daemon_extract_llm_timeout_no_adapter_is_fail_hard_safe(monkeypatch):
+    monkeypatch.delenv("QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    assert extraction_daemon._daemon_extract_llm_timeout_seconds(adapter=None) == pytest.approx(120.0)
+
+
+def test_daemon_extract_llm_timeout_provider_lookup_error_is_fail_hard_safe(monkeypatch):
+    import config as config_mod
+
+    monkeypatch.delenv("QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        config_mod,
+        "get_config",
+        lambda: types.SimpleNamespace(
+            models=types.SimpleNamespace(
+                deep_reasoning="claude-sonnet-4-6",
+                deep_reasoning_provider="default",
+                llm_provider="anthropic",
+            )
+        ),
+    )
+
+    class _CodexAdapter:
+        __module__ = "adaptors.codex.adapter"
+
+        def get_llm_provider(self, model_tier=None):
+            _ = model_tier
+            raise RuntimeError("credential unavailable")
+
+    assert extraction_daemon._daemon_extract_llm_timeout_seconds(
+        adapter=_CodexAdapter(),
+    ) == pytest.approx(120.0)
 
 
 def test_rolling_payload_merge_and_flush_preserve_source_chunk_descriptors():
