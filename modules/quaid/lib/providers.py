@@ -1454,6 +1454,81 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
             except Exception:
                 continue
 
+    @classmethod
+    def _sse_event_is_terminal(cls, event_text: str) -> bool:
+        data_lines = [
+            line[5:].strip()
+            for line in str(event_text or "").splitlines()
+            if line.startswith("data:")
+        ]
+        data = "\n".join(data_lines).strip()
+        if not data:
+            return False
+        if data == "[DONE]":
+            return True
+        try:
+            event = json.loads(data)
+        except Exception:
+            return False
+        event_type = str(event.get("type") or "").strip()
+        return event_type in {
+            "error",
+            "response.done",
+            "response.completed",
+            "response.failed",
+            "response.incomplete",
+        }
+
+    @classmethod
+    def _read_stream_body_with_deadline(cls, resp, *, read_timeout_s: float) -> str:
+        """Read Codex SSE until a terminal response event instead of waiting for EOF."""
+        timeout = max(1.0, float(read_timeout_s or 0))
+        deadline = time.time() + timeout
+        holder = {"data": None, "error": None}
+
+        def _reader() -> None:
+            raw_lines = []
+            event_lines = []
+            try:
+                while True:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        raise TimeoutError(f"response body read exceeded deadline ({timeout:.1f}s)")
+                    _set_response_socket_timeout(resp, remaining)
+                    try:
+                        line = resp.readline()
+                    except TimeoutError as exc:
+                        raise TimeoutError(f"response body read exceeded deadline ({timeout:.1f}s)") from exc
+                    if line in (b"", ""):
+                        break
+                    if isinstance(line, bytes):
+                        text_line = line.decode("utf-8", errors="replace")
+                    else:
+                        text_line = str(line)
+                    raw_lines.append(text_line)
+                    stripped = text_line.rstrip("\r\n")
+                    if stripped:
+                        event_lines.append(stripped)
+                        continue
+                    event_text = "\n".join(event_lines)
+                    event_lines = []
+                    if cls._sse_event_is_terminal(event_text):
+                        break
+                if event_lines and cls._sse_event_is_terminal("\n".join(event_lines)):
+                    raw_lines.append("\n")
+                holder["data"] = "".join(raw_lines)
+            except BaseException as exc:  # noqa: BLE001
+                holder["error"] = exc
+
+        reader = threading.Thread(target=_reader, daemon=True)
+        reader.start()
+        reader.join(timeout)
+        if reader.is_alive():
+            raise TimeoutError(f"response body read exceeded deadline ({timeout:.1f}s)")
+        if holder["error"] is not None:
+            raise holder["error"]  # type: ignore[misc]
+        return str(holder["data"] or "")
+
     def _parse_response(self, raw_text: str, model: str, start_time: float) -> LLMResult:
         final_response = None
         text_chunks = []
@@ -1531,7 +1606,7 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
             remaining = deadline - time.time()
             if remaining <= 0:
                 raise TimeoutError(f"OpenAI Codex OAuth response timed out before body read ({float(timeout):.1f}s)")
-            raw = _read_response_body_with_deadline(resp, read_timeout_s=remaining).decode("utf-8", errors="replace")
+            raw = self._read_stream_body_with_deadline(resp, read_timeout_s=remaining)
         return self._parse_response(raw, model, start_time)
 
     def get_profiles(self):

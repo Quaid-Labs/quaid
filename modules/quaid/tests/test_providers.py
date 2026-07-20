@@ -1151,6 +1151,15 @@ class TestOpenAICompatibleLLMProvider:
 
 
 class TestOpenAICodexOAuthLLMProvider:
+    @staticmethod
+    def _mock_sse_response(body: bytes):
+        stream = io.BytesIO(body)
+        mock_resp = MagicMock()
+        mock_resp.readline.side_effect = stream.readline
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        return mock_resp
+
     def test_preserves_explicit_empty_fast_model(self):
         p = OpenAICodexOAuthLLMProvider(deep_model="gpt-5.4", fast_model="")
 
@@ -1177,10 +1186,7 @@ class TestOpenAICodexOAuthLLMProvider:
                 'data: {"type":"response.completed","response":{"status":"completed","model":"gpt-5.4-mini","output":[{"type":"message","content":[{"type":"output_text","text":"Hello!"}]}],"usage":{"input_tokens":10,"output_tokens":5,"input_tokens_details":{"cached_tokens":2}}}}',
             ]
         ).encode()
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = sse_body
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp = self._mock_sse_response(sse_body)
 
         with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp) as mock_open:
             result = p.llm_call(
@@ -1232,10 +1238,7 @@ class TestOpenAICodexOAuthLLMProvider:
                 'data: {"type":"response.completed","response":{"status":"completed","model":"gpt-5.4-mini","output":[],"usage":{"input_tokens":10,"output_tokens":5,"input_tokens_details":{"cached_tokens":2}}}}',
             ]
         ).encode()
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = sse_body
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp = self._mock_sse_response(sse_body)
 
         with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp):
             result = p.llm_call(
@@ -1263,10 +1266,7 @@ class TestOpenAICodexOAuthLLMProvider:
                 'data: {"type":"response.completed","response":{"status":"completed","model":"gpt-5.4-mini","output":[],"usage":{"input_tokens":10,"output_tokens":5}}}',
             ]
         ).encode()
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = sse_body
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp = self._mock_sse_response(sse_body)
 
         with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp) as mock_open:
             result = p.llm_call(
@@ -1279,30 +1279,56 @@ class TestOpenAICodexOAuthLLMProvider:
         req = mock_open.call_args[0][0]
         assert req.get_header("Chatgpt-account-id") is None
 
-    def test_llm_call_bounds_stream_body_read_by_timeout(self):
+    def test_llm_call_returns_after_terminal_sse_event_without_waiting_for_eof(self):
         p = OpenAICodexOAuthLLMProvider(
             api_key="token",
             deep_model="gpt-5.4",
             fast_model="gpt-5.4-mini",
         )
         mock_resp = MagicMock()
+        mock_resp.readline.side_effect = [
+            b'data: {"type":"response.output_text.delta","delta":"done"}\n',
+            b"\n",
+            b'data: {"type":"response.completed","response":{"status":"completed","model":"gpt-5.4","output":[],"usage":{"input_tokens":3,"output_tokens":1}}}\n',
+            b"\n",
+            TimeoutError("would hang after terminal event"),
+        ]
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
 
-        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp) as mock_open, \
-             patch(
-                 "lib.providers._read_response_body_with_deadline",
-                 side_effect=TimeoutError("response body read exceeded deadline (1.0s)"),
-             ) as read_body:
-            with pytest.raises(TimeoutError, match="response body read exceeded deadline"):
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            result = p.llm_call(
+                [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+                model_tier="deep",
+                timeout=1.0,
+            )
+
+        assert mock_open.call_args.kwargs["timeout"] == 1.0
+        assert result.text == "done"
+        assert mock_resp.readline.call_count == 4
+
+    def test_llm_call_bounds_stream_read_before_terminal_event(self):
+        p = OpenAICodexOAuthLLMProvider(
+            api_key="token",
+            deep_model="gpt-5.4",
+            fast_model="gpt-5.4-mini",
+        )
+        mock_resp = MagicMock()
+        mock_resp.readline.side_effect = [
+            b'data: {"type":"response.created"}\n',
+            b"\n",
+            TimeoutError("socket timed out"),
+        ]
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp):
+            with pytest.raises(TimeoutError, match=r"response body read exceeded deadline \(1\.0s\)"):
                 p.llm_call(
                     [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
                     model_tier="deep",
                     timeout=1.0,
                 )
-
-        assert mock_open.call_args.kwargs["timeout"] == 1.0
-        assert read_body.call_args.kwargs["read_timeout_s"] <= 1.0
 
 
 class TestCodexLLMProvider:
