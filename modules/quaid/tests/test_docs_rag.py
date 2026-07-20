@@ -3076,6 +3076,17 @@ class TestDocsSearchFiltering:
     def test_search_docs_bundle_blocks_explicit_unlinked_project_and_returns_scope_hint(self, _sim, _unpack, _embed, tmp_path, caplog):
         rag = _make_rag(tmp_path)
         rag._shared_scope_enabled = True
+        project_dir = tmp_path / "workspace" / "projects" / "cross-live-test"
+        project_dir.mkdir(parents=True)
+        project_log = project_dir / "PROJECT.log"
+        project_log.write_text(
+            "- In the cross-live-test project, Ember Glass means pager escalation level 2.\n",
+            encoding="utf-8",
+        )
+        (project_dir / "PROJECT.md").write_text(
+            "# Cross Live Test\n\nNorth Pier beacon maintenance notes.\n",
+            encoding="utf-8",
+        )
 
         db = sqlite3.connect(rag.db_path)
         try:
@@ -3083,7 +3094,7 @@ class TestDocsSearchFiltering:
                 "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     "unlinked:0",
-                    "/tmp/workspace/projects/cross-live-test/PROJECT.md",
+                    str(project_dir / "PROJECT.md"),
                     0,
                     "north pier beacon maintenance notes",
                     "# Notes",
@@ -3096,8 +3107,8 @@ class TestDocsSearchFiltering:
 
         def _project_paths(name: str):
             if name == "cross-live-test":
-                return {"home_dir": "/tmp/workspace/projects/cross-live-test", "source_roots": []}
-            return {"home_dir": "/tmp/workspace/projects/quaid", "source_roots": []}
+                return {"home_dir": str(project_dir), "source_roots": []}
+            return {"home_dir": str(tmp_path / "workspace" / "projects" / "quaid"), "source_roots": []}
 
         caplog.set_level("WARNING")
         with patch("datastore.docsdb.rag._linked_projects_for_current_instance", return_value=(["quaid"], True)), \
@@ -3106,8 +3117,8 @@ class TestDocsSearchFiltering:
                  return_value={
                      "quaid": {"instances": ["cc-main"]},
                      "cross-live-test": {
-                         "canonical_path": "/tmp/workspace/projects/cross-live-test",
-                         "source_root": "/tmp/workspace/projects/cross-live-test-src",
+                         "canonical_path": str(project_dir),
+                         "source_root": str(tmp_path / "workspace" / "projects" / "cross-live-test-src"),
                          "instances": [],
                      },
                  },
@@ -3117,13 +3128,16 @@ class TestDocsSearchFiltering:
             bundle = rag.search_docs_bundle("north pier beacon", limit=5, project="cross-live-test")
 
         assert bundle["chunks"] == []
+        assert bundle["project_md"] is None
+        assert "Ember Glass means pager escalation level 2" not in json.dumps(bundle)
+        assert "North Pier beacon maintenance notes" not in json.dumps(bundle)
         assert "docs recall suppressed by current instance scope" in caplog.text
         assert "cross-live-test" in caplog.text
         hint = ((bundle.get("telemetry") or {}).get("scope_hint") or {})
         assert hint.get("type") == "unlinked_project_candidates"
         assert hint.get("requested_project") == "cross-live-test"
         assert [c["project"] for c in hint.get("candidates", [])] == ["cross-live-test"]
-        assert hint["candidates"][0]["path"] == "/tmp/workspace/projects/cross-live-test-src"
+        assert hint["candidates"][0]["path"] == str(tmp_path / "workspace" / "projects" / "cross-live-test-src")
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0])
     def test_search_docs_shared_scope_matches_explicit_project_case_insensitively(self, _embed, tmp_path):

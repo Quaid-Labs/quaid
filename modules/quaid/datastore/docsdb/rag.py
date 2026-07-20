@@ -943,6 +943,7 @@ class DocsRAG:
             db_path is None and not str(os.environ.get("MEMORY_DB_PATH", "")).strip()
         )
         self._last_scope_hint: Optional[Dict[str, Any]] = None
+        self._last_scope_suppressed: Optional[Dict[str, Any]] = None
         self._ensure_schema()
         if self._shared_scope_enabled:
             try:
@@ -1909,6 +1910,7 @@ class DocsRAG:
             date_from/date_to: Optional YYYY-MM-DD bounds for dated project-log entries.
         """
         self._last_scope_hint = None
+        self._last_scope_suppressed = None
         date_from = _normalize_date_bound(date_from)
         date_to = _normalize_date_bound(date_to)
         if not str(query or "").strip():
@@ -2048,6 +2050,10 @@ class DocsRAG:
                     project,
                     sorted(linked_projects),
                 )
+                self._last_scope_suppressed = {
+                    "requested_project": str(project or "").strip() or None,
+                    "linked_projects": sorted(str(p or "").strip() for p in linked_projects if str(p or "").strip()),
+                }
                 self._set_scope_hint_for_unlinked_candidates(
                     conn=conn,
                     query=query,
@@ -2275,14 +2281,17 @@ class DocsRAG:
             date_from=date_from,
             date_to=date_to,
         )
-        fallback_chunks = self._project_source_fallback_chunks(
-            query=query,
-            limit=limit,
-            project=project,
-            docs=docs,
-            date_from=date_from,
-            date_to=date_to,
-        )
+        scope_suppressed = isinstance(self._last_scope_suppressed, dict)
+        fallback_chunks = []
+        if not scope_suppressed:
+            fallback_chunks = self._project_source_fallback_chunks(
+                query=query,
+                limit=limit,
+                project=project,
+                docs=docs,
+                date_from=date_from,
+                date_to=date_to,
+            )
         if fallback_chunks:
             seen = {
                 (str(chunk.get("source") or ""), str(chunk.get("content") or "").strip())
@@ -2299,7 +2308,7 @@ class DocsRAG:
             merged.sort(key=lambda row: float(row.get("similarity", 0.0)), reverse=True)
             chunks = merged[:limit]
         inferred_project = project or self.infer_project_from_chunks(chunks)
-        attach_current_project_md = not (date_from or date_to)
+        attach_current_project_md = not scope_suppressed and not (date_from or date_to)
         bundle = {
             "chunks": chunks,
             "project": inferred_project,
@@ -2319,6 +2328,8 @@ class DocsRAG:
                 "sources": [chunk.get("source") for chunk in chunks[:5]],
                 "top_similarity": chunks[0].get("similarity") if chunks else None,
             })
+            if scope_suppressed:
+                telemetry["scope_suppressed"] = dict(self._last_scope_suppressed or {})
         if isinstance(self._last_scope_hint, dict):
             telemetry["scope_hint"] = dict(self._last_scope_hint)
         if telemetry:
