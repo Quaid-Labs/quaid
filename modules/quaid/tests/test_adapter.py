@@ -5272,7 +5272,9 @@ class TestCodexAdapter:
             provider = adapter.get_llm_provider()
         assert isinstance(provider, OpenAICodexOAuthLLMProvider)
 
-    def test_get_llm_provider_prefers_single_anthropic_shared_auth_over_openai_model_hints(self, monkeypatch, tmp_path):
+    def test_get_llm_provider_warns_and_falls_back_on_model_provider_conflict_failopen(
+        self, monkeypatch, tmp_path, caplog
+    ):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
@@ -5293,11 +5295,39 @@ class TestCodexAdapter:
                 base_url="",
             )
         )
-        with patch("config.get_config", return_value=cfg):
+        with patch("config.get_config", return_value=cfg), \
+             patch("adaptors.codex.adapter.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="adaptors.codex.adapter"):
             provider = adapter.get_llm_provider()
         assert isinstance(provider, AnthropicLLMProvider)
         assert provider._deep_model == "claude-sonnet-4-5"
         assert provider._fast_model == "claude-haiku-4-5"
+        assert "Configured Codex deep model 'gpt-5.4' appears to target provider 'openai'" in caplog.text
+        assert "failHard is disabled" in caplog.text
+
+    def test_get_llm_provider_raises_model_provider_conflict_when_fail_hard(self, monkeypatch, caplog):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        adapter = CodexAdapter()
+        cfg = SimpleNamespace(
+            models=SimpleNamespace(
+                llm_provider="anthropic",
+                fast_reasoning_provider="default",
+                deep_reasoning_provider="default",
+                deep_reasoning="gpt-5.4",
+                fast_reasoning="gpt-5.4-mini",
+                deep_reasoning_effort="high",
+                fast_reasoning_effort="none",
+                deep_reasoning_model_classes={},
+                fast_reasoning_model_classes={},
+                base_url="",
+            )
+        )
+        with patch("config.get_config", return_value=cfg), \
+             patch("adaptors.codex.adapter.is_fail_hard_enabled", return_value=True), \
+             caplog.at_level("WARNING", logger="adaptors.codex.adapter"):
+            with pytest.raises(RuntimeError, match=r"\[fail_hard\].*gpt-5\.4.*anthropic"):
+                adapter.get_llm_provider()
+        assert "Refusing model fallback because failHard is enabled" in caplog.text
 
     def test_get_llm_provider_uses_single_anthropic_shared_auth_when_configured_openai_missing_credential(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -5320,7 +5350,8 @@ class TestCodexAdapter:
                 base_url="",
             )
         )
-        with patch("config.get_config", return_value=cfg):
+        with patch("config.get_config", return_value=cfg), \
+             patch("adaptors.codex.adapter.is_fail_hard_enabled", return_value=False):
             provider = adapter.get_llm_provider()
         assert isinstance(provider, AnthropicLLMProvider)
         assert provider._deep_model == "claude-sonnet-4-5"

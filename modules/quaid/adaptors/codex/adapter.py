@@ -1134,6 +1134,13 @@ class CodexAdapter(QuaidAdapter):
                 return "openai"
         return ""
 
+    @staticmethod
+    def _model_provider_family(provider: str) -> str:
+        normalized = str(provider or "").strip().lower()
+        if normalized in ("openai", "openai-compatible"):
+            return "openai"
+        return normalized
+
     def _detect_shared_primary_provider(self) -> str:
         has_anthropic = bool(self.read_shared_auth_token(["anthropic_oauth", "anthropic_api"]))
         has_openai = bool(self.read_shared_auth_token(["codex_oauth", "openai_api"]))
@@ -1206,10 +1213,24 @@ class CodexAdapter(QuaidAdapter):
 
     def _resolve_model_for_provider(self, cfg, provider_id: str, configured_model: str, tier: str) -> str:
         provider = str(provider_id or "").strip().lower()
+        provider_family = self._model_provider_family(provider)
         model = str(configured_model or "").strip()
         inferred = self._infer_provider_from_models(model)
-        if model and model != "default" and (not inferred or inferred == provider):
-            return model
+        if model and model != "default":
+            if not inferred or inferred == provider_family:
+                return model
+            detail = (
+                f"Configured Codex {tier} model {model!r} appears to target provider "
+                f"{inferred!r}, but the effective provider is {provider!r}."
+            )
+            if is_fail_hard_enabled():
+                logger.warning("%s Refusing model fallback because failHard is enabled.", detail)
+                raise RuntimeError(f"[fail_hard] {detail}")
+            logger.warning(
+                "%s Falling back to %s provider defaults because failHard is disabled.",
+                detail,
+                provider or "default",
+            )
 
         class_attr = "deep_reasoning_model_classes" if tier == "deep" else "fast_reasoning_model_classes"
         class_map = getattr(cfg.models, class_attr, {}) or {}
