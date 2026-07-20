@@ -55,12 +55,13 @@ def main() -> int:
         default=30,
         help="Number of recent metric rows to scan. Ignored when --count-only or --after-count is used.",
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--count-only",
         action="store_true",
         help="Print the current total timeout rolling_flush count and exit.",
     )
-    parser.add_argument(
+    mode.add_argument(
         "--after-count",
         type=int,
         default=None,
