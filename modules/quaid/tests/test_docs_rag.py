@@ -2899,6 +2899,8 @@ class TestDocsSearchFiltering:
         assert hint.get("type") == "unlinked_project_candidates"
         assert hint["candidates"][0]["project"] == "livetest-agentmsg-xp"
         assert hint["candidates"][0]["path"] == "/tmp/workspace/projects/livetest-agentmsg-xp-src"
+        assert not {"content", "text", "snippet"} & set(hint["candidates"][0])
+        assert "Ember Glass means pager escalation level 2" not in json.dumps(hint)
 
     def test_linked_project_scope_fails_closed_when_reconcile_fails(self, tmp_path):
         from datastore.docsdb import rag as rag_module

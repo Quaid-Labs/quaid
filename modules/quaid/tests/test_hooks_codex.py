@@ -1294,6 +1294,9 @@ def test_hook_inject_surfaces_unlinked_project_scope_hint(monkeypatch, tmp_path)
                         "source_root": str(source_root),
                         "canonical_path": str(project_path),
                         "score": 0.91,
+                        "content": "Ember Glass means pager escalation level 2.",
+                        "text": "Do not leak unlinked docs content through discovery hints.",
+                        "snippet": "pager escalation level 2",
                     }
                 ],
             }
@@ -1326,6 +1329,8 @@ def test_hook_inject_surfaces_unlinked_project_scope_hint(monkeypatch, tmp_path)
     assert f"canonical_path={project_path}" in context
     assert "currently_linked_projects: quaid" in context
     assert "do not run `quaid project link`" in context
+    assert "pager escalation level 2" not in context
+    assert "Do not leak unlinked docs content" not in context
 
 
 def test_format_project_docs_scope_hint_skips_unusable_candidates():
