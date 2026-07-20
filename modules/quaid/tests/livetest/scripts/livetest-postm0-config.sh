@@ -25,8 +25,8 @@
 #   codex only: models.deepReasoning: gpt-5.4
 #
 # Per-platform is the correct layer: platform config supersedes global, and
-# per-instance can override platform later (e.g. M4 idle-timeout flip on one
-# platform only). Writing to global risks contaminating other lanes.
+# per-instance can override platform later (e.g. M2 Part C timeout flip on one
+# instance only). Writing to global risks contaminating other lanes.
 #
 # After the merge, the daemon for every installed instance is restarted so the
 # new values are loaded.

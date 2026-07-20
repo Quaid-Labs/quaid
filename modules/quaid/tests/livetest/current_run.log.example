@@ -1,21 +1,14 @@
 Run XXX - Frozen Validation
 # Milestone captions:
-# M1  - /new extraction check
-# M2  - /reset or /clear extraction
-# M3  - /compact extraction path
-# M4  - idle-timeout extraction
-# M5  - auto-inject behavior
-# M6  - deliberate recall behavior
-# M7  - graph traversal validation
-# M8  - project CRUD flow
-# M9  - janitor maintenance pass
-# M10 - docs, health, and session CLI
-# M11 - snippet, journal, project-log generation
-# M12 - multi-agent silo verification
-# M13 - multi-instance silo verification
-# M14 - docs-first guidance + retrieval behavior
-# M15 - failure-signal quality checks
-# M16 - context refresh lifecycle
+# M1  - supervisor + monitor stability
+# M2  - extraction paths
+# M3  - recall behavior
+# M4  - project system + docs CLI
+# M5  - silo isolation
+# M6  - agent notifications
+# M7  - system-context refresh
+# M8  - temporal provenance
+# M9  - session chunk navigation
 # XP1 - cross-platform link setup
 # XP2 - cross-platform shared recall
 # XP3 - cross-platform unlink/cleanup
@@ -29,13 +22,6 @@ M6,PENDING,PENDING,PENDING
 M7,PENDING,PENDING,PENDING
 M8,PENDING,PENDING,PENDING
 M9,PENDING,PENDING,PENDING
-M10,PENDING,PENDING,PENDING
-M11,PENDING,PENDING,PENDING
-M12,PENDING,PENDING,PENDING
-M13,PENDING,PENDING,PENDING
-M14,PENDING,PENDING,PENDING
-M15,PENDING,PENDING,PENDING
-M16,PENDING,PENDING,PENDING
 XP1,PENDING,PENDING,PENDING
 XP2,PENDING,PENDING,PENDING
 XP3,PENDING,PENDING,PENDING

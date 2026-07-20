@@ -71,7 +71,7 @@ Milestones reuse fixtures under `data/`:
 Content that applies across all milestones lives in:
 
 - `../COORDINATOR.SKILL.md` — coordinator responsibilities, preflight flow,
-  post-M0 per-platform config, idle-timeout flip procedure.
+  and post-M0 per-platform config. Timeout extraction setup lives in M2 Part C.
 - `../TESTER.SKILL.md` — tester identity, core rules, test-integrity
   principles, reporting format.
 - `../TESTER.OC.md` / `../TESTER.CC.md` / `../TESTER.CDX.md` — per-platform

@@ -271,8 +271,9 @@ tests/livetest/scripts/livetest-dashboard-new-run.sh --force --title "Run 110 - 
 CSV format:
 - Header must be `milestone,<platform1>,<platform2>,...`
 - Use one row per milestone
-- Current default template includes `M1`-`M16` plus `XP1`-`XP3`
-- Dashboard UI shows short built-in captions for `M1`-`M16` and `XP1`-`XP3`
+- Current default template includes `M1`-`M9` plus `XP1`-`XP3`
+- Dashboard UI shows short built-in captions for the current default template
+  and keeps a few retired milestone captions for reading archived logs.
 - Optional `#` comment lines are ignored (template uses these for milestone hints)
 - Status text is freeform (`PASS`, `FAIL`, `RUNNING`, `BLOCKED`, etc.)
 - Notes go after `---` in freeform text
@@ -308,19 +309,12 @@ M6,,,
 M7,,,
 M8,,,
 M9,,,
-M10,,,
-M11,,,
-M12,,,
-M13,,,
-M14,,,
-M15,,,
-M16,,,
 XP1,,,
 XP2,,,
 XP3,,,
 ---
 Notes:
-- M10 blocked on docs update timeout in CC
+- M4 blocked on docs update in CC
 - Waiting for W6 review on fix commit abc123
 ```
 
@@ -419,22 +413,15 @@ Full milestone definitions are in `tests/livetest/livetest-guide/`.
 | Milestone | What it tests |
 |-----------|---------------|
 | M0 | Agent-driven install from main |
-| M1 | Basic store and injection |
-| M2 | Multi-turn extraction and graph edges |
-| M3 | Compact / reset extraction trigger |
-| M4 | Inactivity timeout extraction |
-| M5 | Auto-inject into a new session |
-| M6 | Deliberate recall (multi-hop graph) |
-| M7 | Graph traversal and edge verification |
-| M8 | Project system CRUD |
-| M9 | Janitor maintenance pass |
-| M10 | Docs registration and RAG search |
-| M11 | Doc update pipeline |
-| M12 | Cross-session recall stability |
-| M13 | Distillation and identity-file quality checks |
-| M14 | Docs-first guidance and retrieval behavior |
-| M15 | Failure-signal quality (provider/router warning hygiene) |
-| M16 | System-context refresh on lifecycle events |
+| M1 | Supervisor and monitor runtime stability |
+| M2 | Extraction: lifecycle, rolling, and timeout |
+| M3 | Recall: auto-inject, deliberate, graph, and date-range |
+| M4 | Project system and Docs CLI |
+| M5 | Silo isolation |
+| M6 | Agent notifications |
+| M7 | System-context refresh on lifecycle events |
+| M8 | Temporal provenance |
+| M9 | Session chunk navigation |
 | XP | Cross-platform project linking and shared doc recall |
 
 ---

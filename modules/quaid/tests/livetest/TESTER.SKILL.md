@@ -176,7 +176,7 @@ not a bug — the daemon simply does not have a live instance to monitor until a
 hook fires.
 
 Manual `quaid daemon stop` / `daemon start` sequences are only documented for
-**config-reload milestones** (e.g. M4 inactivity timeout on CC/OC, model override
+**config-reload steps** (e.g. M2 Part C timeout extraction, model override
 probes on CDX). In those cases the daemon is already running from earlier
 milestones, and the restart picks up the new config.
 

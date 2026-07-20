@@ -206,10 +206,9 @@ model-provider registry.
 
 
 Write livetest overrides to the **per-platform** config files, not the global
-config. Platform configs supersede global for that platform only, so mid-run
-timing flips (e.g. dropping `inactivityTimeoutMinutes` for the M4 lane) don't
-contaminate the other lanes. Global-only overrides were the reason earlier runs
-had "settings getting stuck" on wrong milestones.
+config. Platform configs supersede global for that platform only, so base
+livetest tuning does not contaminate unrelated lanes. Global-only overrides were
+the reason earlier runs had "settings getting stuck" on wrong milestones.
 
 **MERGE, never overwrite.** The installer wrote `shared/config/<platform>/config.json`
 during M0. Using `>` wipes the file and the next inject hook fails with
@@ -236,9 +235,9 @@ Overrides to apply at post-M0 (safe for all platforms, all milestones):
   Codex/OpenAI OAuth provider.
 
 Do NOT apply `capture.inactivityTimeoutMinutes: 1` globally or run-wide.
-It gets flipped to `1` **only on the platform currently running M4**, and
-restored to `60` immediately after (see "M4 idle-timeout flip — per platform"
-below).
+Timeout extraction is M2 Part C. The tester running M2 Part C flips that lane's
+instance config to `1` and restores `60` immediately after; the coordinator does
+not pre-flip it during post-M0 setup.
 
 Deep-merge Python one-liner, parameterized by platform:
 
@@ -281,48 +280,23 @@ done
 
 Restart daemons on each platform after the merge so the new config is loaded.
 
-### M4 idle-timeout flip — per platform
+### Timeout extraction config — M2 Part C only
 
-M4 is the only milestone that tests the idle-extraction path. For that one
-milestone only, on the **one platform** that is actively running M4:
+Timeout extraction is tested in `livetest-guide/M2.md` Part C, not in M4.
+The tester owns the timeout flip/restore exactly as written in M2 Part C:
+drain the daemon queue, set that lane's **instance** config
+`capture.inactivity_timeout_minutes` to `1`, restart the lane service, run the
+unique-marker timeout probe, verify `final_facts_stored >= 1`, then restore
+`60` and restart again.
 
-1. Immediately before M4 on the active platform: set that platform's
-   `capture.inactivityTimeoutMinutes` to `1`, restart the lane's daemon.
-2. Run M4's idle-extraction probe.
-3. Immediately after M4 (pass or PWN), restore that platform's
-   `capture.inactivityTimeoutMinutes` to `60`, restart the daemon.
+Coordinator responsibilities:
 
-Do NOT flip the global config, and do NOT flip the config of any platform
-that is not currently running M4. If the global value is ever set to `1`,
-every lane's `/new` + hook turn-latency will race the timeout, and you'll
-get "extraction via timeout rolling_flush, not session_end" on every lane —
-which masks real lifecycle behavior and turns clean PASSes into PWN-note.
-
-```bash
-# Before M4 on platform $P (openclaw | claude-code | codex):
-ssh admin@$VM_IP "python3 << PYEOF
-import json, os
-p = os.path.expanduser(f'~/.quaid/shared/config/${P}/config.json')
-d = json.load(open(p)) if os.path.exists(p) else {}
-d.setdefault('capture', {})['inactivityTimeoutMinutes'] = 1
-json.dump(d, open(p, 'w'), indent=2)
-print('M4 idle=1 on', p)
-PYEOF
-"
-# restart that platform's daemon...
-
-# After M4 on platform $P:
-ssh admin@$VM_IP "python3 << PYEOF
-import json, os
-p = os.path.expanduser(f'~/.quaid/shared/config/${P}/config.json')
-d = json.load(open(p))
-d.setdefault('capture', {})['inactivityTimeoutMinutes'] = 60
-json.dump(d, open(p, 'w'), indent=2)
-print('M4 idle restored to 60 on', p)
-PYEOF
-"
-# restart that platform's daemon again...
-```
+- Do not write timeout values during post-M0 config.
+- Do not flip shared platform config or global config for timeout testing.
+- Do not run a coordinator-side timeout procedure for M4. M4 is Project System
+  and Docs CLI only.
+- If a lane reaches M4 before M2 Part C is fully restored, stop and have the
+  tester restore the M2 timeout config first.
 
 ### Rolling-threshold interpretation for tester reports
 
@@ -958,8 +932,9 @@ and `chunk_tokens=1500` into each platform's config (OC, CC, CDX), write
 CC `models.fastReasoning=claude-haiku-4-5-20251001`, and write
 OC `models.fastReasoning=claude-haiku-4-5`, and write CDX
 `models.llmProvider=openai`; do NOT write
-`inactivityTimeoutMinutes` globally. The M4 idle-timeout flip is per-platform
-and only around M4 on the lane running that milestone.
+`inactivityTimeoutMinutes` globally. Timeout extraction is handled by the
+tester in M2 Part C using the lane's instance config, then restored before the
+lane continues.
 
 ---
 
