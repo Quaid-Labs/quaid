@@ -12,7 +12,11 @@ from typing import Any
 
 
 def _pending_notice_files(data_dir: Path) -> list[Path]:
-    return sorted(data_dir.glob("*-pending-notifications.jsonl"))
+    return sorted(
+        path
+        for path in data_dir.iterdir()
+        if path.is_file() and path.name.endswith("-pending-notifications.jsonl")
+    )
 
 
 def _read_pending_entries(path: Path) -> tuple[list[dict[str, Any]], int]:
@@ -65,9 +69,18 @@ def main() -> int:
     if not data_dir.is_dir():
         print(f"FAIL: instance data directory not found: {data_dir}", file=sys.stderr)
         return 1
+    if not os.access(data_dir, os.R_OK | os.X_OK):
+        print(f"FAIL: instance data directory is not readable/searchable: {data_dir}", file=sys.stderr)
+        return 1
 
     pending: list[tuple[Path, list[dict[str, Any]], int]] = []
-    for path in _pending_notice_files(data_dir):
+    try:
+        pending_files = _pending_notice_files(data_dir)
+    except OSError as exc:
+        print(f"FAIL: could not inspect active pending notices under {data_dir}: {exc}", file=sys.stderr)
+        return 1
+
+    for path in pending_files:
         entries, malformed = _read_pending_entries(path)
         if entries or malformed:
             pending.append((path, entries, malformed))
