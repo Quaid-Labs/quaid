@@ -231,6 +231,9 @@ Overrides to apply at post-M0 (safe for all platforms, all milestones):
 - OC only: `models.fastReasoning: claude-haiku-4-5` and
   `models.deepReasoning: claude-sonnet-4-6` — OpenClaw's Quaid extraction
   uses Anthropic provider credentials.
+- CDX only: `models.llmProvider: openai` and
+  `models.deepReasoning: gpt-5.4` — Codex's Quaid extraction uses the
+  Codex/OpenAI OAuth provider.
 
 Do NOT apply `capture.inactivityTimeoutMinutes: 1` globally or run-wide.
 It gets flipped to `1` **only on the platform currently running M4**, and
@@ -257,7 +260,9 @@ if "${platform}" in ("claude-code", "openclaw"):
     else:
         models['fastReasoning'] = 'claude-haiku-4-5'
 elif "${platform}" == "codex":
-    overrides.setdefault('models', {})['deepReasoning'] = 'gpt-5.4'
+    models = overrides.setdefault('models', {})
+    models['llmProvider'] = 'openai'
+    models['deepReasoning'] = 'gpt-5.4'
 def merge(b, o):
     r = json.loads(json.dumps(b))
     for k, v in o.items():
@@ -266,6 +271,7 @@ def merge(b, o):
 merged = merge(existing, overrides)
 json.dump(merged, open(p, 'w'), indent=2)
 print('merged platform config:', p)
+print('models.llmProvider:', merged.get('models', {}).get('llmProvider'))
 print('models.fastReasoning:', merged.get('models', {}).get('fastReasoning'))
 print('models.deepReasoning:', merged.get('models', {}).get('deepReasoning'))
 PYEOF
@@ -950,7 +956,8 @@ done
 Config Overrides (per-platform)" section above. Write `enableExtractionBufferLog`
 and `chunk_tokens=1500` into each platform's config (OC, CC, CDX), write
 CC `models.fastReasoning=claude-haiku-4-5-20251001`, and write
-OC `models.fastReasoning=claude-haiku-4-5`; do NOT write
+OC `models.fastReasoning=claude-haiku-4-5`, and write CDX
+`models.llmProvider=openai`; do NOT write
 `inactivityTimeoutMinutes` globally. The M4 idle-timeout flip is per-platform
 and only around M4 on the lane running that milestone.
 
