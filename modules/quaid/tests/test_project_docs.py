@@ -615,6 +615,53 @@ def test_request_janitor_run_writes_hidden_state_and_blocks_parallel_requests(tm
         project_docs.request_janitor_run(reason="second-request", requested_by="pytest")
 
 
+def test_request_janitor_run_supersedes_running_request_with_dead_workers(tmp_path, monkeypatch):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    from core import project_docs
+
+    first = project_docs.request_janitor_run(reason="first", requested_by="pytest")
+    project_docs.write_janitor_request(
+        {
+            **first,
+            "status": "running",
+            "started_at": project_docs.utc_now(),
+            "started_instances": ["alpha"],
+            "worker_pids": {"alpha": 987654},
+            "errors": [],
+        }
+    )
+    monkeypatch.setattr(project_docs, "_janitor_request_pid_alive", lambda _pid: False)
+
+    second = project_docs.request_janitor_run(reason="retry", requested_by="pytest")
+
+    assert second["request_id"] != first["request_id"]
+    assert second["status"] == "pending"
+    payload = project_docs.read_janitor_request()
+    assert payload["request_id"] == second["request_id"]
+    assert payload["status"] == "pending"
+
+
+def test_request_janitor_run_keeps_running_request_with_live_worker(tmp_path, monkeypatch):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    from core import project_docs
+
+    first = project_docs.request_janitor_run(reason="first", requested_by="pytest")
+    project_docs.write_janitor_request(
+        {
+            **first,
+            "status": "running",
+            "started_at": project_docs.utc_now(),
+            "started_instances": ["alpha"],
+            "worker_pids": {"alpha": 1234},
+            "errors": [],
+        }
+    )
+    monkeypatch.setattr(project_docs, "_janitor_request_pid_alive", lambda _pid: True)
+
+    with pytest.raises(RuntimeError, match="already in progress"):
+        project_docs.request_janitor_run(reason="retry", requested_by="pytest")
+
+
 def test_wait_for_janitor_request_returns_final_record(tmp_path, monkeypatch):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     from core import project_docs

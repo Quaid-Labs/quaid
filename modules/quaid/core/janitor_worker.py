@@ -21,6 +21,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 _STOP = False
+_RUN_ALL_TIMEOUT_ENV = "QUAID_JANITOR_RUN_ALL_TIMEOUT_SECONDS"
+_DEFAULT_RUN_ALL_TIMEOUT_SECONDS = 600.0
+_RUN_ALL_TIMEOUT_EXIT_CODE = 124
+_RUN_ALL_TIMEOUT_MARKER_GRACE_SECONDS = 5.0
 
 
 def _handle_stop(_signum, _frame) -> None:
@@ -61,6 +65,82 @@ def _start_supervisor_watchdog() -> threading.Thread | None:
     return thread
 
 
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except ImportError:
+        return True
+
+
+def _run_all_timeout_seconds() -> float:
+    raw = str(os.environ.get(_RUN_ALL_TIMEOUT_ENV, "") or "").strip()
+    if not raw:
+        return _DEFAULT_RUN_ALL_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+        if value <= 0:
+            raise ValueError("value must be positive")
+    except Exception as exc:
+        _print_marker_warning(
+            f"invalid {_RUN_ALL_TIMEOUT_ENV}={raw!r}; using default "
+            f"{_DEFAULT_RUN_ALL_TIMEOUT_SECONDS:.1f}s: {exc}"
+        )
+        if _fail_hard_enabled():
+            raise RuntimeError(f"{_RUN_ALL_TIMEOUT_ENV} config invalid") from exc
+        return _DEFAULT_RUN_ALL_TIMEOUT_SECONDS
+    return max(1.0, value)
+
+
+def _start_run_all_deadline_watchdog(
+    janitor_module,
+    *,
+    timeout_seconds: float | None = None,
+) -> threading.Event:
+    timeout = _run_all_timeout_seconds() if timeout_seconds is None else float(timeout_seconds)
+    if timeout <= 0:
+        raise ValueError("janitor run-all timeout must be positive")
+    stop_event = threading.Event()
+
+    def _watch() -> None:
+        if stop_event.wait(timeout):
+            return
+        exc = TimeoutError(f"janitor run-all-once exceeded hard timeout of {timeout:.1f}s")
+        _print_marker_warning(
+            f"{exc}; exiting with code {_RUN_ALL_TIMEOUT_EXIT_CODE} to release held locks"
+        )
+
+        marker_thread = threading.Thread(
+            target=_write_run_all_failure_markers,
+            args=(exc, janitor_module),
+            name="janitor-run-all-timeout-markers",
+            daemon=True,
+        )
+        marker_thread.start()
+        marker_thread.join(timeout=_RUN_ALL_TIMEOUT_MARKER_GRACE_SECONDS)
+        if marker_thread.is_alive():
+            _print_marker_warning(
+                "timed out writing terminal failure markers; forcing worker exit"
+            )
+        _release_run_all_lock(janitor_module)
+        os._exit(_RUN_ALL_TIMEOUT_EXIT_CODE)
+
+    thread = threading.Thread(target=_watch, name="janitor-run-all-deadline", daemon=True)
+    thread.start()
+    return stop_event
+
+
+def _release_run_all_lock(janitor_module) -> None:
+    release_fn = getattr(janitor_module, "_release_lock", None)
+    if not callable(release_fn):
+        return
+    try:
+        release_fn()
+    except Exception as exc:
+        _print_marker_warning(f"failed to release janitor lock before forced exit: {exc}")
+
+
 def run_scheduler_once() -> int:
     from core.compatibility import JanitorScheduler
     from lib.instance import instance_root
@@ -74,11 +154,14 @@ def run_scheduler_once() -> int:
 def run_all_once() -> int:
     from core.lifecycle import janitor
 
+    deadline_stop = _start_run_all_deadline_watchdog(janitor)
     try:
         result = janitor.run_task_optimized(task="all", dry_run=False)
     except Exception as exc:
         _write_run_all_failure_markers(exc, janitor)
         raise
+    finally:
+        deadline_stop.set()
     return 0 if bool(result.get("success")) else 1
 
 

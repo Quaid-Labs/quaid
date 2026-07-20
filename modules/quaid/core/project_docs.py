@@ -1241,6 +1241,53 @@ def clear_janitor_request(request_id: Optional[str] = None) -> None:
         pass
 
 
+def _janitor_request_pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return False
+
+
+def _running_janitor_request_has_only_dead_workers(request: Dict[str, Any]) -> bool:
+    if str(request.get("status") or "").strip().lower() != "running":
+        return False
+    worker_pids = request.get("worker_pids")
+    if not isinstance(worker_pids, dict) or not worker_pids:
+        return False
+    for raw_pid in worker_pids.values():
+        try:
+            pid = int(raw_pid)
+        except Exception:
+            return False
+        if _janitor_request_pid_alive(pid):
+            return False
+    return True
+
+
+def _mark_dead_janitor_request_failed(request: Dict[str, Any]) -> None:
+    request_id = str(request.get("request_id") or "unknown request")
+    errors = [
+        str(error)
+        for error in list(request.get("errors") or [])
+        if str(error or "").strip()
+    ]
+    errors.append("janitor request workers are no longer active")
+    payload = dict(request)
+    payload["status"] = "failed"
+    payload["completed_at"] = utc_now()
+    payload["worker_pids"] = {}
+    payload["errors"] = errors
+    write_janitor_request(payload)
+    logger.warning("marked stale janitor request failed before queuing replacement: %s", request_id)
+
+
 def request_janitor_run(
     *,
     instance: Optional[str] = None,
@@ -1252,11 +1299,15 @@ def request_janitor_run(
 
     with _exclusive_file_lock(_spawn_lock_path("janitor-request")):
         existing = read_janitor_request()
-        if existing and str(existing.get("status") or "").strip() in {"pending", "running"}:
-            raise RuntimeError(
-                "Janitor request already in progress "
-                f"({existing.get('request_id') or 'unknown request'})"
-            )
+        existing_status = str(existing.get("status") or "").strip().lower() if existing else ""
+        if existing and existing_status in {"pending", "running"}:
+            if _running_janitor_request_has_only_dead_workers(existing):
+                _mark_dead_janitor_request_failed(existing)
+            else:
+                raise RuntimeError(
+                    "Janitor request already in progress "
+                    f"({existing.get('request_id') or 'unknown request'})"
+                )
         req = {
             "request_id": f"{int(time.time() * 1000)}-{os.getpid()}",
             "requested_at": utc_now(),
