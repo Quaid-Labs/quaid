@@ -16191,6 +16191,170 @@ class TestRecallFastHookInjectContract:
         assert bundle["telemetry"]["chunk_count"] == 1
         assert meta["counts"]["final_results"] == 1
 
+    def test_docs_store_recall_date_fallback_does_not_recover_suppressed_project_log(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        db_path = tmp_path / "docs.db"
+        secret = "Ember Glass means pager escalation level 2"
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE doc_chunks (
+                    source_file TEXT,
+                    chunk_index INTEGER,
+                    content TEXT,
+                    section_header TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO doc_chunks(source_file, chunk_index, content, section_header) VALUES (?, ?, ?, ?)",
+                (
+                    "projects/cross-live-test/PROJECT.log",
+                    0,
+                    f"- [2026-07-20T10:00:00] {secret}.",
+                    None,
+                ),
+            )
+
+        class DateAwareDocsRAG:
+            def __init__(self):
+                self.db_path = db_path
+                self._shared_scope_enabled = True
+                self._last_scope_suppressed = None
+
+            def search_docs_bundle(
+                self,
+                query,
+                limit=5,
+                min_similarity=0.3,
+                project=None,
+                docs=None,
+                date_from=None,
+                date_to=None,
+            ):
+                self._last_scope_suppressed = {
+                    "requested_project": project,
+                    "linked_projects": ["quaid"],
+                }
+                return {
+                    "chunks": [],
+                    "project": project,
+                    "project_md": None,
+                    "telemetry": {
+                        "query": query,
+                        "requested_project": project,
+                        "scope_suppressed": dict(self._last_scope_suppressed),
+                    },
+                }
+
+            def infer_project_for_source(self, source_file):
+                return "cross-live-test"
+
+            def infer_project_from_chunks(self, chunks):
+                return "cross-live-test" if chunks else None
+
+        with patch("datastore.docsdb.rag.DocsRAG", return_value=DateAwareDocsRAG()):
+            rows, meta, bundle = mg._docs_store_recall(
+                "Ember Glass escalation level",
+                limit=5,
+                project="cross-live-test",
+                date_from="2026-07-20",
+                date_to="2026-07-20",
+            )
+
+        payload = json.dumps({"rows": rows, "meta": meta, "bundle": bundle})
+        assert rows == []
+        assert bundle["chunks"] == []
+        assert secret not in payload
+        assert bundle["telemetry"]["scope_suppressed"]["requested_project"] == "cross-live-test"
+
+    def test_docs_store_recall_date_fallback_keeps_unscoped_project_logs_in_linked_scope(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        db_path = tmp_path / "docs.db"
+        secret = "Ember Glass means pager escalation level 2"
+        linked_note = "Ember Glass linked quaid checkpoint"
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE doc_chunks (
+                    source_file TEXT,
+                    chunk_index INTEGER,
+                    content TEXT,
+                    section_header TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO doc_chunks(source_file, chunk_index, content, section_header) VALUES (?, ?, ?, ?)",
+                (
+                    "projects/cross-live-test/PROJECT.log",
+                    0,
+                    f"- [2026-07-20T10:00:00] {secret}.",
+                    None,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO doc_chunks(source_file, chunk_index, content, section_header) VALUES (?, ?, ?, ?)",
+                (
+                    "projects/quaid/PROJECT.log",
+                    0,
+                    f"- [2026-07-20T10:00:00] {linked_note}.",
+                    None,
+                ),
+            )
+
+        class DateAwareDocsRAG:
+            def __init__(self):
+                self.db_path = db_path
+                self._shared_scope_enabled = True
+                self._last_scope_suppressed = None
+
+            def search_docs_bundle(
+                self,
+                query,
+                limit=5,
+                min_similarity=0.3,
+                project=None,
+                docs=None,
+                date_from=None,
+                date_to=None,
+            ):
+                return {
+                    "chunks": [],
+                    "project": project,
+                    "project_md": None,
+                    "telemetry": {"query": query, "requested_project": project},
+                }
+
+            def infer_project_for_source(self, source_file):
+                if "cross-live-test" in str(source_file):
+                    return "cross-live-test"
+                if "quaid" in str(source_file):
+                    return "quaid"
+                return None
+
+            def infer_project_from_chunks(self, chunks):
+                return None
+
+        with patch("datastore.docsdb.rag.DocsRAG", return_value=DateAwareDocsRAG()), \
+             patch("datastore.docsdb.rag._linked_projects_for_current_instance", return_value=(["quaid"], True)):
+            rows, meta, bundle = mg._docs_store_recall(
+                "Ember Glass escalation level",
+                limit=5,
+                project=None,
+                date_from="2026-07-20",
+                date_to="2026-07-20",
+            )
+
+        payload = json.dumps({"rows": rows, "meta": meta, "bundle": bundle})
+        assert len(rows) == 1
+        assert len(bundle["chunks"]) == 1
+        assert linked_note in payload
+        assert secret not in payload
+        assert bundle["telemetry"]["chunk_count"] == 1
+
     def test_docs_store_recall_preserves_mixed_non_project_log_chunks_with_date_bounds(self):
         import datastore.memorydb.memory_graph as mg
 

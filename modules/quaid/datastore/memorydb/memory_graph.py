@@ -8827,12 +8827,13 @@ def _docs_source_matches_filters(source_file: str, docs: Optional[List[str]]) ->
     return any(item in source_lower or item == basename for item in filters)
 
 
+def _docs_project_scope_key(value: Any) -> str:
+    return unicodedata.normalize("NFKC", str(value or "").strip()).casefold()
+
+
 def _docs_source_matches_project(rag: Any, source_file: str, project: Optional[str]) -> bool:
     if not project:
         return True
-
-    def _project_key(value: Any) -> str:
-        return unicodedata.normalize("NFKC", str(value or "").strip()).casefold()
 
     inferred_project: Optional[str] = None
     infer_project = getattr(rag, "infer_project_for_source", None)
@@ -8843,10 +8844,10 @@ def _docs_source_matches_project(rag: Any, source_file: str, project: Optional[s
                 inferred_project = inferred
         except Exception as exc:
             logger.debug("_project_matches_source: failed to infer project for %s: %s", source_file, exc)
-    project_token = _project_key(project)
+    project_token = _docs_project_scope_key(project)
     if not project_token:
         return True
-    normalized = _project_key(str(source_file or "").replace("\\", "/"))
+    normalized = _docs_project_scope_key(str(source_file or "").replace("\\", "/"))
     path_match = (
         f"/{project_token}/" in normalized
         or normalized.startswith(f"{project_token}/")
@@ -8855,7 +8856,50 @@ def _docs_source_matches_project(rag: Any, source_file: str, project: Optional[s
     )
     if path_match:
         return True
-    return inferred_project is not None and _project_key(inferred_project) == project_token
+    return inferred_project is not None and _docs_project_scope_key(inferred_project) == project_token
+
+
+def _docs_bundle_scope_was_suppressed(rag: Any, bundle: Dict[str, Any]) -> bool:
+    if isinstance(getattr(rag, "_last_scope_suppressed", None), dict):
+        return True
+    telemetry = bundle.get("telemetry") if isinstance(bundle, dict) else None
+    return isinstance(telemetry, dict) and isinstance(telemetry.get("scope_suppressed"), dict)
+
+
+def _docs_legacy_linked_project_scope(rag: Any, docs: Optional[List[str]]) -> Optional[List[str]]:
+    if docs or not bool(getattr(rag, "_shared_scope_enabled", False)):
+        return None
+    try:
+        from datastore.docsdb.rag import _linked_projects_for_current_instance
+
+        linked_projects, resolved = _linked_projects_for_current_instance()
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError("Failed resolving docs project scope for date-bounded fallback") from exc
+        logger.warning(
+            "Date-bounded docs PROJECT.log fallback could not resolve linked-project scope; failing closed: %s",
+            exc,
+        )
+        return []
+    if not resolved:
+        return None
+    return [str(project or "").strip() for project in linked_projects if str(project or "").strip()]
+
+
+def _docs_legacy_source_allowed_by_linked_scope(
+    rag: Any,
+    source_file: str,
+    project: Optional[str],
+    linked_projects: Optional[List[str]],
+) -> bool:
+    if linked_projects is None:
+        return True
+    linked_keys = {_docs_project_scope_key(name) for name in linked_projects if _docs_project_scope_key(name)}
+    if not linked_keys:
+        return False
+    if project:
+        return _docs_project_scope_key(project) in linked_keys
+    return any(_docs_source_matches_project(rag, source_file, linked_project) for linked_project in linked_projects)
 
 
 def _docs_infer_project_for_source(rag: Any, source_file: str) -> Optional[str]:
@@ -8888,6 +8932,7 @@ def _legacy_search_dated_project_logs(
         raise RuntimeError(
             f"Date-bounded docs recall requires DocsRAG date support or db_path; got {type(rag).__name__}"
         )
+    linked_projects = _docs_legacy_linked_project_scope(rag, docs)
     query_terms = _docs_project_log_query_terms(query)
     chunks: List[Dict[str, Any]] = []
     with _lib_get_connection(Path(db_path)) as conn:
@@ -8910,6 +8955,8 @@ def _legacy_search_dated_project_logs(
         if not _docs_source_matches_filters(source_file, docs):
             continue
         if not _docs_source_matches_project(rag, source_file, project):
+            continue
+        if not _docs_legacy_source_allowed_by_linked_scope(rag, source_file, project, linked_projects):
             continue
         filtered = _filter_docs_project_log_content_by_date(
             str(row["content"] or ""),
@@ -9001,7 +9048,8 @@ def _with_strict_date_bounded_docs_bundle(
         date_from=date_from,
         date_to=date_to,
     )
-    if not bounded_chunks:
+    scope_suppressed = _docs_bundle_scope_was_suppressed(rag, bundle)
+    if not bounded_chunks and not scope_suppressed:
         try:
             bounded_chunks = _legacy_search_dated_project_logs(
                 rag,
@@ -9038,6 +9086,10 @@ def _with_strict_date_bounded_docs_bundle(
         "date_from": date_from,
         "date_to": date_to,
     })
+    if scope_suppressed:
+        suppressed = getattr(rag, "_last_scope_suppressed", None)
+        if isinstance(suppressed, dict):
+            telemetry["scope_suppressed"] = dict(suppressed)
     bounded_bundle["telemetry"] = telemetry
     return bounded_bundle
 
