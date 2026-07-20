@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that the latest timeout flush stored at least one fact."""
+"""Verify that a timeout flush stored at least one fact."""
 
 from __future__ import annotations
 
@@ -18,9 +18,9 @@ def _int_value(value: Any) -> int:
         return 0
 
 
-def _timeout_flush_rows(path: Path, tail: int) -> list[dict[str, Any]] | None:
+def _timeout_flush_rows(path: Path) -> list[dict[str, Any]] | None:
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()[-tail:]
+        lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         print(f"FAIL: missing rolling extraction log: {path}", file=sys.stderr)
         return None
@@ -37,9 +37,7 @@ def _timeout_flush_rows(path: Path, tail: int) -> list[dict[str, Any]] | None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Check that the latest timeout rolling_flush stored a new fact."
-    )
+    parser = argparse.ArgumentParser(description="Check that a timeout rolling_flush stored a new fact.")
     parser.add_argument(
         "--instance",
         default=os.environ.get("INSTANCE") or os.environ.get("QUAID_INSTANCE"),
@@ -55,7 +53,18 @@ def main() -> int:
         "--tail",
         type=int,
         default=30,
-        help="Number of recent metric rows to scan.",
+        help="Number of recent metric rows to scan. Ignored when --count-only or --after-count is used.",
+    )
+    parser.add_argument(
+        "--count-only",
+        action="store_true",
+        help="Print the current total timeout rolling_flush count and exit.",
+    )
+    parser.add_argument(
+        "--after-count",
+        type=int,
+        default=None,
+        help="Only consider timeout rolling_flush rows after this baseline count.",
     )
     args = parser.parse_args()
 
@@ -76,11 +85,29 @@ def main() -> int:
     else:
         log_path = args.log.expanduser()
 
-    rows = _timeout_flush_rows(log_path, max(1, int(args.tail or 1)))
+    rows = _timeout_flush_rows(log_path)
     if rows is None:
         return 1
+    timeout_flush_count = len(rows)
+    if args.count_only:
+        print(timeout_flush_count)
+        return 0
+    if args.after_count is not None:
+        baseline = max(0, int(args.after_count))
+        if baseline > timeout_flush_count:
+            print(
+                f"FAIL: after-count baseline {baseline} is newer than timeout flush count {timeout_flush_count}",
+                file=sys.stderr,
+            )
+            return 1
+        rows = rows[baseline:]
+    else:
+        rows = rows[-max(1, int(args.tail or 1)) :]
     if not rows:
-        print("FAIL: no timeout rolling_flush found", file=sys.stderr)
+        if args.after_count is not None:
+            print("FAIL: no timeout rolling_flush found after baseline", file=sys.stderr)
+        else:
+            print("FAIL: no timeout rolling_flush found", file=sys.stderr)
         return 1
 
     row = rows[-1]
@@ -93,6 +120,8 @@ def main() -> int:
                 "final_facts_stored": stored,
                 "final_facts_skipped": row.get("final_facts_skipped"),
                 "skip_buckets": row.get("skip_buckets"),
+                "selected_timeout_flush_count": len(rows),
+                "timeout_flush_count": timeout_flush_count,
             },
             sort_keys=True,
         )
