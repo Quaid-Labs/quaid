@@ -22,6 +22,7 @@
 #   openclaw only: models.fastReasoning: claude-haiku-4-5
 #   openclaw only: models.deepReasoning: claude-sonnet-4-6
 #   codex only: models.llmProvider: openai
+#   codex only: models.fastReasoning: gpt-5.4-mini
 #   codex only: models.deepReasoning: gpt-5.4
 #
 # Per-platform is the correct layer: platform config supersedes global, and
@@ -95,6 +96,7 @@ if platform in {'claude-code', 'openclaw'}:
 elif platform == 'codex':
     models = overrides.setdefault('models', {})
     models['llmProvider'] = 'openai'
+    models['fastReasoning'] = 'gpt-5.4-mini'
     models['deepReasoning'] = 'gpt-5.4'
 def merge(base, over):
     out = json.loads(json.dumps(base))
@@ -279,6 +281,8 @@ for inst_dir in instance_dirs:
     elif platform == 'codex':
         if provider != 'openai':
             failures.append(f'{inst_dir.name}: expected CDX llmProvider=openai, got {provider!r}')
+        if fast != 'gpt-5.4-mini':
+            failures.append(f'{inst_dir.name}: expected CDX fastReasoning=gpt-5.4-mini, got {fast!r}')
         if deep != 'gpt-5.4':
             failures.append(f'{inst_dir.name}: expected CDX deepReasoning=gpt-5.4, got {deep!r}')
 

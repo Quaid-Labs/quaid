@@ -90,7 +90,7 @@ print(\"fast:\", models.get(\"fastReasoning\"))
 print(\"deep:\", models.get(\"deepReasoning\"))
 assert \"invalid-model\" not in json.dumps(models), models
 assert models.get(\"llmProvider\") in (\"openai\", \"openai-compatible\"), models
-assert models.get(\"fastReasoning\") in (\"gpt-5.4-mini\", \"claude-haiku-4-5\"), models
+assert models.get(\"fastReasoning\") == \"gpt-5.4-mini\", models
 assert models.get(\"deepReasoning\") == \"gpt-5.4\", models"'
 ```
 

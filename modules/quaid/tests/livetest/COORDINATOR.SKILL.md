@@ -191,11 +191,14 @@ Run `scripts/livetest-postm0-config.sh <cc|oc|cdx|all>` and verify that
 `capture.chunk_tokens` resolves to `1500` for every installed instance, and
 that CC's `models.fastReasoning` is set to `claude-haiku-4-5-20251001`,
 that OC's `models.fastReasoning` is set to `claude-haiku-4-5`,
+that CDX's `models.fastReasoning` is set to `gpt-5.4-mini`,
 before dispatching any tester to M1. Missing this step makes M2 Part B
 (rolling extraction) impossible to pass because the 1500-token fixture
 cannot cross the production default of 8000 tokens, and makes CC M6 Part B
 miss provider-error coverage because the fast model is unset. OC must use
-Claude models because Quaid extraction for OpenClaw runs through Anthropic.
+Claude models because Quaid extraction for OpenClaw runs through Anthropic;
+CDX must use OpenAI-family fast and deep models because its provider is pinned
+to OpenAI/Codex OAuth.
 
 For `oc`/`all`, the same script also registers the VM Codex OAuth access token
 with OpenClaw via `openclaw models auth paste-token --provider openai` before
@@ -230,9 +233,10 @@ Overrides to apply at post-M0 (safe for all platforms, all milestones):
 - OC only: `models.fastReasoning: claude-haiku-4-5` and
   `models.deepReasoning: claude-sonnet-4-6` — OpenClaw's Quaid extraction
   uses Anthropic provider credentials.
-- CDX only: `models.llmProvider: openai` and
-  `models.deepReasoning: gpt-5.4` — Codex's Quaid extraction uses the
-  Codex/OpenAI OAuth provider.
+- CDX only: `models.llmProvider: openai`, `models.fastReasoning: gpt-5.4-mini`,
+  and `models.deepReasoning: gpt-5.4` — Codex's Quaid extraction uses the
+  Codex/OpenAI OAuth provider, so both model tiers must stay in the OpenAI
+  family.
 
 Do NOT apply `capture.inactivityTimeoutMinutes: 1` globally or run-wide.
 Timeout extraction is M2 Part C. The tester running M2 Part C flips that lane's
@@ -261,6 +265,7 @@ if "${platform}" in ("claude-code", "openclaw"):
 elif "${platform}" == "codex":
     models = overrides.setdefault('models', {})
     models['llmProvider'] = 'openai'
+    models['fastReasoning'] = 'gpt-5.4-mini'
     models['deepReasoning'] = 'gpt-5.4'
 def merge(b, o):
     r = json.loads(json.dumps(b))
@@ -931,7 +936,8 @@ Config Overrides (per-platform)" section above. Write `enableExtractionBufferLog
 and `chunk_tokens=1500` into each platform's config (OC, CC, CDX), write
 CC `models.fastReasoning=claude-haiku-4-5-20251001`, and write
 OC `models.fastReasoning=claude-haiku-4-5`, and write CDX
-`models.llmProvider=openai`; do NOT write
+`models.llmProvider=openai`, `models.fastReasoning=gpt-5.4-mini`, and
+`models.deepReasoning=gpt-5.4`; do NOT write
 `inactivityTimeoutMinutes` globally. Timeout extraction is handled by the
 tester in M2 Part C using the lane's instance config, then restored before the
 lane continues.
