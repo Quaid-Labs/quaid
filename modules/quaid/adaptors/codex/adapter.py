@@ -1235,11 +1235,12 @@ class CodexAdapter(QuaidAdapter):
         class_attr = "deep_reasoning_model_classes" if tier == "deep" else "fast_reasoning_model_classes"
         class_map = getattr(cfg.models, class_attr, {}) or {}
         if isinstance(class_map, dict):
-            mapped = str(class_map.get(provider) or "").strip()
-            if mapped:
-                return mapped
+            for key in dict.fromkeys((provider, provider_family)):
+                mapped = str(class_map.get(key) or "").strip()
+                if mapped:
+                    return mapped
 
-        defaults = self.installer_default_models(provider) or {}
+        defaults = self.installer_default_models(provider_family or provider) or {}
         default_key = "deep" if tier == "deep" else "fast"
         return str(defaults.get(default_key) or model or "default")
 

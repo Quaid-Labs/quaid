@@ -5329,6 +5329,36 @@ class TestCodexAdapter:
                 adapter.get_llm_provider()
         assert "Refusing model fallback because failHard is enabled" in caplog.text
 
+    def test_get_llm_provider_openai_compatible_conflict_falls_back_to_openai_defaults(
+        self, monkeypatch, caplog
+    ):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+        monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
+        adapter = CodexAdapter()
+        cfg = SimpleNamespace(
+            models=SimpleNamespace(
+                llm_provider="openai-compatible",
+                fast_reasoning_provider="default",
+                deep_reasoning_provider="default",
+                deep_reasoning="claude-sonnet-4-6",
+                fast_reasoning="claude-haiku-4-5",
+                deep_reasoning_effort="high",
+                fast_reasoning_effort="none",
+                deep_reasoning_model_classes={},
+                fast_reasoning_model_classes={},
+                base_url="",
+            )
+        )
+        with patch("config.get_config", return_value=cfg), \
+             patch("adaptors.codex.adapter.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="adaptors.codex.adapter"):
+            provider = adapter.get_llm_provider()
+        assert isinstance(provider, OpenAICodexOAuthLLMProvider)
+        assert provider._deep_model == "gpt-5.4"
+        assert provider._fast_model == "gpt-5.4-mini"
+        assert "effective provider is 'openai-compatible'" in caplog.text
+        assert "failHard is disabled" in caplog.text
+
     def test_get_llm_provider_uses_single_anthropic_shared_auth_when_configured_openai_missing_credential(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
