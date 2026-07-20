@@ -120,7 +120,7 @@ def _read_response_body_with_deadline(resp, *, read_timeout_s: float, chunk_size
     reader.start()
     reader.join(timeout)
     if reader.is_alive():
-        raise TimeoutError(f"Ollama response body read exceeded deadline ({timeout:.1f}s)")
+        raise TimeoutError(f"response body read exceeded deadline ({timeout:.1f}s)")
     if holder["error"] is not None:
         raise holder["error"]  # type: ignore[misc]
     body = holder["data"]
@@ -1512,8 +1512,12 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
             method="POST",
         )
         start_time = time.time()
+        deadline = start_time + max(0.0, float(timeout))
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise TimeoutError(f"OpenAI Codex OAuth response timed out before body read ({float(timeout):.1f}s)")
+            raw = _read_response_body_with_deadline(resp, read_timeout_s=remaining).decode("utf-8", errors="replace")
         return self._parse_response(raw, model, start_time)
 
     def get_profiles(self):

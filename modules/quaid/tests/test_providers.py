@@ -1218,6 +1218,31 @@ class TestOpenAICodexOAuthLLMProvider:
         req = mock_open.call_args[0][0]
         assert req.get_header("Chatgpt-account-id") is None
 
+    def test_llm_call_bounds_stream_body_read_by_timeout(self):
+        p = OpenAICodexOAuthLLMProvider(
+            api_key="token",
+            deep_model="gpt-5.4",
+            fast_model="gpt-5.4-mini",
+        )
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp) as mock_open, \
+             patch(
+                 "lib.providers._read_response_body_with_deadline",
+                 side_effect=TimeoutError("response body read exceeded deadline (1.0s)"),
+             ) as read_body:
+            with pytest.raises(TimeoutError, match="response body read exceeded deadline"):
+                p.llm_call(
+                    [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+                    model_tier="deep",
+                    timeout=1.0,
+                )
+
+        assert mock_open.call_args.kwargs["timeout"] == 1.0
+        assert read_body.call_args.kwargs["read_timeout_s"] <= 1.0
+
 
 class TestCodexLLMProvider:
     class _FakeManager:
