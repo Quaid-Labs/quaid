@@ -320,9 +320,10 @@ def _resolve_registered_doc_path(registry: Any, file_path: str) -> Path:
 def _registered_doc_candidate_paths(project: str | None = None) -> list[str]:
     try:
         from datastore.docsdb.registry import DocsRegistry
-    except ImportError:
+    except ImportError as exc:
+        logger.warning("Project docs stale-index check skipped: docs registry import failed: %s", exc)
         if _fail_hard_enabled():
-            raise
+            raise RuntimeError("Project docs stale-index check failed: docs registry import failed") from exc
         return []
 
     registry = DocsRegistry()
@@ -352,9 +353,10 @@ def stale_registered_doc_paths(project: str | None = None) -> list[str]:
     """Return registered docs whose RAG chunks are missing or stale."""
     try:
         from datastore.docsdb.rag import DocsRAG
-    except ImportError:
+    except ImportError as exc:
+        logger.warning("Project docs stale-index check skipped: docs RAG import failed: %s", exc)
         if _fail_hard_enabled():
-            raise
+            raise RuntimeError("Project docs stale-index check failed: docs RAG import failed") from exc
         return []
 
     candidate_paths = _registered_doc_candidate_paths(project)
@@ -381,9 +383,10 @@ def index_one_stale_registered_doc(project: str | None = None) -> bool:
 
     try:
         from datastore.docsdb.rag import DocsRAG
-    except ImportError:
+    except ImportError as exc:
+        logger.warning("Project docs stale-index apply skipped: docs RAG import failed: %s", exc)
         if _fail_hard_enabled():
-            raise
+            raise RuntimeError("Project docs stale-index apply failed: docs RAG import failed") from exc
         return False
 
     rag = DocsRAG()

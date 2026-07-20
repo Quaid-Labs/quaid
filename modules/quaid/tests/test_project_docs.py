@@ -708,6 +708,74 @@ def test_status_registered_docs_index_check_raises_fail_hard(project_env, monkey
         project_docs.project_status("demo")
 
 
+def test_status_registered_docs_rag_import_failure_warns_fail_open(project_env, monkeypatch, caplog):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+    from core.docs import updater as docs_updater
+
+    real_import = builtins.__import__
+
+    def failing_import(name, *args, **kwargs):
+        if name == "datastore.docsdb.rag":
+            raise ImportError("rag module missing")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+    monkeypatch.setattr(docs_updater, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(project_docs, "_fail_hard_enabled", lambda: False)
+    caplog.set_level(logging.WARNING)
+
+    status = project_docs.project_status("demo")
+
+    assert status["registered_docs_pending_index"] == 0
+    assert status["registered_docs_index_error"] is None
+    assert "Project docs stale-index check skipped: docs RAG import failed: rag module missing" in caplog.text
+
+
+def test_status_registered_docs_rag_import_failure_raises_fail_hard(project_env, monkeypatch, caplog):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+    from core.docs import updater as docs_updater
+
+    real_import = builtins.__import__
+
+    def failing_import(name, *args, **kwargs):
+        if name == "datastore.docsdb.rag":
+            raise ImportError("rag module missing")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+    monkeypatch.setattr(docs_updater, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(project_docs, "_fail_hard_enabled", lambda: True)
+    caplog.set_level(logging.WARNING)
+
+    with pytest.raises(RuntimeError, match="registered-doc index check failed for demo"):
+        project_docs.project_status("demo")
+    assert "Project docs stale-index check skipped: docs RAG import failed: rag module missing" in caplog.text
+
+
+def test_registered_docs_registry_import_failure_warns_fail_open(project_env, monkeypatch, caplog):
+    _tmp_path, _src, _entry = project_env
+    from core.docs import updater as docs_updater
+
+    # Load rag before blocking registry imports so this test targets the candidate-path branch.
+    from datastore.docsdb.rag import DocsRAG  # noqa: F401
+
+    real_import = builtins.__import__
+
+    def failing_import(name, *args, **kwargs):
+        if name == "datastore.docsdb.registry":
+            raise ImportError("registry module missing")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+    monkeypatch.setattr(docs_updater, "_fail_hard_enabled", lambda: False)
+    caplog.set_level(logging.WARNING)
+
+    assert docs_updater.stale_registered_doc_paths("demo") == []
+    assert "Project docs stale-index check skipped: docs registry import failed: registry module missing" in caplog.text
+
+
 def test_project_has_pending_update_detects_registered_docs_needing_index(project_env, monkeypatch):
     _tmp_path, _src, _entry = project_env
     from core import project_docs
