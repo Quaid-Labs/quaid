@@ -317,21 +317,15 @@ def _resolve_registered_doc_path(registry: Any, file_path: str) -> Path:
         return (Path.cwd() / path).resolve()
 
 
-def index_one_stale_registered_doc(project: str | None = None) -> bool:
-    """Index one stale registered doc from the supervisor-owned docs daemon path."""
-    if index_project_logs(project=project):
-        return True
-
+def _registered_doc_candidate_paths(project: str | None = None) -> list[str]:
     try:
-        from datastore.docsdb.rag import DocsRAG
         from datastore.docsdb.registry import DocsRegistry
     except ImportError:
         if _fail_hard_enabled():
             raise
-        return False
+        return []
 
     registry = DocsRegistry()
-    rag = DocsRAG()
     try:
         all_docs = registry.list_docs(project=project) if project else registry.list_docs()
     except TypeError:
@@ -351,14 +345,49 @@ def index_one_stale_registered_doc(project: str | None = None) -> bool:
             continue
         if resolved_path.exists():
             candidate_paths.append(str(resolved_path))
+    return candidate_paths
 
+
+def stale_registered_doc_paths(project: str | None = None) -> list[str]:
+    """Return registered docs whose RAG chunks are missing or stale."""
+    try:
+        from datastore.docsdb.rag import DocsRAG
+    except ImportError:
+        if _fail_hard_enabled():
+            raise
+        return []
+
+    candidate_paths = _registered_doc_candidate_paths(project)
     if not candidate_paths:
+        return []
+    rag = DocsRAG()
+    needs = rag.needs_reindex_many(candidate_paths)
+    return [file_path for file_path in candidate_paths if needs.get(file_path, True)]
+
+
+def registered_docs_need_index(project: str | None = None) -> bool:
+    """Lightweight predicate for workers/status checks."""
+    return bool(stale_registered_doc_paths(project))
+
+
+def index_one_stale_registered_doc(project: str | None = None) -> bool:
+    """Index one stale registered doc from the supervisor-owned docs daemon path."""
+    if index_project_logs(project=project):
+        return True
+
+    stale_paths = stale_registered_doc_paths(project)
+    if not stale_paths:
         return False
 
-    needs = rag.needs_reindex_many(candidate_paths)
-    for file_path in candidate_paths:
-        if not needs.get(file_path, True):
-            continue
+    try:
+        from datastore.docsdb.rag import DocsRAG
+    except ImportError:
+        if _fail_hard_enabled():
+            raise
+        return False
+
+    rag = DocsRAG()
+    for file_path in stale_paths:
         try:
             chunks = rag.index_document(file_path)
             logger.info("[project-docs] indexed stale doc: %s (%d chunks)", file_path, chunks)
@@ -453,6 +482,8 @@ __all__ = [
     "update_registered_docs",
     "index_project_logs",
     "index_one_stale_registered_doc",
+    "registered_docs_need_index",
+    "stale_registered_doc_paths",
     "sync_project_visible_docs",
     "main",
 ]

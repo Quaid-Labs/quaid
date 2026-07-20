@@ -59,9 +59,9 @@ from lib.runtime_context import get_quaid_home, get_visible_quaid_home, get_work
 logger = logging.getLogger(__name__)
 
 ASYNC_REGISTRATION_NOTICE = (
-    "Async registration started; document indexing runs shortly through "
-    "the project-docs supervisor. Run `quaid docs update --apply` if you need "
-    "a deterministic indexing point now."
+    "Async registration queued; document indexing runs shortly through "
+    "the project-docs supervisor. Run `quaid docs update <project> --wait` "
+    "if you need a deterministic indexing point now."
 )
 
 
@@ -490,6 +490,45 @@ def _cli_register_file_path(raw_path: str) -> str:
     if not cwd_path.is_file():
         raise IsADirectoryError(f"Not a file: {value} (resolved to {cwd_path})")
     return _to_registry_path(cwd_path)
+
+
+def _queue_async_indexing_after_register(project: str) -> Dict[str, Any]:
+    """Queue the project-docs worker path advertised by the register CLI."""
+    name = _normalize_project_name(project) or "default"
+    if name == "default":
+        return {
+            "queued": False,
+            "reason": "default project has no project-docs worker",
+        }
+    try:
+        from core import project_docs
+
+        request = project_docs.request_update(
+            name,
+            reason="docs-registry-register",
+            requested_by="docs-registry-cli",
+        )
+        supervisor_pid = project_docs.ensure_supervisor_alive()
+        return {
+            "queued": True,
+            "request_id": str(request.get("request_id") or ""),
+            "supervisor_pid": supervisor_pid,
+        }
+    except Exception as exc:
+        logger.warning("Failed to queue async docs indexing for project %s: %s", name, exc)
+        if _fail_hard_enabled():
+            raise RuntimeError(f"Failed to queue async docs indexing for project {name}") from exc
+        return {
+            "queued": False,
+            "error": str(exc),
+        }
+
+
+def _manual_index_command(project: str) -> str:
+    name = _normalize_project_name(project) or "default"
+    if name == "default":
+        return "quaid docs update --apply"
+    return f"quaid docs update {name} --wait"
 
 
 def _why_read_entry(doc: Dict[str, Any]) -> str:
@@ -2754,17 +2793,32 @@ def main(argv: Optional[List[str]] = None) -> int:
             auto_update=args.auto_update,
             source_files=source_files,
         )
+        indexing = _queue_async_indexing_after_register(args.project)
+        indexing_queued = bool(indexing.get("queued"))
         if args.json:
             print(json.dumps({
                 "id": row_id,
                 "file_path": file_path,
                 "project": args.project,
-                "indexing": "async",
-                "message": ASYNC_REGISTRATION_NOTICE,
+                "indexing": "async" if indexing_queued else "not_queued",
+                "indexing_request": indexing,
+                "manual_index_command": _manual_index_command(args.project),
+                "message": ASYNC_REGISTRATION_NOTICE if indexing_queued else "Async indexing was not queued.",
             }))
         else:
             print(f"Registered: {file_path} (project={args.project}, id={row_id})")
-            print(ASYNC_REGISTRATION_NOTICE)
+            if indexing_queued:
+                print(ASYNC_REGISTRATION_NOTICE)
+                request_id = str(indexing.get("request_id") or "").strip()
+                if request_id:
+                    print(f"  request: {request_id}")
+                supervisor_pid = indexing.get("supervisor_pid")
+                if supervisor_pid:
+                    print(f"  supervisor: {supervisor_pid}")
+            else:
+                reason = str(indexing.get("error") or indexing.get("reason") or "unknown reason")
+                print(f"Warning: async indexing was not queued: {reason}", file=sys.stderr)
+                print(f"Run `{_manual_index_command(args.project)}` to index deterministically.", file=sys.stderr)
 
     elif args.command == "list":
         docs = registry.list_docs(project=args.project, asset_type=args.asset_type)

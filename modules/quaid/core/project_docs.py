@@ -1540,9 +1540,29 @@ def project_status(project: str) -> Dict[str, Any]:
         log_size = _current_project_log_size(entry, project=name)
         log_queue_pending = _pending_project_log_queue_count(name)
         log_pending = max(0, log_size - min(log_offset, log_size))
-        stale = request_active or bool(changes) or shadow_cursor_pending or log_pending > 0 or log_queue_pending > 0
+        registered_docs_pending_index = 0
+        registered_docs_pending_index_paths: List[str] = []
+        registered_docs_index_error = None
+        try:
+            from core.docs import updater as docs_updater
+
+            registered_docs_pending_index_paths = docs_updater.stale_registered_doc_paths(name)
+            registered_docs_pending_index = len(registered_docs_pending_index_paths)
+        except Exception as exc:
+            logger.warning("Project docs status registered-doc index check failed for %s: %s", name, exc)
+            if _fail_hard_enabled():
+                raise RuntimeError(f"Project docs status registered-doc index check failed for {name}") from exc
+            registered_docs_index_error = str(exc)
+        stale = (
+            request_active
+            or bool(changes)
+            or shadow_cursor_pending
+            or log_pending > 0
+            or log_queue_pending > 0
+            or registered_docs_pending_index > 0
+        )
         status_value = "stale" if stale else "fresh"
-        if source_error and not stale:
+        if (source_error or registered_docs_index_error) and not stale:
             status_value = "error"
         fresh = status_value == "fresh"
         return {
@@ -1564,6 +1584,9 @@ def project_status(project: str) -> Dict[str, Any]:
             "project_log_size": log_size,
             "project_log_bytes_pending": log_pending,
             "project_log_queue_pending": log_queue_pending,
+            "registered_docs_pending_index": registered_docs_pending_index,
+            "registered_docs_pending_index_paths": registered_docs_pending_index_paths,
+            "registered_docs_index_error": registered_docs_index_error,
             "worker_pid": worker_pid,
             "worker_heartbeat": worker_heartbeat,
             "worker_log_path": str(log_path),
@@ -1610,7 +1633,17 @@ def project_has_pending_update(project: str) -> bool:
         log_size = _current_project_log_size(entry, project=name)
         if max(0, log_size - min(log_offset, log_size)) > 0:
             return True
-        return _pending_project_log_queue_count(name) > 0
+        if _pending_project_log_queue_count(name) > 0:
+            return True
+        try:
+            from core.docs import updater as docs_updater
+
+            return bool(docs_updater.registered_docs_need_index(name))
+        except Exception as exc:
+            logger.warning("Project docs worker registered-doc index check failed for %s: %s", name, exc)
+            if _fail_hard_enabled():
+                raise
+            return False
 
 
 def project_diff(project: str, *, full: bool = False) -> Dict[str, Any]:
@@ -2451,6 +2484,9 @@ def format_status(status: Dict[str, Any]) -> str:
         lines.append(f"Source tracking error: {status.get('source_error')}")
     lines.append(f"Pending PROJECT.log bytes: {status.get('project_log_bytes_pending', 0)}")
     lines.append(f"Pending PROJECT.log queue items: {status.get('project_log_queue_pending', 0)}")
+    lines.append(f"Registered docs pending index: {status.get('registered_docs_pending_index', 0)}")
+    if status.get("registered_docs_index_error"):
+        lines.append(f"Registered docs index check error: {status.get('registered_docs_index_error')}")
     if status.get("pending_request"):
         req = status["pending_request"]
         lines.append(f"Pending force request: {req.get('request_id')} at {req.get('requested_at')}")

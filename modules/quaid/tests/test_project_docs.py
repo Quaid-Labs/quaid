@@ -675,6 +675,76 @@ def test_status_includes_worker_log_tail(project_env):
     assert "line-49" in rendered
 
 
+def test_status_reports_registered_docs_pending_index(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    monkeypatch.setattr(
+        "core.docs.updater.stale_registered_doc_paths",
+        lambda project: ["/tmp/copper-basin-maintenance-priority.md"] if project == "demo" else [],
+    )
+
+    status = project_docs.project_status("demo")
+    rendered = project_docs.format_status(status)
+
+    assert status["status"] == "stale"
+    assert status["fresh"] is False
+    assert status["registered_docs_pending_index"] == 1
+    assert status["registered_docs_pending_index_paths"] == ["/tmp/copper-basin-maintenance-priority.md"]
+    assert "Registered docs pending index: 1" in rendered
+
+
+def test_status_registered_docs_index_check_raises_fail_hard(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    monkeypatch.setattr(
+        "core.docs.updater.stale_registered_doc_paths",
+        lambda project: (_ for _ in ()).throw(RuntimeError("docsdb unavailable")),
+    )
+    monkeypatch.setattr(project_docs, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="registered-doc index check failed for demo"):
+        project_docs.project_status("demo")
+
+
+def test_project_has_pending_update_detects_registered_docs_needing_index(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    monkeypatch.setattr("core.docs.updater.registered_docs_need_index", lambda project: project == "demo")
+
+    assert project_docs.project_has_pending_update("demo") is True
+
+
+def test_registered_docs_need_index_uses_rag_staleness(project_env, monkeypatch):
+    tmp_path, _src, _entry = project_env
+    from core.docs import updater as docs_updater
+
+    doc_path = tmp_path / "projects" / "demo" / "copper-basin-maintenance-priority.md"
+    doc_path.parent.mkdir(parents=True, exist_ok=True)
+    doc_path.write_text("# Copper Basin\n\nMaintenance priority.\n", encoding="utf-8")
+
+    class _FakeRegistry:
+        def list_docs(self, project=None):
+            assert project == "demo"
+            return [{"file_path": str(doc_path), "registered_at": "2026-07-20T19:56:51Z"}]
+
+        def _resolve_path(self, path_str):
+            return Path(path_str)
+
+    class _FakeRag:
+        def needs_reindex_many(self, paths):
+            assert paths == [str(doc_path.resolve())]
+            return {str(doc_path.resolve()): True}
+
+    monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+    monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
+
+    assert docs_updater.stale_registered_doc_paths("demo") == [str(doc_path.resolve())]
+    assert docs_updater.registered_docs_need_index("demo") is True
+
+
 def test_format_status_hides_stale_last_error_when_project_is_fresh():
     from core import project_docs
 
@@ -1733,8 +1803,9 @@ def test_execute_update_once_replays_committed_shadow_cursor_gap(project_env):
     assert crash_snapshot["commit_hash"] != first_head
     assert project_docs.pending_source_changes("demo") == []
 
-    status = project_docs.project_status("demo")
-    diff = project_docs.project_diff("demo", full=False)
+    with patch("core.docs.updater.stale_registered_doc_paths", return_value=[]):
+        status = project_docs.project_status("demo")
+        diff = project_docs.project_diff("demo", full=False)
 
     assert status["status"] == "stale"
     assert status["fresh"] is False
@@ -1745,7 +1816,8 @@ def test_execute_update_once_replays_committed_shadow_cursor_gap(project_env):
 
     with patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}) as update_docs, \
          patch("core.docs.updater.update_registered_docs", return_value=1), \
-         patch("core.docs.updater.index_project_logs", return_value=0):
+         patch("core.docs.updater.index_project_logs", return_value=0), \
+         patch("core.docs.updater.stale_registered_doc_paths", return_value=[]):
         result = project_docs.execute_update_once("demo")
 
     assert result["status"] == "fresh"
@@ -1754,7 +1826,8 @@ def test_execute_update_once_replays_committed_shadow_cursor_gap(project_env):
     update_docs.assert_called_once()
     state = project_docs.read_state("demo")
     assert state["last_shadow_commit"] == crash_snapshot["commit_hash"]
-    assert project_docs.project_status("demo")["fresh"] is True
+    with patch("core.docs.updater.stale_registered_doc_paths", return_value=[]):
+        assert project_docs.project_status("demo")["fresh"] is True
 
 
 def test_index_project_logs_indexes_append_only_project_log(project_env, monkeypatch):

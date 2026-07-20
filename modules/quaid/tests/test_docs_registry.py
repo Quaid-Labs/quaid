@@ -442,19 +442,105 @@ class TestRegisterAndGet:
                 "--json",
             ],
         )
+        queued_projects = []
+        monkeypatch.setattr(
+            registry_mod,
+            "_queue_async_indexing_after_register",
+            lambda project: queued_projects.append(project) or {
+                "queued": True,
+                "request_id": "req-test-project",
+                "supervisor_pid": 4242,
+            },
+        )
 
         registry_mod.main()
 
         payload = json.loads(capsys.readouterr().out)
         assert payload["file_path"] == "projects/livetest-agentmsg-xp-src/STATUS.md"
         assert payload["indexing"] == "async"
+        assert payload["indexing_request"] == {
+            "queued": True,
+            "request_id": "req-test-project",
+            "supervisor_pid": 4242,
+        }
+        assert payload["manual_index_command"] == "quaid docs update test-project --wait"
         assert "project-docs supervisor" in payload["message"]
+        assert queued_projects == ["test-project"]
 
         r = _get_registry()
         entry = r.get(payload["file_path"])
         assert entry is not None
         assert r._resolve_path(entry["file_path"]).resolve() == doc_path.resolve()
         assert r.get("STATUS.md") is None
+
+    def test_cli_register_project_doc_queues_async_indexing(self, setup_env, monkeypatch, capsys):
+        from datastore.docsdb import registry as registry_mod
+
+        doc_path = setup_env.parents[1] / "projects" / "test-project" / "queued.md"
+        doc_path.write_text("# Queued\n\nCopper Basin maintenance priority.\n", encoding="utf-8")
+        monkeypatch.setattr(registry_mod.tempfile, "gettempdir", lambda: str(setup_env / "tmp"))
+        queued_projects = []
+        monkeypatch.setattr(
+            registry_mod,
+            "_queue_async_indexing_after_register",
+            lambda project: queued_projects.append(project) or {
+                "queued": True,
+                "request_id": "req-queued",
+                "supervisor_pid": 9898,
+            },
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "registry.py",
+                "register",
+                str(doc_path),
+                "--project",
+                "test-project",
+            ],
+        )
+
+        registry_mod.main()
+
+        captured = capsys.readouterr()
+        assert "Registered:" in captured.out
+        assert "Async registration queued" in captured.out
+        assert "request: req-queued" in captured.out
+        assert "supervisor: 9898" in captured.out
+        assert "async indexing was not queued" not in captured.err
+        assert queued_projects == ["test-project"]
+
+    def test_queue_async_indexing_after_register_requests_project_docs_worker(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+
+        requested = []
+        ensured = []
+
+        def _request_update(project, *, reason, requested_by):
+            requested.append((project, reason, requested_by))
+            return {"request_id": "req-1"}
+
+        monkeypatch.setattr("core.project_docs.request_update", _request_update)
+        monkeypatch.setattr("core.project_docs.ensure_supervisor_alive", lambda: ensured.append(True) or 1234)
+
+        result = registry_mod._queue_async_indexing_after_register("test-project")
+
+        assert result == {"queued": True, "request_id": "req-1", "supervisor_pid": 1234}
+        assert requested == [("test-project", "docs-registry-register", "docs-registry-cli")]
+        assert ensured == [True]
+
+    def test_queue_async_indexing_after_register_raises_when_failhard(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+
+        monkeypatch.setattr(
+            "core.project_docs.request_update",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("queue failed")),
+        )
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Failed to queue async docs indexing for project test-project"):
+            registry_mod._queue_async_indexing_after_register("test-project")
 
     def test_cli_register_rejects_missing_file_path(self, setup_env, monkeypatch, capsys):
         from datastore.docsdb import registry as registry_mod
