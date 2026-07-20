@@ -161,6 +161,28 @@ def test_current_instance_id_warns_on_resolution_failure(monkeypatch, capsys):
     assert "Warning: could not resolve current instance id: instance lookup failed" in err
 
 
+def test_require_project_visible_distinguishes_unlinked_project_from_missing(capsys):
+    project = {"description": "XP", "instances": ["claude-code-cc-livetest"]}
+    with patch("core.project_registry_cli._current_instance_id", return_value="codex-cdx-livetest"):
+        with pytest.raises(SystemExit) as exc_info:
+            cli._require_project_visible("livetest-agentmsg-xp", project)
+
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "Project exists but is not linked to current instance 'codex-cdx-livetest'" in err
+    assert "livetest-agentmsg-xp" in err
+    assert "quaid project link livetest-agentmsg-xp" in err
+    assert "Project not found" not in err
+
+
+def test_require_project_visible_reports_missing_project(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        cli._require_project_visible("ghost", None)
+
+    assert exc_info.value.code == 1
+    assert "Project not found: ghost" in capsys.readouterr().err
+
+
 # ---------------------------------------------------------------------------
 # cmd_create
 # ---------------------------------------------------------------------------
@@ -259,7 +281,10 @@ class TestCmdShow:
             with pytest.raises(SystemExit) as exc_info:
                 cli.cmd_show(_args(name="cdx-proj"))
         assert exc_info.value.code == 1
-        assert "cdx-proj" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert "Project exists but is not linked to current instance 'claude-code-private-tmp-cc-livetest'" in err
+        assert "quaid project link cdx-proj" in err
+        assert "Project not found" not in err
 
     def test_not_found_exits_with_one(self, capsys):
         with patch("core.project_registry.get_project", return_value=None):
@@ -432,7 +457,10 @@ class TestCmdDelete:
                 cli.cmd_delete(_args(name="cdx-proj"))
         assert exc_info.value.code == 1
         delete_project.assert_not_called()
-        assert "cdx-proj" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert "Project exists but is not linked to current instance 'claude-code-private-tmp-cc-livetest'" in err
+        assert "quaid project link cdx-proj" in err
+        assert "Project not found" not in err
 
     def test_keyerror_exits_with_one(self, capsys):
         with patch("core.project_registry.get_project", return_value={"instances": []}), \

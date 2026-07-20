@@ -104,8 +104,20 @@ def _project_visible_to_current_instance(project: Optional[Dict[str, Any]]) -> b
 
 
 def _require_project_visible(name: str, project: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    if not _project_visible_to_current_instance(project):
+    if project is None:
         print(f"Project not found: {name}", file=sys.stderr)
+        sys.exit(1)
+    if not _project_visible_to_current_instance(project):
+        current = _current_instance_id()
+        current_label = f" to current instance '{current}'" if current else " to the current instance"
+        print(
+            f"Project exists but is not linked{current_label}: {name}",
+            file=sys.stderr,
+        )
+        print(
+            f"Run `quaid project link {name}` before using scoped project commands for this project.",
+            file=sys.stderr,
+        )
         sys.exit(1)
     return project
 
