@@ -629,9 +629,14 @@ def create_project(
 
     with _registry_lock():
         registry = _load_registry()
-        if name in registry["projects"]:
+        deleted_projects = registry.setdefault("deleted_projects", {})
+        if name in deleted_projects:
+            if name in registry["projects"]:
+                logger.warning("Discarding tombstoned stale project registry entry before recreate: %s", name)
+                del registry["projects"][name]
+            deleted_projects.pop(name, None)
+        elif name in registry["projects"]:
             raise ValueError(f"Project already exists: {name}")
-        registry.setdefault("deleted_projects", {}).pop(name, None)
         if initial_instance is not None:
             current_instance = str(initial_instance).strip()
         else:

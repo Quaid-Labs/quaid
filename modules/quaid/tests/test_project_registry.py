@@ -848,6 +848,33 @@ class TestDeleteProjectPurgesDb:
 
         assert is_deleted("my-app") is False
 
+    def test_create_project_replaces_tombstoned_resurrected_registry_row(self, mock_adapter, caplog):
+        import json
+        from core.project_registry import project_exists_raw
+        from lib.project_registry import is_deleted
+
+        _, tmp_path = mock_adapter
+        create_project("my-app")
+        delete_project("my-app")
+
+        path = _registry_path()
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data.setdefault("projects", {})["my-app"] = {
+            "canonical_path": str(tmp_path / "projects" / "my-app"),
+            "instances": ["pytest-runner"],
+            "description": "stale resurrection",
+        }
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+        assert project_exists_raw("my-app") is False
+        with caplog.at_level(logging.WARNING, logger="core.project_registry"):
+            entry = create_project("my-app", description="fresh create")
+
+        assert entry["description"] == "fresh create"
+        assert is_deleted("my-app") is False
+        assert get_project("my-app")["description"] == "fresh create"
+        assert "Discarding tombstoned stale project registry entry" in caplog.text
+
     def test_delete_marker_wins_over_resurrected_registry_row(self, mock_adapter):
         import json
         from core import project_registry as registry_mod

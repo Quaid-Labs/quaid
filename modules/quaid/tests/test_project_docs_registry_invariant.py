@@ -729,3 +729,44 @@ def test_deleted_project_marker_blocks_docs_reconciliation(project_registry_env)
     assert get_project("recipe-app") is None
     assert registry.get_project_definition("recipe-app") is None
     assert not project_dir.exists()
+
+
+def test_deleted_project_marker_blocks_stale_global_register_update(project_registry_env, caplog):
+    from lib.project_registry import lookup, mark_deleted, register
+
+    quaid_home = project_registry_env["quaid_home"]
+    visible_home = project_registry_env["visible_home"]
+    project_dir = visible_home / "projects" / "recipe-app"
+    project_dir.mkdir(parents=True)
+
+    register(
+        name="recipe-app",
+        canonical_path=str(project_dir),
+        description="original",
+        link_current_instance=False,
+    )
+    mark_deleted("recipe-app")
+
+    registry_path = quaid_home / "project-registry.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry.setdefault("projects", {})["recipe-app"] = {
+        "canonical_path": str(project_dir),
+        "instances": [],
+        "description": "stale resurrection",
+    }
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="lib.project_registry"):
+        result = register(
+            name="recipe-app",
+            canonical_path=str(project_dir),
+            description="should not update",
+            link_current_instance=False,
+        )
+
+    stored = json.loads(registry_path.read_text(encoding="utf-8"))
+    assert result == {}
+    assert lookup("recipe-app") is None
+    assert "recipe-app" not in stored.get("projects", {})
+    assert "recipe-app" in stored.get("deleted_projects", {})
+    assert "Removing tombstoned stale project registry entry" in caplog.text

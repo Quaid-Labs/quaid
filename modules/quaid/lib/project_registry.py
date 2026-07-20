@@ -134,7 +134,11 @@ def register(
     with registry_lock():
         data = _load()
         now = _now_iso()
-        if name in data.get("deleted_projects", {}) and name not in data["projects"]:
+        if name in data.get("deleted_projects", {}):
+            if name in data["projects"]:
+                logger.warning("Removing tombstoned stale project registry entry: %s", name)
+                del data["projects"][name]
+                _save(data)
             return {}
 
         if name in data["projects"]:
