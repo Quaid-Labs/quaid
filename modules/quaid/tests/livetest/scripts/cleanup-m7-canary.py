@@ -20,7 +20,11 @@ def _pending_signal_files(data_dir: Path) -> list[Path]:
     signal_dir = data_dir / "extraction-signals"
     if not signal_dir.exists():
         return []
-    return sorted(path for path in signal_dir.iterdir() if path.is_file())
+    return sorted(
+        path
+        for path in signal_dir.iterdir()
+        if path.is_file() and not path.name.startswith(".")
+    )
 
 
 def _candidate_files(instance_root: Path) -> list[Path]:
