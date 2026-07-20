@@ -383,15 +383,18 @@ def add_edge(
 def forget(
     node_id: Optional[str] = None,
     query: Optional[str] = None,
+    confirm_node_id: Optional[str] = None,
 ) -> bool:
     """Delete a memory by ID or by query match.
 
     If node_id is provided, deletes that specific memory.
-    If query is provided, finds the best match and deletes it.
+    If query is provided, the best match is deleted only when confirm_node_id
+    matches that candidate's ID.
 
     Args:
         node_id: UUID of the memory to delete.
         query: Natural language query to find and delete the best match.
+        confirm_node_id: ID of the query candidate the caller explicitly confirms.
 
     Returns:
         True if a memory was deleted, False otherwise.
@@ -399,10 +402,10 @@ def forget(
     Example:
         >>> forget(node_id="a1b2c3-...")
         True
-        >>> forget(query="Mars colony preferences")
+        >>> forget(query="Mars colony preferences", confirm_node_id="matched-node-id")
         True
     """
-    return _memory().forget(query=query, node_id=node_id)
+    return _memory().forget(query=query, node_id=node_id, confirm_node_id=confirm_node_id)
 
 
 def get_memory(node_id: str) -> Optional[Dict[str, Any]]:

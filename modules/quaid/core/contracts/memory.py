@@ -96,7 +96,12 @@ class MemoryServicePort(Protocol):
         source_fact_id: Optional[str] = None,
     ) -> Dict[str, Any]: ...
 
-    def forget(self, node_id: Optional[str] = None, query: Optional[str] = None) -> bool: ...
+    def forget(
+        self,
+        node_id: Optional[str] = None,
+        query: Optional[str] = None,
+        confirm_node_id: Optional[str] = None,
+    ) -> bool: ...
 
     def get_memory(self, node_id: str) -> Optional[Dict[str, Any]]: ...
 

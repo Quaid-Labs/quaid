@@ -24473,7 +24473,27 @@ def delete_edges_by_source_fact(source_fact_id: str) -> int:
         return result.rowcount
 
 
-def forget(query: Optional[str] = None, node_id: Optional[str] = None) -> bool:
+def _find_forget_candidate(
+    query: str,
+    *,
+    graph: Optional["MemoryGraph"] = None,
+) -> Optional[tuple[Node, float]]:
+    """Return the best query-delete candidate without mutating storage."""
+    value = str(query or "").strip()
+    if not value:
+        return None
+    active_graph = graph or get_graph()
+    results = active_graph.search_hybrid(value, limit=1)
+    if not results:
+        return None
+    return results[0]
+
+
+def forget(
+    query: Optional[str] = None,
+    node_id: Optional[str] = None,
+    confirm_node_id: Optional[str] = None,
+) -> bool:
     """Delete a memory by query or ID."""
     graph = get_graph()
 
@@ -24481,10 +24501,18 @@ def forget(query: Optional[str] = None, node_id: Optional[str] = None) -> bool:
         return graph.delete_node(node_id)
 
     if query:
-        results = graph.search_hybrid(query, limit=1)
-        if results:
-            node, _ = results[0]
-            return graph.delete_node(node.id)
+        candidate = _find_forget_candidate(query, graph=graph)
+        if candidate is None:
+            return False
+        node, _ = candidate
+        confirmed = str(confirm_node_id or "").strip()
+        if confirmed != node.id:
+            logger.warning(
+                "forget(query=...) requires confirm_node_id=%s before deleting the query match; no memory deleted",
+                node.id,
+            )
+            return False
+        return graph.delete_node(node.id)
 
     return False
 
@@ -25234,6 +25262,12 @@ if __name__ == "__main__":
         forget_p = subparsers.add_parser("forget", help="Permanently delete a memory by ID or query")
         forget_p.add_argument("query", nargs="*", help="Search query to find memory to forget; UUIDs are treated as IDs")
         forget_p.add_argument("--id", dest="node_id", default=None, help="Node ID to forget directly")
+        forget_p.add_argument(
+            "--confirm-id",
+            dest="confirm_node_id",
+            default=None,
+            help="Required to permanently delete the best query match; use the ID printed by the preview",
+        )
 
         # --- delete ---
         delete_p = subparsers.add_parser("delete", help="Soft-delete a memory")
@@ -25566,8 +25600,33 @@ if __name__ == "__main__":
                         print(f"Memory not found: {query}", file=sys.stderr)
                         sys.exit(1)
                     return
-                if forget(query=query):
+                candidate = _find_forget_candidate(query)
+                if candidate is None:
+                    print("No matching memory found", file=sys.stderr)
+                    sys.exit(1)
+                node, score = candidate
+                if not args.confirm_node_id:
+                    print("No memory deleted.", file=sys.stderr)
+                    print(
+                        f"Best candidate: |ID:{node.id}| similarity={score:.3f} {node.name[:160]}",
+                        file=sys.stderr,
+                    )
+                    print(
+                        "Rerun with --confirm-id <id> to delete this query match, "
+                        "or use --id <id> for exact-ID deletion.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                if str(args.confirm_node_id).strip() != node.id:
+                    print("No memory deleted: --confirm-id did not match the best query result.", file=sys.stderr)
+                    print(
+                        f"Best candidate: |ID:{node.id}| similarity={score:.3f} {node.name[:160]}",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                if forget(query=query, confirm_node_id=args.confirm_node_id):
                     print(f"Deleted memory matching: {query}")
+                    print(f"Deleted node: |ID:{node.id}| similarity={score:.3f} {node.name[:160]}")
                 else:
                     print("No matching memory found", file=sys.stderr)
                     sys.exit(1)

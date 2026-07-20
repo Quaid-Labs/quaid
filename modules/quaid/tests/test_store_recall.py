@@ -6846,6 +6846,157 @@ class TestTimestampOverride:
         assert f"Memory not found: {missing_id}" in result.stderr
         assert "Deleted memory matching" not in result.stdout + result.stderr
 
+    def test_forget_query_requires_confirmed_candidate_id(self, caplog):
+        import datastore.memorydb.memory_graph as mg
+
+        node = SimpleNamespace(id="node-1", name="The copper sundial sits on the east shelf.")
+
+        class FakeGraph:
+            def __init__(self):
+                self.deleted_ids = []
+
+            def search_hybrid(self, query, limit=1):
+                assert query == "copper sundial"
+                assert limit == 1
+                return [(node, 0.61)]
+
+            def delete_node(self, node_id):
+                self.deleted_ids.append(node_id)
+                return True
+
+        fake_graph = FakeGraph()
+        with patch.object(mg, "get_graph", return_value=fake_graph), caplog.at_level("WARNING"):
+            assert mg.forget(query="copper sundial") is False
+            assert fake_graph.deleted_ids == []
+            assert "requires confirm_node_id=node-1" in caplog.text
+
+            assert mg.forget(query="copper sundial", confirm_node_id="other-node") is False
+            assert fake_graph.deleted_ids == []
+
+            assert mg.forget(query="copper sundial", confirm_node_id="node-1") is True
+            assert fake_graph.deleted_ids == ["node-1"]
+
+    def test_forget_cli_query_previews_candidate_without_deleting(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        module_root = Path(__file__).resolve().parents[1]
+        db_path = tmp_path / "memory.db"
+        graph = mg.MemoryGraph(db_path=db_path)
+        node = mg.Node.create(
+            type="fact",
+            name="The archival stamp press is stored beside the west window.",
+            owner_id="forget-cli-query-test",
+            status="active",
+        )
+        graph.add_node(node, embed=False)
+        env = {
+            **os.environ,
+            "MEMORY_DB_PATH": str(db_path),
+            "MOCK_EMBEDDINGS": "1",
+            "QUAID_HOME": str(tmp_path / ".quaid"),
+            "QUAID_INSTANCE": "cli-forget-query-preview",
+            "QUAID_ADAPTER_TYPE": "standalone",
+        }
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "datastore.memorydb.memory_graph",
+                "forget",
+                "archival",
+                "stamp",
+                "press",
+            ],
+            cwd=str(module_root),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert result.stdout == ""
+        assert "No memory deleted." in result.stderr
+        assert f"|ID:{node.id}|" in result.stderr
+        assert "--confirm-id" in result.stderr
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM nodes WHERE id = ?", (node.id,)).fetchone()[0] == 1
+
+    def test_forget_cli_query_deletes_only_with_matching_confirm_id(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        module_root = Path(__file__).resolve().parents[1]
+        db_path = tmp_path / "memory.db"
+        graph = mg.MemoryGraph(db_path=db_path)
+        node = mg.Node.create(
+            type="fact",
+            name="The jade ink roller is stored in the drafting cabinet.",
+            owner_id="forget-cli-query-confirm-test",
+            status="active",
+        )
+        graph.add_node(node, embed=False)
+        env = {
+            **os.environ,
+            "MEMORY_DB_PATH": str(db_path),
+            "MOCK_EMBEDDINGS": "1",
+            "QUAID_HOME": str(tmp_path / ".quaid"),
+            "QUAID_INSTANCE": "cli-forget-query-confirm",
+            "QUAID_ADAPTER_TYPE": "standalone",
+        }
+
+        wrong_confirm = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "datastore.memorydb.memory_graph",
+                "forget",
+                "jade",
+                "ink",
+                "roller",
+                "--confirm-id",
+                "wrong-node",
+            ],
+            cwd=str(module_root),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+
+        assert wrong_confirm.returncode != 0
+        assert "No memory deleted" in wrong_confirm.stderr
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM nodes WHERE id = ?", (node.id,)).fetchone()[0] == 1
+
+        confirmed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "datastore.memorydb.memory_graph",
+                "forget",
+                "jade",
+                "ink",
+                "roller",
+                "--confirm-id",
+                node.id,
+            ],
+            cwd=str(module_root),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+
+        assert confirmed.returncode == 0, confirmed.stderr
+        assert "Deleted memory matching: jade ink roller" in confirmed.stdout
+        assert f"Deleted node: |ID:{node.id}|" in confirmed.stdout
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM nodes WHERE id = ?", (node.id,)).fetchone()[0] == 0
+
     def test_recall_json_cli_keeps_combined_stream_parseable(self, tmp_path):
         module_root = Path(__file__).resolve().parents[1]
         quaid_home = tmp_path / ".quaid"

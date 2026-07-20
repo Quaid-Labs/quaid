@@ -48,7 +48,7 @@ Source mappings live in instance `config.json -> docs.sourceMapping`.
 |------|---------|
 | `memory_recall` | Semantic recall (tool-driven; auto-injection optional) |
 | `memory_store` | Queue manual memory note for next extraction pass |
-| `memory_forget` | Delete by ID or query |
+| `memory_forget` | Permanently delete by exact ID; query mode requires candidate-ID confirmation |
 | `projects_search` | Search docs via RAG + staleness warnings |
 
 **CLI:**
@@ -63,6 +63,8 @@ python3 datastore/memorydb/memory_graph.py relation-types --json
 # Memory write/delete
 python3 datastore/memorydb/memory_graph.py store "text" --owner quaid --category fact
 python3 datastore/memorydb/memory_graph.py forget --id <node_id>
+python3 datastore/memorydb/memory_graph.py forget "query text"              # preview only
+python3 datastore/memorydb/memory_graph.py forget "query text" --confirm-id <node_id>
 
 # Docs and projects
 python3 datastore/docsdb/rag.py search "query" --project quaid

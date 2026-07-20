@@ -497,6 +497,8 @@ python3 memory_graph.py store "text" --owner <user> --category fact \
   [--privacy shared] [--speaker "User"] [--status pending] \
   [--keywords "space separated search terms"]
 python3 memory_graph.py forget --id <uuid>
+python3 memory_graph.py forget "query text"              # preview only
+python3 memory_graph.py forget "query text" --confirm-id <uuid>
 ```
 
 **Search output format:** `[similarity] [category](date)[flags][C:confidence] text |ID:uuid|T:created_at|VF:valid_from|VU:valid_until|P:privacy|O:owner_id`
@@ -559,7 +561,7 @@ OpenClaw plugin (Total Recall / quaid) that:
 **Tools registered:**
 - `memory_recall` — search memories with **dynamic retrieval limit K** (see below), uses graph-aware search. **Waits for in-flight extraction** (up to 60s timeout) before querying, ensuring freshly extracted facts from compaction/reset are immediately queryable. Uses a strict `query + options` contract (`options.graph`, `options.routing`, `options.filters`, `options.ranking`, `options.datastoreOptions`) including date filtering via `options.filters.dateFrom`/`options.filters.dateTo`. Results include dates showing when each fact was recorded, and `[superseded]` markers for facts with `validUntil` set.
 - `memory_store` — queues a memory note for deferred extraction on compaction/reset (no immediate DB write)
-- `memory_forget` — delete by query or ID
+- `memory_forget` — permanently delete by exact ID; query mode requires confirming the printed candidate ID
 - `projects_search` — RAG search with optional `project` filter + staleness warnings
 - `docs_list` — list docs by project/type via registry
 - `docs_read` — read doc by path or title

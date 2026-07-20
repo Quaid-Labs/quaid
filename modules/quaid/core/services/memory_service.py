@@ -345,8 +345,13 @@ class DatastoreMemoryService(MemoryServicePort):
             _conn=_conn,
         )
 
-    def forget(self, node_id: Optional[str] = None, query: Optional[str] = None) -> bool:
-        return forget_memory(node_id=node_id, query=query)
+    def forget(
+        self,
+        node_id: Optional[str] = None,
+        query: Optional[str] = None,
+        confirm_node_id: Optional[str] = None,
+    ) -> bool:
+        return forget_memory(node_id=node_id, query=query, confirm_node_id=confirm_node_id)
 
     def get_memory(self, node_id: str) -> Optional[Dict[str, Any]]:
         return get_memory_by_id(node_id)

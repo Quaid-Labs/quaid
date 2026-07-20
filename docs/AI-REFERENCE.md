@@ -640,7 +640,7 @@ quaid recall <query> '{"stores":["docs"]}'  # Search project documentation
 
 # Manage
 quaid forget --id <id>        # Permanently delete a memory by exact ID
-quaid forget <query>          # Permanently delete the best query match
+quaid forget <query>          # Preview best query match; rerun with --confirm-id to delete
 quaid create-edge <s> <r> <o> # Create a relationship edge
 quaid registry <subcmd>       # Doc/file registry (list/read/register/...)
 quaid updater <subcmd>        # Project event processor
