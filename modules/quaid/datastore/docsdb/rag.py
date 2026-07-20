@@ -107,11 +107,12 @@ def _allowed_project_roots() -> List[Path]:
     return roots
 
 
-def _resolve_project_root(raw: str) -> Path:
+def _resolve_project_root(raw: str, *, allow_external_source_root: bool = False) -> Path:
     value = str(raw or "").strip()
     p = Path(value)
-    if p.is_absolute():
-        candidate = p
+    expanded = p.expanduser()
+    if p.is_absolute() or (allow_external_source_root and expanded.is_absolute()):
+        candidate = expanded
     elif not value:
         candidate = _workspace()
     elif value.startswith("projects/") or value == "projects":
@@ -123,6 +124,11 @@ def _resolve_project_root(raw: str) -> Path:
     except TypeError:
         resolved = candidate.expanduser().resolve()
     if not any(_path_is_under(resolved, root) for root in _allowed_project_roots()):
+        if allow_external_source_root and expanded.is_absolute():
+            # Project source roots are user-owned workspaces. Unlike project
+            # homes/scaffolds, they are allowed to live outside Quaid's managed
+            # roots when the registry explicitly declares them.
+            return resolved
         raise ValueError(f"Docs project path escapes Quaid workspace: {raw!r}")
     return resolved
 
@@ -133,7 +139,7 @@ def _safe_project_roots(raw_paths: List[Any]) -> List[str]:
         value = str(raw or "").strip()
         if not value:
             continue
-        resolved = str(_resolve_project_root(value))
+        resolved = str(_resolve_project_root(value, allow_external_source_root=True))
         if resolved not in roots:
             roots.append(resolved)
     return roots

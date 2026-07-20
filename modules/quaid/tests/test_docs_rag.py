@@ -3289,6 +3289,37 @@ class TestDocsSearchFiltering:
              pytest.raises(RuntimeError, match="Failed resolving docs project paths via docs registry"):
             rag._get_project_paths("portfolio-site")
 
+    def test_get_project_paths_allows_external_docs_registry_source_root_when_failhard(
+        self,
+        tmp_path,
+    ):
+        rag = _make_rag(tmp_path)
+        workspace = tmp_path / "instance-root"
+        visible_home = tmp_path / "visible-quaid"
+        external_source = tmp_path / "openclaw" / "workspace"
+        workspace.mkdir(parents=True)
+        (visible_home / "projects" / "openclaw-workspace").mkdir(parents=True)
+        external_source.mkdir(parents=True)
+
+        class _Registry:
+            def __init__(self, _db_path):
+                pass
+
+            def get_project_definition(self, _project):
+                return SimpleNamespace(
+                    home_dir="projects/openclaw-workspace/",
+                    source_roots=[str(external_source)],
+                )
+
+        with patch("datastore.docsdb.registry.DocsRegistry", _Registry), \
+             patch("datastore.docsdb.rag._workspace", return_value=workspace), \
+             patch("datastore.docsdb.rag.get_visible_quaid_home", return_value=visible_home), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True):
+            paths = rag._get_project_paths("openclaw-workspace")
+
+        assert paths["home_dir"] == str(visible_home / "projects" / "openclaw-workspace")
+        assert paths["source_roots"] == [str(external_source)]
+
     def test_get_project_paths_rejects_project_registry_escape_when_failhard(self, tmp_path):
         rag = _make_rag(tmp_path)
         escaped = tmp_path.parent / "outside-project"
