@@ -1367,6 +1367,38 @@ class DocsRegistry:
             entry = self._row_to_dict(row)
             return entry if _docs_project_visible_to_current_instance(entry.get("project")) else None
 
+    def _registry_path_semantic_key(self, file_path: str) -> Optional[str]:
+        """Resolve a registry path for ownership comparisons, ignoring spelling."""
+        value = str(file_path or "").strip()
+        if not value:
+            return None
+        try:
+            return str(self._resolve_path(value).resolve(strict=False))
+        except Exception as exc:
+            logger.warning("Failed resolving docs registry path %r for semantic comparison: %s", value, exc)
+            if _fail_hard_enabled():
+                raise
+            return None
+
+    def _active_registry_path_indexes(self) -> tuple[set[str], set[str]]:
+        """Return exact and resolved active registry paths without instance visibility filtering."""
+        exact_paths: set[str] = set()
+        semantic_paths: set[str] = set()
+        with get_connection(self.db_path) as conn:
+            self._ensure_doc_registry_table(conn)
+            rows = conn.execute(
+                "SELECT file_path FROM doc_registry WHERE state = 'active'"
+            ).fetchall()
+        for row in rows:
+            file_path = str(row["file_path"] or "").strip()
+            if not file_path:
+                continue
+            exact_paths.add(file_path)
+            key = self._registry_path_semantic_key(file_path)
+            if key:
+                semantic_paths.add(key)
+        return exact_paths, semantic_paths
+
     def list_docs(
         self,
         project: Optional[str] = None,
@@ -1837,7 +1869,8 @@ class DocsRegistry:
 
         Returns count of new registrations.
         """
-        count = 0
+        exact_registered, semantic_registered = self._active_registry_path_indexes()
+        candidates: List[Dict[str, str]] = []
         with get_connection(self.db_path) as conn:
             # Get all unique source_files from doc_chunks
             rows = conn.execute(
@@ -1845,31 +1878,76 @@ class DocsRegistry:
             ).fetchall()
 
             for row in rows:
-                abs_path = row[0]
-                try:
-                    rel_path = _to_registry_path(Path(abs_path))
-                except ValueError:
+                abs_path = str(row[0] or "").strip()
+                if not abs_path:
+                    continue
+                source_path = Path(abs_path)
+                if source_path.is_absolute():
+                    try:
+                        rel_path = _to_registry_path(source_path)
+                    except ValueError:
+                        rel_path = abs_path
+                else:
                     rel_path = abs_path
 
-                existing = self.get(rel_path)
-                if existing:
+                semantic_key = self._registry_path_semantic_key(rel_path)
+                if rel_path in exact_registered or (semantic_key and semantic_key in semantic_registered):
                     continue
 
                 # Determine project from path
                 project = self.find_project_for_path(rel_path) or "default"
+                if project == "default" and (
+                    rel_path == "projects"
+                    or (
+                        rel_path.startswith("projects/")
+                        and rel_path != "projects/staging"
+                        and not rel_path.startswith("projects/staging/")
+                    )
+                ):
+                    logger.warning(
+                        "Skipping docs chunk source %s during registry sync: project ownership is unresolved",
+                        rel_path,
+                    )
+                    continue
                 title = self._extract_title_from_path(abs_path)
+                candidates.append({
+                    "file_path": rel_path,
+                    "project": project,
+                    "title": title or "",
+                })
+                exact_registered.add(rel_path)
+                if semantic_key:
+                    semantic_registered.add(semantic_key)
 
-                self.register(
-                    file_path=rel_path,
-                    project=project,
-                    asset_type="doc",
-                    title=title,
-                    registered_by="sync-from-chunks",
-                )
-                count += 1
-                print(f"  Synced from chunks: {rel_path} -> project={project}")
+        with get_connection(self.db_path) as conn:
+            self._ensure_doc_registry_table(conn)
+            now_iso = _now_iso()
+            for candidate in candidates:
+                conn.execute("""
+                    INSERT INTO doc_registry
+                        (file_path, project, asset_type, title, tags,
+                         auto_update, registered_at, registered_by)
+                    VALUES (?, ?, 'doc', ?, '[]', 0, ?, 'sync-from-chunks')
+                    ON CONFLICT(file_path) DO UPDATE SET
+                        project = excluded.project,
+                        asset_type = excluded.asset_type,
+                        title = COALESCE(excluded.title, doc_registry.title),
+                        tags = excluded.tags,
+                        auto_update = excluded.auto_update,
+                        last_indexed_at = NULL,
+                        state = 'active',
+                        registered_by = excluded.registered_by
+                """, (
+                    candidate["file_path"],
+                    candidate["project"],
+                    candidate["title"] or None,
+                    now_iso,
+                ))
 
-        return count
+        for candidate in candidates:
+            print(f"  Synced from chunks: {candidate['file_path']} -> project={candidate['project']}")
+
+        return len(candidates)
 
     # ========================================================================
     # Bulk Project Operations

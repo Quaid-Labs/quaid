@@ -1134,6 +1134,135 @@ class TestSyncFromChunks:
         count = r.sync_from_chunks()
         assert count == 1
 
+    def test_sync_from_chunks_skips_absolute_relative_duplicate(self, setup_env):
+        from lib.database import get_connection
+
+        r = _get_registry()
+        visible_home = setup_env.parents[1]
+        source_root = visible_home / "projects" / "livetest-agentmsg-cc-src"
+        source_root.mkdir(parents=True, exist_ok=True)
+        doc_path = source_root / "README.md"
+        doc_path.write_text("# CC Source\n", encoding="utf-8")
+
+        with get_connection(_tmp_db) as conn:
+            r._ensure_doc_registry_table(conn)
+            conn.execute(
+                """
+                INSERT INTO doc_registry (file_path, project, asset_type, title, registered_by, state)
+                VALUES (?, 'test-project', 'doc', 'CC Source', 'system', 'active')
+                """,
+                (str(doc_path.resolve()),),
+            )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS doc_chunks (
+                    id TEXT PRIMARY KEY,
+                    source_file TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    section_header TEXT,
+                    embedding BLOB,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            conn.execute("""
+                INSERT INTO doc_chunks (id, source_file, chunk_index, content, embedding)
+                VALUES ('cc-src:0', ?, 0, 'chunk content', X'00')
+            """, (str(doc_path.resolve()),))
+
+        assert r.sync_from_chunks() == 0
+        with get_connection(_tmp_db) as conn:
+            rows = conn.execute(
+                "SELECT file_path, project, registered_by, state FROM doc_registry ORDER BY id"
+            ).fetchall()
+        assert [(row["file_path"], row["project"], row["registered_by"], row["state"]) for row in rows] == [
+            (str(doc_path.resolve()), "test-project", "system", "active")
+        ]
+
+    def test_sync_from_chunks_skips_invisible_exact_registered_file(self, setup_env, monkeypatch):
+        from lib.database import get_connection
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        project_dir = setup_env.parents[1] / "projects" / "livetest-agentmsg-cc"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        project_md = project_dir / "PROJECT.md"
+        project_md.write_text("# CC Project\n", encoding="utf-8")
+        file_path = "projects/livetest-agentmsg-cc/PROJECT.md"
+
+        with get_connection(_tmp_db) as conn:
+            r._ensure_doc_registry_table(conn)
+            conn.execute(
+                """
+                INSERT INTO doc_registry (file_path, project, asset_type, title, registered_by, state)
+                VALUES (?, 'livetest-agentmsg-cc', 'doc', 'CC Project', 'project_registry_sync', 'active')
+                """,
+                (file_path,),
+            )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS doc_chunks (
+                    id TEXT PRIMARY KEY,
+                    source_file TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    section_header TEXT,
+                    embedding BLOB,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            conn.execute("""
+                INSERT INTO doc_chunks (id, source_file, chunk_index, content, embedding)
+                VALUES ('project-md:0', ?, 0, 'project content', X'00')
+            """, (str(project_md.resolve()),))
+
+        monkeypatch.setattr(
+            registry_mod,
+            "_docs_project_visible_to_current_instance",
+            lambda project: project != "livetest-agentmsg-cc",
+        )
+
+        assert r.get(file_path) is None
+        assert r.sync_from_chunks() == 0
+        with get_connection(_tmp_db) as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM doc_registry WHERE state = 'active'"
+            ).fetchone()[0] == 1
+
+    def test_sync_from_chunks_skips_unowned_visible_project_paths(self, setup_env, monkeypatch):
+        from lib.database import get_connection
+
+        r = _get_registry()
+        visible_home = setup_env.parents[1]
+        orphan_project = visible_home / "projects" / "unlinked-project"
+        orphan_project.mkdir(parents=True, exist_ok=True)
+        orphan_log = orphan_project / "PROJECT.log"
+        orphan_log.write_text("- orphan log line\n", encoding="utf-8")
+
+        with get_connection(_tmp_db) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS doc_chunks (
+                    id TEXT PRIMARY KEY,
+                    source_file TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    section_header TEXT,
+                    embedding BLOB,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            conn.execute("""
+                INSERT INTO doc_chunks (id, source_file, chunk_index, content, embedding)
+                VALUES ('orphan-log:0', ?, 0, 'orphan content', X'00')
+            """, (str(orphan_log.resolve()),))
+
+        monkeypatch.setattr(r, "find_project_for_path", lambda _path: None)
+
+        assert r.sync_from_chunks() == 0
+        with get_connection(_tmp_db) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM doc_registry").fetchone()[0] == 0
+
 
 class TestRegistryGc:
     def test_apply_removes_orphaned_doc_chunks(self, setup_env):
