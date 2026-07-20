@@ -6771,6 +6771,81 @@ class TestTimestampOverride:
         assert result.returncode != 0
         assert "temporal_dimension must be one of" in result.stderr
 
+    def test_forget_cli_treats_positional_uuid_as_node_id(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        module_root = Path(__file__).resolve().parents[1]
+        db_path = tmp_path / "memory.db"
+        graph = mg.MemoryGraph(db_path=db_path)
+        node = mg.Node.create(
+            type="fact",
+            name="The archival stamp press is stored beside the west window.",
+            owner_id="forget-cli-test",
+            status="active",
+        )
+        graph.add_node(node, embed=False)
+        env = {
+            **os.environ,
+            "MEMORY_DB_PATH": str(db_path),
+            "QUAID_HOME": str(tmp_path / ".quaid"),
+            "QUAID_INSTANCE": "cli-forget-positional-id",
+            "QUAID_ADAPTER_TYPE": "standalone",
+        }
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "datastore.memorydb.memory_graph",
+                "forget",
+                node.id,
+            ],
+            cwd=str(module_root),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == f"Permanently deleted: {node.id}"
+        assert "Deleted memory matching" not in result.stdout
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM nodes WHERE id = ?", (node.id,)).fetchone()[0] == 0
+
+    def test_forget_cli_reports_missing_positional_uuid_without_success(self, tmp_path):
+        module_root = Path(__file__).resolve().parents[1]
+        missing_id = "00000000-dead-beef-0000-000000000000"
+        env = {
+            **os.environ,
+            "MEMORY_DB_PATH": str(tmp_path / "memory.db"),
+            "QUAID_HOME": str(tmp_path / ".quaid"),
+            "QUAID_INSTANCE": "cli-forget-missing-positional-id",
+            "QUAID_ADAPTER_TYPE": "standalone",
+        }
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "datastore.memorydb.memory_graph",
+                "forget",
+                missing_id,
+            ],
+            cwd=str(module_root),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert result.stdout == ""
+        assert f"Memory not found: {missing_id}" in result.stderr
+        assert "Deleted memory matching" not in result.stdout + result.stderr
+
     def test_recall_json_cli_keeps_combined_stream_parseable(self, tmp_path):
         module_root = Path(__file__).resolve().parents[1]
         quaid_home = tmp_path / ".quaid"

@@ -639,7 +639,8 @@ quaid get-edges <id>          # Get edges for a memory node
 quaid recall <query> '{"stores":["docs"]}'  # Search project documentation
 
 # Manage
-quaid forget [query]          # Delete a memory (--id <id>)
+quaid forget --id <id>        # Permanently delete a memory by exact ID
+quaid forget <query>          # Permanently delete the best query match
 quaid create-edge <s> <r> <o> # Create a relationship edge
 quaid registry <subcmd>       # Doc/file registry (list/read/register/...)
 quaid updater <subcmd>        # Project event processor

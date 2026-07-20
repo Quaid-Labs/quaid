@@ -24489,6 +24489,15 @@ def forget(query: Optional[str] = None, node_id: Optional[str] = None) -> bool:
     return False
 
 
+def _looks_like_node_uuid(value: str) -> bool:
+    """Return True for canonical UUID-looking node identifiers."""
+    try:
+        uuid.UUID(str(value or "").strip())
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def get_memory(node_id: str) -> Optional[Dict[str, Any]]:
     """Get a single memory by ID."""
     graph = get_graph()
@@ -25223,7 +25232,7 @@ if __name__ == "__main__":
 
         # --- forget ---
         forget_p = subparsers.add_parser("forget", help="Permanently delete a memory by ID or query")
-        forget_p.add_argument("query", nargs="*", help="Search query to find memory to forget")
+        forget_p.add_argument("query", nargs="*", help="Search query to find memory to forget; UUIDs are treated as IDs")
         forget_p.add_argument("--id", dest="node_id", default=None, help="Node ID to forget directly")
 
         # --- delete ---
@@ -25546,10 +25555,17 @@ if __name__ == "__main__":
                 if forget(node_id=args.node_id):
                     print(f"Permanently deleted: {args.node_id}")
                 else:
-                    print("Memory not found", file=sys.stderr)
+                    print(f"Memory not found: {args.node_id}", file=sys.stderr)
                     sys.exit(1)
             elif args.query:
                 query = " ".join(args.query)
+                if len(args.query) == 1 and _looks_like_node_uuid(query):
+                    if forget(node_id=query):
+                        print(f"Permanently deleted: {query}")
+                    else:
+                        print(f"Memory not found: {query}", file=sys.stderr)
+                        sys.exit(1)
+                    return
                 if forget(query=query):
                     print(f"Deleted memory matching: {query}")
                 else:
