@@ -1699,6 +1699,8 @@ def test_claude_code_session_start_clear_queues_prior_session_signal(
 
     from core.interface import hooks
 
+    traces = []
+
     monkeypatch.setattr(hooks, "_get_projects_dir", lambda: projects_dir)
     monkeypatch.setattr(hooks, "_get_identity_dir", lambda: identity_dir)
     monkeypatch.setattr(hooks, "_check_janitor_health", lambda: "")
@@ -1706,6 +1708,7 @@ def test_claude_code_session_start_clear_queues_prior_session_signal(
     monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
     monkeypatch.setattr(hooks, "_build_runtime_context_block", lambda: "[Quaid runtime]")
     monkeypatch.setattr(hooks, "_validate_prompt_model_config_for_hook", lambda _adapter_id: "")
+    monkeypatch.setattr(hooks, "_write_hook_trace", lambda event, payload=None: traces.append((event, payload or {})))
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
     monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
     monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
@@ -1733,6 +1736,24 @@ def test_claude_code_session_start_clear_queues_prior_session_signal(
     assert sig["meta"]["source"] == "session_transition"
     assert sig["meta"]["command"] == "/clear"
     assert sig["meta"]["reason"] == "session_start_transition"
+    assert (
+        "hook.session_init.session_transition_detected",
+        {
+            "ended_session_id": "32c388db",
+            "new_session_id": "2d29284b",
+            "command": "/clear",
+            "signal_type": "session_end",
+        },
+    ) in traces
+    assert (
+        "hook.session_init.session_transition_signal_written",
+        {
+            "ended_session_id": "32c388db",
+            "signal_name": "sig-session-end.json",
+            "command": "/clear",
+            "signal_type": "session_end",
+        },
+    ) in traces
 
 
 # ---------------------------------------------------------------------------

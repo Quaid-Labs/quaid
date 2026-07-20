@@ -34,10 +34,12 @@ Raw `tmux send-keys` remains banned for milestone prompts and recovery turns.
 `/exit` or `/clear`. Wait at least 2 minutes after the trigger before
 checking the DB.
 
-**CC hook trace markers:** for `/clear`, look for
-`hook.inject.command_detected` with `command=/clear` in
+**CC hook trace markers:** Claude Code can handle `/clear` without sending a
+`UserPromptSubmit` hook for the command text. For `/clear`, look for
+`hook.session_init.session_transition_detected` and
+`hook.session_init.session_transition_signal_written` with `command=/clear` in
 `$SILO/logs/quaid-hook-trace.jsonl`, then confirm the daemon log shows a real
-`[daemon-session_end]` for the same session. For `/exit`, confirm the
+`[daemon-session_end]` for the ended session. For `/exit`, confirm the
 SessionEnd hook wrote a `session_end` signal and the daemon processed it.
 
 ---
@@ -142,10 +144,11 @@ stage publishes, send the lane lifecycle command exactly:
 ```
 
 Do not grade Chunk-2-only keywords until that `/clear` is visible in
-`quaid-hook-trace.jsonl` as `hook.inject.command_detected` and the daemon has
-processed the resulting `session_end`. The synthetic `rolling_stage_flush` is
-not the lifecycle drain; it only publishes the already-staged rolling payload and
-may intentionally preserve a subthreshold Chunk-2 semantic tail for `/clear`.
+`quaid-hook-trace.jsonl` as `hook.session_init.session_transition_signal_written`
+with `command=/clear`, and the daemon has processed the resulting
+`session_end`. The synthetic `rolling_stage_flush` is not the lifecycle drain;
+it only publishes the already-staged rolling payload and may intentionally
+preserve a subthreshold Chunk-2 semantic tail for `/clear`.
 
 ---
 

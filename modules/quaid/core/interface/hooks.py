@@ -4315,8 +4315,14 @@ def hook_session_init(args):
                 _ended_tx = str(_transition.get("ended_transcript_path") or "").strip()
                 _t_type = str(_transition.get("signal_type") or "session_end")
                 _t_meta = dict(_transition.get("meta") or {})
+                _write_hook_trace("hook.session_init.session_transition_detected", {
+                    "ended_session_id": _ended_sid,
+                    "new_session_id": current_session_id,
+                    "command": str(_t_meta.get("command") or "").strip(),
+                    "signal_type": _t_type,
+                })
                 if _ended_sid and _ended_tx and os.path.isfile(_ended_tx):
-                    write_signal(
+                    _sig_path = write_signal(
                         signal_type=_t_type,
                         session_id=_ended_sid,
                         transcript_path=_ended_tx,
@@ -4324,6 +4330,12 @@ def hook_session_init(args):
                         supports_compaction_control=False,
                         meta=_t_meta,
                     )
+                    _write_hook_trace("hook.session_init.session_transition_signal_written", {
+                        "ended_session_id": _ended_sid,
+                        "signal_name": _sig_path.name,
+                        "command": str(_t_meta.get("command") or "").strip(),
+                        "signal_type": _t_type,
+                    })
                     print(f"[quaid][session-init] queued extraction for prior session {_ended_sid}", file=sys.stderr)
     except Exception as _e:
         print(f"[quaid][session-init] prior-session signal error: {_e}", file=sys.stderr)
