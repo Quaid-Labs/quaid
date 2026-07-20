@@ -590,6 +590,9 @@ def _format_direct_agent_notices(messages: List[str]) -> str:
         return (
             "RESPONSE CONTRACT: Before answering anything else, your first sentence to the user must say: "
             "\"Quaid memory recall is currently degraded because its model provider failed.\" "
+            "This is a current Quaid status for this turn, not a historical reminder; repeat that exact "
+            "first sentence even if you already warned the user in an earlier response. "
+            "Do not replace it with 'same as before' and do not omit it. "
             "Then continue with the user's request using any non-Quaid knowledge you have. "
             "Do not skip or paraphrase away this status sentence.\n\n"
             f"<quaid_system_message>\n{body}\n</quaid_system_message>"

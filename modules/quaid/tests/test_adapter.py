@@ -3068,6 +3068,10 @@ class TestClaudeCodeAdapter:
 
         assert "invalid-model-m6-probe" in first
         assert "invalid-model-m6-probe" in second
+        assert "current Quaid status for this turn" in first
+        assert "current Quaid status for this turn" in second
+        assert "Do not replace it with 'same as before'" in first
+        assert "Do not replace it with 'same as before'" in second
         assert pending_path.is_file()
 
     def test_pending_context_honors_quaid_now_for_timestamps_and_ttl(self, tmp_path, monkeypatch):
@@ -3579,6 +3583,10 @@ class TestCodexAdapter:
 
         assert "invalid-model-m6-probe" in first
         assert "invalid-model-m6-probe" in second
+        assert "current Quaid status for this turn" in first
+        assert "current Quaid status for this turn" in second
+        assert "Do not replace it with 'same as before'" in first
+        assert "Do not replace it with 'same as before'" in second
         assert pending_path.is_file()
 
     def test_pending_context_relays_when_sticky_rewrite_fails_failopen(

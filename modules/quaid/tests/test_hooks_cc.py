@@ -3901,6 +3901,8 @@ class TestHookInjectRecallResilience:
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "[Quaid error] [provider]" in context
         assert "Tell the user: Quaid memory recall is currently degraded" in context
+        assert "current Quaid status for this turn" in context
+        assert "Do not replace it with 'same as before'" in context
         assert "invalid-model-m6-probe" in context
         log_path = tmp_path / "instances" / "claude-code-test" / "logs" / "daemon" / "preinject.jsonl"
         entry = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
@@ -3909,6 +3911,55 @@ class TestHookInjectRecallResilience:
         assert entry["notices"][0]["category"] == "direct_notice"
         assert "Tell the user: Quaid memory recall is currently degraded" in entry["notices"][0]["text"]
         assert "invalid-model-m6-probe" in entry["notices"][0]["text"]
+
+    def test_cached_prompt_model_config_error_warns_exactly_on_repeated_turns(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+        from core.interface import hooks
+
+        mock_adapter.adapter_id.return_value = "claude-code"
+        mock_adapter.instance_root.return_value = tmp_path
+        mock_adapter.data_dir.return_value = tmp_path / "data"
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+        monkeypatch.setattr(
+            hooks,
+            "_runtime_config_snapshot",
+            lambda: ((str(tmp_path / "claude-code" / "config.json"), 123),),
+        )
+
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            side_effect=RuntimeError("model=invalid-model-m6-probe"),
+        ) as probe, patch(
+            "core.interface.api.recall_fast",
+            side_effect=AssertionError("recall should not run after model-config notice"),
+        ), patch(
+            "core.interface.api.projects_search_docs",
+            side_effect=AssertionError("docs should not run after model-config notice"),
+        ):
+            contexts = []
+            for idx in range(3):
+                out, _err = _run_hook_inject(
+                    {
+                        "prompt": f"provider probe turn {idx}",
+                        "session_id": "sess-cc-provider-repeat",
+                        "cwd": "/Users/x",
+                    },
+                    monkeypatch=monkeypatch,
+                )
+                contexts.append(json.loads(out)["hookSpecificOutput"]["additionalContext"])
+
+        probe.assert_called_once()
+        for context in contexts:
+            assert "Quaid memory recall is currently degraded because its model provider failed." in context
+            assert "current Quaid status for this turn" in context
+            assert "Do not replace it with 'same as before'" in context
+            assert "invalid-model-m6-probe" in context
 
     def test_session_start_reprobes_after_daemon_bounce_for_first_prompt_notice(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
