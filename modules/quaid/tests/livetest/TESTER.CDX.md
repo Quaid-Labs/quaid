@@ -1,6 +1,9 @@
 # Tester Supplement — Codex (CDX)
 
 Platform-specific notes for the CDX tester. Read this alongside `TESTER.SKILL.md`.
+Milestone files in `livetest-guide/M*.md` are authoritative; this supplement
+only adds lane-specific commands and interpretation. If a supplement conflicts
+with a milestone guide, follow the guide and report the drift.
 
 ---
 
@@ -239,7 +242,7 @@ for CDX the equivalent evidence is a rollout file written to `data/rolling-extra
 CDX does not use `SessionTimeoutManager`, but the daemon still honors
 `capture.inactivityTimeoutMinutes` through its idle-session timeout path.
 That means CDX gets **timeout extraction** but **not timeout compaction**
-(see M4 below).
+(tested in `livetest-guide/M2.md` Part C).
 
 ---
 
@@ -268,51 +271,11 @@ not a Codex app-server sidecar.
 
 ---
 
-## M4 — Timeout Extraction
-
-**CDX does have timeout extraction, but not timeout compaction.**
+## Timeout Extraction (M2 Part C)
 
 CDX idle extraction comes from the daemon's timeout check, not from a Codex
-session-timeout manager. So M4 still applies to CDX, but the expected signal is
-**extraction only**.
-
-**CDX M4 procedure:**
-1. Set `capture.inactivityTimeoutMinutes` to `1` and restart the CDX daemon:
-   ```bash
-   ssh REMOTE_HOST 'python3 - <<\"PY\"
-import json
-from pathlib import Path
-p = Path("WORKSPACE/CDX_INSTANCE/config.json")
-d = json.loads(p.read_text()) if p.exists() else {}
-d.setdefault("capture", {})["inactivityTimeoutMinutes"] = 1
-p.parent.mkdir(parents=True, exist_ok=True)
-p.write_text(json.dumps(d, indent=2))
-print("CDX_INSTANCE inactivityTimeoutMinutes=1")
-PY'
-   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid daemon start 2>&1'
-   ```
-2. Start a fresh visible CDX session, state one memorable fact, then let the
-   pane idle for >1 minute without `/new`.
-3. Verify extraction fired:
-   - daemon log shows timeout handling (`daemon-timeout` or equivalent timeout extraction path)
-   - the fact is stored in DB / FTS
-4. Restore the timeout and restart the daemon again:
-   ```bash
-   ssh REMOTE_HOST 'python3 - <<\"PY\"
-import json
-from pathlib import Path
-p = Path("WORKSPACE/CDX_INSTANCE/config.json")
-d = json.loads(p.read_text()) if p.exists() else {}
-d.setdefault("capture", {})["inactivityTimeoutMinutes"] = 60
-p.parent.mkdir(parents=True, exist_ok=True)
-p.write_text(json.dumps(d, indent=2))
-print("CDX_INSTANCE inactivityTimeoutMinutes=60")
-PY'
-   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid daemon start 2>&1'
-   ```
-
-**M4 PASS criteria (CDX):** Timeout fact extracted and stored with no explicit
-lifecycle command. Note in STATUS: `"M4 PASS — timeout extraction verified (no compaction, expected for CDX)."`
+session-timeout manager. Timeout extraction is tested by `livetest-guide/M2.md`
+Part C, not M4. CDX has no timeout compaction.
 
 ---
 
@@ -378,8 +341,9 @@ question (`What's the office plant named?`) as the first real prompt in the new
 session. Apply the same bare-Enter and rollout-file checks above before grading
 the answer. A welcome screen or resume hint immediately after `/new` is normal.
 
-### M4 — Timeout Extraction
-See dedicated section above. CDX gets timeout extraction but no timeout compaction.
+### M4 — Project System and Docs CLI
+Follow `livetest-guide/M4.md`. CDX has no lane-specific M4 replacement; do not
+run timeout extraction as M4.
 
 ### M8 Phase 1 — Project Auto-Creation
 CDX agents generally follow file-placement policy. If Phase 1 fails (agent

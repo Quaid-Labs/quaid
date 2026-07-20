@@ -1,6 +1,9 @@
 # Tester Supplement — Claude Code (CC)
 
 Platform-specific notes for the CC tester. Read this alongside `TESTER.SKILL.md`.
+Milestone files in `livetest-guide/M*.md` are authoritative; this supplement
+only adds lane-specific commands and interpretation. If a supplement conflicts
+with a milestone guide, follow the guide and report the drift.
 
 ---
 
@@ -146,65 +149,13 @@ may intentionally preserve a subthreshold Chunk-2 semantic tail for `/clear`.
 
 ---
 
-## Timeout Extraction (M4)
+## Timeout Extraction (M2 Part C)
 
-CC has **timeout extraction** but not timeout compaction. When the inactivity
-timeout fires, the SessionTimeoutManager writes a `compaction` signal with
-`source: timeout_extract`. The daemon processes this as a compaction signal —
-facts are extracted and stored. The session itself is not compacted (only OC
-supports forced compaction).
-
-**M4 procedure for CC:**
-
-1. Set timeout to 1 minute and restart the daemon:
-   ```bash
-   ssh REMOTE_HOST 'python3 - <<\"PY\"
-import json
-from pathlib import Path
-p = Path("WORKSPACE/CC_INSTANCE/config.json")
-d = json.loads(p.read_text()) if p.exists() else {}
-d.setdefault("capture", {})["inactivityTimeoutMinutes"] = 1
-p.parent.mkdir(parents=True, exist_ok=True)
-p.write_text(json.dumps(d, indent=2))
-print("CC_INSTANCE inactivityTimeoutMinutes=1")
-PY'
-   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; \
-     QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/plugins/quaid/quaid daemon start 2>&1'
-   ```
-
-2. Start a fresh CC session in `livetest:CC` from `/Users/admin/cc-livetest`. Tell CC
-   something memorable, then **let it idle for >1 minute** with no further input.
-
-3. Verify extraction fired (daemon log shows `[daemon-compaction]` with
-   `source: daemon.timeout`):
-   ```bash
-   ssh REMOTE_HOST 'tail -20 WORKSPACE/CC_INSTANCE/logs/daemon/extraction-daemon.log \
-     2>/dev/null | grep -i "timeout\|compaction\|daemon\.timeout"'
-   ```
-
-4. Restore and restart:
-   ```bash
-   ssh REMOTE_HOST 'python3 - <<\"PY\"
-import json
-from pathlib import Path
-p = Path("WORKSPACE/CC_INSTANCE/config.json")
-d = json.loads(p.read_text()) if p.exists() else {}
-d.setdefault("capture", {})["inactivityTimeoutMinutes"] = 60
-p.parent.mkdir(parents=True, exist_ok=True)
-p.write_text(json.dumps(d, indent=2))
-print("CC_INSTANCE inactivityTimeoutMinutes=60")
-PY'
-   ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/plugins/quaid/quaid daemon stop 2>&1; sleep 2; \
-     QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
-     ~/.quaid/plugins/quaid/quaid daemon start 2>&1'
-   ```
-
-**M4 PASS criteria (CC):** Timeout fact extracted and stored. Daemon log shows
-`daemon.timeout` signal processed. Note in STATUS: "M4 PASS — timeout
-extraction verified (no compaction, expected for CC)."
+Timeout extraction is tested by `livetest-guide/M2.md` Part C, not M4. For CC,
+the inactivity timeout writes a `compaction` signal with `source:
+timeout_extract`; the daemon extracts and stores facts, but the visible session
+is not compacted. Use the central M2 Part C marker and
+`final_facts_stored >= 1` checks.
 
 ---
 
@@ -301,9 +252,9 @@ ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
 CC supports `/compact` directly. After seeding and building up >1500 tokens,
 verify rolling-extraction.jsonl has `rolling_stage` events, then send `/compact`.
 
-### M4 — Timeout Extraction
-See dedicated section above. CC gets timeout extraction (no compaction). PASS
-with note on the no-compaction behaviour.
+### M4 — Project System and Docs CLI
+Follow `livetest-guide/M4.md`. CC has no lane-specific M4 replacement; do not
+run timeout extraction as M4.
 
 ### M8 — Project CRUD
 CC is launched with `--model claude-sonnet-4-6` (see Launch section above). Do NOT

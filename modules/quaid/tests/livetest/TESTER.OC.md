@@ -1,6 +1,9 @@
 # Tester Supplement — OpenClaw (OC)
 
 Platform-specific notes for the OC tester. Read this alongside `TESTER.SKILL.md`.
+Milestone files in `livetest-guide/M*.md` are authoritative; this supplement
+only adds lane-specific commands and interpretation. If a supplement conflicts
+with a milestone guide, follow the guide and report the drift.
 
 OC is tested via **Matrix DM**, not the TUI. The Matrix server and OpenClaw
 gateway are already running on the VM as persistent services — no launch
