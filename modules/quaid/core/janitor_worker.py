@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 _STOP = False
 _RUN_ALL_TIMEOUT_ENV = "QUAID_JANITOR_RUN_ALL_TIMEOUT_SECONDS"
 _FALLBACK_RUN_ALL_TIMEOUT_SECONDS = 240.0 * 60.0
+_UNLIMITED_CONFIG_RUN_ALL_TIMEOUT_SECONDS = 24.0 * 60.0 * 60.0
 _RUN_ALL_TIMEOUT_EXIT_CODE = 124
 _RUN_ALL_TIMEOUT_MARKER_GRACE_SECONDS = 5.0
 
@@ -110,7 +111,9 @@ def _configured_run_all_timeout_seconds() -> float:
             raise RuntimeError("janitor run-all timeout config unavailable") from exc
         return _FALLBACK_RUN_ALL_TIMEOUT_SECONDS
     if minutes <= 0:
-        return float("inf")
+        # janitor.task_timeout_minutes=0 historically disabled runtime warnings.
+        # Keep that generous intent without disabling hang protection entirely.
+        return _UNLIMITED_CONFIG_RUN_ALL_TIMEOUT_SECONDS
     return max(1.0, minutes * 60.0)
 
 

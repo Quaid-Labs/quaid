@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import sys
 import threading
 from types import SimpleNamespace
@@ -99,7 +98,7 @@ def test_run_all_timeout_env_overrides_config(monkeypatch):
     assert janitor_worker._run_all_timeout_seconds() == 15.0
 
 
-def test_run_all_timeout_zero_config_preserves_unlimited_convention(monkeypatch):
+def test_run_all_timeout_zero_config_uses_large_finite_ceiling(monkeypatch):
     from core import janitor_worker
 
     monkeypatch.delenv("QUAID_JANITOR_RUN_ALL_TIMEOUT_SECONDS", raising=False)
@@ -113,7 +112,7 @@ def test_run_all_timeout_zero_config_preserves_unlimited_convention(monkeypatch)
         ),
     )
 
-    assert math.isinf(janitor_worker._run_all_timeout_seconds())
+    assert janitor_worker._run_all_timeout_seconds() == 86400.0
 
 
 def test_run_all_timeout_invalid_env_falls_back_when_not_failhard(monkeypatch):
