@@ -2809,6 +2809,7 @@ class TestDocsSearchFiltering:
                      "quaid": {"instances": ["cc-main"]},
                      "cross-live-test": {
                          "canonical_path": "/tmp/workspace/projects/cross-live-test",
+                         "source_root": "/tmp/workspace/projects/cross-live-test-src",
                          "instances": [],
                      },
                  },
@@ -2825,7 +2826,79 @@ class TestDocsSearchFiltering:
         hint = ((bundle.get("telemetry") or {}).get("scope_hint") or {})
         assert hint.get("type") == "unlinked_project_candidates"
         assert [c["project"] for c in hint.get("candidates", [])] == ["cross-live-test"]
-        assert hint["candidates"][0]["path"] == "/tmp/workspace/projects/cross-live-test"
+        assert hint["candidates"][0]["path"] == "/tmp/workspace/projects/cross-live-test-src"
+        assert hint["candidates"][0]["source_root"] == "/tmp/workspace/projects/cross-live-test-src"
+        assert hint["candidates"][0]["canonical_path"] == "/tmp/workspace/projects/cross-live-test"
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0])
+    def test_search_docs_bundle_adds_scope_hint_when_linked_hits_are_weak(self, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        rag._shared_scope_enabled = True
+
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.executemany(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        "linked-project:0",
+                        "/tmp/workspace/projects/quaid/PROJECT.md",
+                        0,
+                        "Generic project catalog content.",
+                        "Project",
+                        b"0.49",
+                    ),
+                    (
+                        "unlinked-ember:0",
+                        "/tmp/workspace/projects/livetest-agentmsg-xp-src/docs/ember-glass.md",
+                        0,
+                        "Ember Glass means pager escalation level 2.",
+                        "Ember Glass",
+                        b"0.95",
+                    ),
+                ],
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        def _unpack(blob):
+            return [float(bytes(blob).decode("ascii"))]
+
+        with patch("datastore.docsdb.rag._linked_projects_for_current_instance", return_value=(["quaid"], True)), \
+             patch(
+                 "lib.project_registry.list_all",
+                 return_value={
+                     "quaid": {
+                         "canonical_path": "/tmp/workspace/projects/quaid",
+                         "instances": ["codex-cdx-livetest"],
+                     },
+                     "livetest-agentmsg-xp": {
+                         "canonical_path": "/tmp/workspace/projects/livetest-agentmsg-xp",
+                         "source_root": "/tmp/workspace/projects/livetest-agentmsg-xp-src",
+                         "instances": ["claude-code-livetest"],
+                     },
+                 },
+             ), \
+             patch("datastore.docsdb.rag._lib_has_vec", return_value=False), \
+             patch("datastore.docsdb.rag._lib_unpack_embedding", side_effect=_unpack), \
+             patch("datastore.docsdb.rag._lib_cosine_similarity", side_effect=lambda _query, chunk: chunk[0]), \
+             patch.object(
+                 rag,
+                 "_get_project_paths",
+                 return_value={"home_dir": "/tmp/workspace/projects/quaid", "source_roots": []},
+             ):
+            bundle = rag.search_docs_bundle(
+                "I just want one fact from the livetest-agentmsg-xp project. What does Ember Glass mean?",
+                limit=3,
+            )
+
+        assert bundle["chunks"]
+        assert bundle["chunks"][0]["source"].endswith("PROJECT.md")
+        hint = ((bundle.get("telemetry") or {}).get("scope_hint") or {})
+        assert hint.get("type") == "unlinked_project_candidates"
+        assert hint["candidates"][0]["project"] == "livetest-agentmsg-xp"
+        assert hint["candidates"][0]["path"] == "/tmp/workspace/projects/livetest-agentmsg-xp-src"
 
     def test_linked_project_scope_fails_closed_when_reconcile_fails(self, tmp_path):
         from datastore.docsdb import rag as rag_module
@@ -3032,6 +3105,7 @@ class TestDocsSearchFiltering:
                      "quaid": {"instances": ["cc-main"]},
                      "cross-live-test": {
                          "canonical_path": "/tmp/workspace/projects/cross-live-test",
+                         "source_root": "/tmp/workspace/projects/cross-live-test-src",
                          "instances": [],
                      },
                  },
@@ -3047,7 +3121,7 @@ class TestDocsSearchFiltering:
         assert hint.get("type") == "unlinked_project_candidates"
         assert hint.get("requested_project") == "cross-live-test"
         assert [c["project"] for c in hint.get("candidates", [])] == ["cross-live-test"]
-        assert hint["candidates"][0]["path"] == "/tmp/workspace/projects/cross-live-test"
+        assert hint["candidates"][0]["path"] == "/tmp/workspace/projects/cross-live-test-src"
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0])
     def test_search_docs_shared_scope_matches_explicit_project_case_insensitively(self, _embed, tmp_path):

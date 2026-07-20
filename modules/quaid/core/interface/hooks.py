@@ -537,13 +537,22 @@ def _format_project_docs_scope_hint(docs_bundle: Dict) -> str:
     for candidate in candidates[:3]:
         project = str(candidate.get("project") or "").strip()
         path = str(candidate.get("path") or "").strip()
+        source_root = str(candidate.get("source_root") or "").strip()
+        canonical_path = str(candidate.get("canonical_path") or "").strip()
         score = candidate.get("score")
         score_text = ""
         try:
             score_text = f" score={float(score):.2f}" if score is not None else ""
         except Exception:
             score_text = ""
-        path_text = f" path={path}" if path else ""
+        path_parts: List[str] = []
+        if source_root:
+            path_parts.append(f"source_root={source_root}")
+        if canonical_path and canonical_path != source_root:
+            path_parts.append(f"canonical_path={canonical_path}")
+        if not path_parts and path:
+            path_parts.append(f"path={path}")
+        path_text = f" {' '.join(path_parts)}" if path_parts else ""
         if project or path_text:
             candidate_lines.append(f"- {project or '(unknown)'}{path_text}{score_text}")
     if not candidate_lines:

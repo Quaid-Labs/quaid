@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MAX_CHUNKS_PER_DOCUMENT = 5000
 _LINKED_PROJECT_SCOPE_RECONCILE_TTL_SECONDS = 5.0
 _LINKED_PROJECT_SCOPE_RECONCILE_NEXT_AT = 0.0
+_UNLINKED_PROJECT_HINT_WEAK_TOP_SIMILARITY = 0.56
 
 # Configuration — resolved from config system
 def _default_db_path() -> Path:
@@ -2224,7 +2225,10 @@ class DocsRAG:
             limited_results = results[:limit]
         for result in limited_results:
             result.pop("_rank_score", None)
-        if not limited_results and project_scope_token == "__instance_linked_scope__":
+        if (
+            project_scope_token == "__instance_linked_scope__"
+            and self._linked_scope_results_need_unlinked_hint(limited_results)
+        ):
             with _lib_get_connection(self.db_path) as conn:
                 self._set_scope_hint_for_unlinked_candidates(
                     conn=conn,
@@ -2234,6 +2238,20 @@ class DocsRAG:
                     requested_project=project,
                 )
         return limited_results
+
+    def _linked_scope_results_need_unlinked_hint(self, results: List[Dict[str, Any]]) -> bool:
+        if not results:
+            return True
+        first_source = str(results[0].get("source") or "").strip()
+        if Path(first_source).name.lower() in _ROOT_OVERVIEW_FILES:
+            return True
+        top_similarity = 0.0
+        for row in results:
+            try:
+                top_similarity = max(top_similarity, float(row.get("similarity") or 0.0))
+            except Exception:
+                continue
+        return top_similarity < _UNLINKED_PROJECT_HINT_WEAK_TOP_SIMILARITY
 
     def search_docs_bundle(
         self,
@@ -2502,12 +2520,16 @@ class DocsRAG:
             if score < min_score and not matched:
                 continue
             entry = registry_entries.get(project_name, {}) or {}
-            project_path = str(
-                entry.get("canonical_path")
-                or entry.get("source_root")
-                or entry.get("home_dir")
-                or ""
-            ).strip()
+            source_roots = entry.get("source_roots")
+            first_source_root = ""
+            if isinstance(source_roots, list):
+                first_source_root = next(
+                    (str(root or "").strip() for root in source_roots if str(root or "").strip()),
+                    "",
+                )
+            source_root = str(entry.get("source_root") or first_source_root or "").strip()
+            canonical_path = str(entry.get("canonical_path") or entry.get("home_dir") or "").strip()
+            project_path = source_root or canonical_path
             out.append(
                 {
                     "project": project_name,
@@ -2515,6 +2537,8 @@ class DocsRAG:
                     "matched_query_name": bool(matched),
                     "match_count": int(counts.get(project_name, 0)),
                     "path": project_path,
+                    "source_root": source_root or None,
+                    "canonical_path": canonical_path or None,
                 }
             )
 

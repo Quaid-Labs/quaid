@@ -1273,6 +1273,7 @@ def test_hook_inject_surfaces_unlinked_project_scope_hint(monkeypatch, tmp_path)
     adapter.get_sessions_dir.return_value = str(tmp_path / "sessions")
 
     project_path = tmp_path / "projects" / "livetest-agentmsg-xp"
+    source_root = tmp_path / "projects" / "livetest-agentmsg-xp-src"
     docs_bundle = {
         "chunks": [],
         "project": None,
@@ -1290,6 +1291,8 @@ def test_hook_inject_surfaces_unlinked_project_scope_hint(monkeypatch, tmp_path)
                     {
                         "project": "livetest-agentmsg-xp",
                         "path": str(project_path),
+                        "source_root": str(source_root),
+                        "canonical_path": str(project_path),
                         "score": 0.91,
                     }
                 ],
@@ -1319,7 +1322,8 @@ def test_hook_inject_surfaces_unlinked_project_scope_hint(monkeypatch, tmp_path)
     context = payload["hookSpecificOutput"]["additionalContext"]
     assert "[Quaid Project Discovery]" in context
     assert "livetest-agentmsg-xp" in context
-    assert str(project_path) in context
+    assert f"source_root={source_root}" in context
+    assert f"canonical_path={project_path}" in context
     assert "currently_linked_projects: quaid" in context
     assert "do not run `quaid project link`" in context
 
