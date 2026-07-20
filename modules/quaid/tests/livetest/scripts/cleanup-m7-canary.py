@@ -16,6 +16,13 @@ IDENTITY_FILES = ("SOUL.md", "USER.md", "ENVIRONMENT.md")
 DEFAULT_MARKER = "Bartholomew"
 
 
+def _pending_signal_files(data_dir: Path) -> list[Path]:
+    signal_dir = data_dir / "extraction-signals"
+    if not signal_dir.exists():
+        return []
+    return sorted(path for path in signal_dir.iterdir() if path.is_file())
+
+
 def _candidate_files(instance_root: Path) -> list[Path]:
     files = [instance_root / name for name in IDENTITY_FILES]
     files.extend(sorted(instance_root.glob("*.snippets.md")))
@@ -134,6 +141,11 @@ def main() -> int:
         default=None,
         help="Path to the installed quaid CLI; defaults to QCLI, PATH, then ~/.quaid/plugins/quaid/quaid.",
     )
+    parser.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="Only verify that no marker residue remains; do not mutate files or memory.",
+    )
     args = parser.parse_args()
 
     instance = str(args.instance or "").strip()
@@ -147,12 +159,35 @@ def main() -> int:
 
     visible_instance_root = args.visible_home.expanduser() / "instances" / instance
     quaid_home = args.quaid_home.expanduser()
-    db_path = quaid_home / "instances" / instance / "data" / "memory.db"
+    data_dir = quaid_home / "instances" / instance / "data"
+    if not data_dir.is_dir():
+        print(f"FAIL: instance data directory not found: {data_dir}", file=sys.stderr)
+        return 1
+    if not os.access(data_dir, os.R_OK | os.X_OK):
+        print(f"FAIL: instance data directory is not readable/searchable: {data_dir}", file=sys.stderr)
+        return 1
+    try:
+        pending_signals = _pending_signal_files(data_dir)
+    except OSError as exc:
+        print(f"FAIL: could not inspect pending extraction signals under {data_dir}: {exc}", file=sys.stderr)
+        return 1
+    if pending_signals:
+        print("FAIL: pending extraction signals remain; drain daemon before M7 cleanup:", file=sys.stderr)
+        for path in pending_signals[:20]:
+            print(f"  {path}", file=sys.stderr)
+        if len(pending_signals) > 20:
+            print(f"  ... {len(pending_signals) - 20} more", file=sys.stderr)
+        return 1
+
+    db_path = data_dir / "memory.db"
     files = _candidate_files(visible_instance_root)
 
-    removed_lines = sum(_strip_marker_lines(path, marker) for path in files)
     node_ids = _memory_node_ids(db_path, marker)
-    if node_ids:
+    removed_lines = 0
+    if not args.verify_only:
+        removed_lines = sum(_strip_marker_lines(path, marker) for path in files)
+
+    if node_ids and not args.verify_only:
         quaid_cli = _resolve_quaid_cli(args.quaid_cli)
         if quaid_cli is None:
             print(
@@ -181,10 +216,13 @@ def main() -> int:
                 print(f"  {node_id}", file=sys.stderr)
         return 1
 
-    print(
-        f"M7 canary cleanup complete: instance={instance} marker={marker!r} "
-        f"removed_lines={removed_lines} deleted_nodes={len(node_ids)}"
-    )
+    if args.verify_only:
+        print(f"M7 canary cleanup verification clean: instance={instance} marker={marker!r}")
+    else:
+        print(
+            f"M7 canary cleanup complete: instance={instance} marker={marker!r} "
+            f"removed_lines={removed_lines} deleted_nodes={len(node_ids)}"
+        )
     return 0
 
 
