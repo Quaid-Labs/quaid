@@ -1263,6 +1263,58 @@ class TestSyncFromChunks:
         with get_connection(_tmp_db) as conn:
             assert conn.execute("SELECT COUNT(*) FROM doc_registry").fetchone()[0] == 0
 
+    def test_sync_from_chunks_uses_global_registry_ownership_without_visibility(self, setup_env, monkeypatch):
+        from lib.database import get_connection
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        visible_home = setup_env.parents[1]
+        project_dir = visible_home / "projects" / "livetest-agentmsg-oc"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        project_log = project_dir / "PROJECT.log"
+        project_log.write_text("- OC project log line\n", encoding="utf-8")
+
+        with get_connection(_tmp_db) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS doc_chunks (
+                    id TEXT PRIMARY KEY,
+                    source_file TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    section_header TEXT,
+                    embedding BLOB,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            conn.execute("""
+                INSERT INTO doc_chunks (id, source_file, chunk_index, content, embedding)
+                VALUES ('oc-log:0', ?, 0, 'oc log content', X'00')
+            """, (str(project_log.resolve()),))
+
+        monkeypatch.setattr(registry_mod, "_docs_project_visible_to_current_instance", lambda _project: False)
+        monkeypatch.setattr(
+            "lib.project_registry.list_all",
+            lambda: {
+                "livetest-agentmsg-oc": {
+                    "canonical_path": str(project_dir),
+                    "source_root": None,
+                    "instances": ["openclaw-main"],
+                }
+            },
+        )
+
+        assert r.sync_from_chunks() == 1
+        with get_connection(_tmp_db) as conn:
+            row = conn.execute(
+                "SELECT file_path, project, registered_by, state FROM doc_registry WHERE file_path = ?",
+                ("projects/livetest-agentmsg-oc/PROJECT.log",),
+            ).fetchone()
+        assert row is not None
+        assert row["project"] == "livetest-agentmsg-oc"
+        assert row["registered_by"] == "sync-from-chunks"
+        assert row["state"] == "active"
+
 
 class TestRegistryGc:
     def test_apply_removes_orphaned_doc_chunks(self, setup_env):

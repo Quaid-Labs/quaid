@@ -1628,6 +1628,87 @@ class DocsRegistry:
                     continue
         return None
 
+    def _ownership_path(self, value: str) -> Optional[Path]:
+        """Resolve trusted registry metadata for ownership comparisons."""
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            path = Path(text).expanduser()
+            if path.is_absolute():
+                return path.resolve(strict=False)
+            return self._resolve_path(text).resolve(strict=False)
+        except Exception as exc:
+            logger.warning("Failed resolving project ownership path %r: %s", text, exc)
+            if _fail_hard_enabled():
+                raise
+            return None
+
+    @staticmethod
+    def _path_is_inside_or_equal(path: Path, root: Path) -> bool:
+        try:
+            resolved = path.resolve(strict=False)
+            root_resolved = root.resolve(strict=False)
+            return resolved == root_resolved or resolved.is_relative_to(root_resolved)
+        except (OSError, ValueError):
+            return False
+
+    def _find_project_for_path_unfiltered(self, file_path: str) -> Optional[str]:
+        """Determine project ownership for repair/sync work without instance visibility filtering."""
+        abs_path = self._ownership_path(file_path)
+        if abs_path is None:
+            return None
+
+        for name, defn in self.get_all_project_definitions().items():
+            home = self._ownership_path(defn.home_dir)
+            if home is not None and self._path_is_inside_or_equal(abs_path, home):
+                return name
+
+        with get_connection(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT project, file_path, source_files FROM doc_registry WHERE state = 'active'"
+            ).fetchall()
+        for row in rows:
+            row_path = self._ownership_path(str(row["file_path"] or ""))
+            if row_path is not None and self._path_is_inside_or_equal(abs_path, row_path):
+                return str(row["project"] or "").strip() or None
+
+        for name, defn in self.get_all_project_definitions().items():
+            for root in defn.source_roots:
+                root_path = self._ownership_path(root)
+                if root_path is not None and self._path_is_inside_or_equal(abs_path, root_path):
+                    return name
+
+        for row in rows:
+            try:
+                sources = json.loads(row["source_files"] or "[]")
+            except (TypeError, ValueError):
+                sources = []
+            if not isinstance(sources, list):
+                continue
+            for source in sources:
+                source_path = self._ownership_path(str(source or ""))
+                if source_path is not None and self._path_is_inside_or_equal(abs_path, source_path):
+                    return str(row["project"] or "").strip() or None
+
+        try:
+            from lib.project_registry import list_all as global_project_list_all
+
+            global_projects = global_project_list_all()
+        except Exception as exc:
+            logger.warning("Failed reading global project registry for sync ownership: %s", exc)
+            if _fail_hard_enabled():
+                raise RuntimeError("Failed reading global project registry for sync ownership") from exc
+            global_projects = {}
+        for name, entry in sorted((global_projects or {}).items()):
+            roots = [entry.get("canonical_path"), entry.get("source_root")]
+            for root in roots:
+                root_path = self._ownership_path(str(root or ""))
+                if root_path is not None and self._path_is_inside_or_equal(abs_path, root_path):
+                    return str(name or "").strip() or None
+
+        return None
+
     def get_source_mappings(self, project: Optional[str] = None) -> Dict[str, List[str]]:
         """Get doc->sources mapping for mtime staleness checks.
 
@@ -1894,8 +1975,8 @@ class DocsRegistry:
                 if rel_path in exact_registered or (semantic_key and semantic_key in semantic_registered):
                     continue
 
-                # Determine project from path
-                project = self.find_project_for_path(rel_path) or "default"
+                # Determine project from path without current-instance visibility filtering.
+                project = self._find_project_for_path_unfiltered(rel_path) or "default"
                 if project == "default" and (
                     rel_path == "projects"
                     or (
