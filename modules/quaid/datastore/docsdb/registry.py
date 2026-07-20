@@ -1975,8 +1975,9 @@ class DocsRegistry:
                 if rel_path in exact_registered or (semantic_key and semantic_key in semantic_registered):
                     continue
 
-                # Determine project from path without current-instance visibility filtering.
-                project = self._find_project_for_path_unfiltered(rel_path) or "default"
+                # Determine project from the original source path. rel_path is
+                # a storage key and can be lossy for custom external roots.
+                project = self._find_project_for_path_unfiltered(abs_path) or "default"
                 if project == "default" and (
                     rel_path == "projects"
                     or (

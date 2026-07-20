@@ -1315,6 +1315,50 @@ class TestSyncFromChunks:
         assert row["registered_by"] == "sync-from-chunks"
         assert row["state"] == "active"
 
+    def test_sync_from_chunks_uses_absolute_source_for_custom_home_ownership(self, setup_env, monkeypatch):
+        from lib.database import get_connection
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        visible_home = setup_env.parents[1]
+        custom_home = visible_home / "external-apps" / "custom-app"
+        custom_home.mkdir(parents=True, exist_ok=True)
+        custom_doc = custom_home / "PROJECT.log"
+        custom_doc.write_text("- custom app fact\n", encoding="utf-8")
+        r.create_project("custom-app", home_dir=str(custom_home))
+
+        with get_connection(_tmp_db) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS doc_chunks (
+                    id TEXT PRIMARY KEY,
+                    source_file TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    section_header TEXT,
+                    embedding BLOB,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            conn.execute("""
+                INSERT INTO doc_chunks (id, source_file, chunk_index, content, embedding)
+                VALUES ('custom-log:0', ?, 0, 'custom log content', X'00')
+            """, (str(custom_doc.resolve()),))
+
+        monkeypatch.setattr(registry_mod, "_docs_project_visible_to_current_instance", lambda _project: False)
+
+        assert r.sync_from_chunks() == 1
+        with get_connection(_tmp_db) as conn:
+            rows = conn.execute(
+                "SELECT file_path, project, registered_by, state FROM doc_registry WHERE registered_by = 'sync-from-chunks'"
+            ).fetchall()
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["file_path"] == "external-apps/custom-app/PROJECT.log"
+        assert row["project"] == "custom-app"
+        assert row["state"] == "active"
+
 
 class TestRegistryGc:
     def test_apply_removes_orphaned_doc_chunks(self, setup_env):
