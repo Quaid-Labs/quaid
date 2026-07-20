@@ -373,8 +373,14 @@ class AnthropicLLMProvider(LLMProvider):
                 data_bytes = json.dumps(body).encode()
                 req = urllib.request.Request(self._base_url, data=data_bytes,
                                             headers=headers, method="POST")
+                request_deadline = time.time() + max(0.0, float(timeout))
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    data = json.loads(resp.read().decode())
+                    remaining = request_deadline - time.time()
+                    if remaining <= 0:
+                        raise TimeoutError(f"Anthropic API response timed out before body read ({float(timeout):.1f}s)")
+                    data = json.loads(
+                        _read_response_body_with_deadline(resp, read_timeout_s=remaining).decode()
+                    )
                     if not isinstance(data, dict):
                         raise RuntimeError(
                             f"Anthropic API returned non-object JSON for model={model}: {type(data).__name__}"
@@ -1253,8 +1259,12 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         )
 
         t0 = _time.time()
+        deadline = t0 + max(0.0, float(timeout))
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read())
+            remaining = deadline - _time.time()
+            if remaining <= 0:
+                raise TimeoutError(f"OpenAI responses payload timed out before body read ({float(timeout):.1f}s)")
+            data = json.loads(_read_response_body_with_deadline(resp, read_timeout_s=remaining))
         elapsed = _time.time() - t0
 
         if not isinstance(data, dict):
@@ -1317,8 +1327,12 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         )
 
         t0 = _time.time()
+        deadline = t0 + max(0.0, float(timeout))
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read())
+            remaining = deadline - _time.time()
+            if remaining <= 0:
+                raise TimeoutError(f"OpenAI-compatible response timed out before body read ({float(timeout):.1f}s)")
+            data = json.loads(_read_response_body_with_deadline(resp, read_timeout_s=remaining))
         elapsed = _time.time() - t0
 
         if not isinstance(data, dict):

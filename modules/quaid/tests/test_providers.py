@@ -225,6 +225,23 @@ class TestAnthropicLLMProvider:
             with pytest.raises(RuntimeError, match="non-object JSON"):
                 p.llm_call([{"role": "user", "content": "hi"}])
 
+    def test_llm_call_bounds_body_read_by_timeout(self):
+        p = AnthropicLLMProvider(api_key="sk-test-key")
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp) as mock_open, \
+             patch(
+                 "lib.providers._read_response_body_with_deadline",
+                 side_effect=TimeoutError("response body read exceeded deadline (1.0s)"),
+             ) as read_body:
+            with pytest.raises(TimeoutError, match="response body read exceeded deadline"):
+                p.llm_call([{"role": "user", "content": "hi"}], timeout=1.0)
+
+        assert mock_open.call_args.kwargs["timeout"] == 1.0
+        assert read_body.call_args.kwargs["read_timeout_s"] <= 1.0
+
     def test_llm_call_retries_on_retryable_http_error(self, monkeypatch):
         p = AnthropicLLMProvider(api_key="sk-test-key")
         monkeypatch.setenv("ANTHROPIC_RETRY_ATTEMPTS", "2")
@@ -1039,6 +1056,28 @@ class TestOpenAICompatibleLLMProvider:
         assert sent_body["messages"] == [{"role": "user", "content": "hi"}]
         assert sent_body["max_tokens"] == 55
 
+    def test_llm_call_bounds_chat_completions_body_read_by_timeout(self):
+        p = OpenAICompatibleLLMProvider(
+            base_url="http://localhost:8000",
+            api_key="local-key",
+            deep_model="qwen3",
+            fast_model="qwen3-mini",
+        )
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp) as mock_open, \
+             patch(
+                 "lib.providers._read_response_body_with_deadline",
+                 side_effect=TimeoutError("response body read exceeded deadline (1.0s)"),
+             ) as read_body:
+            with pytest.raises(TimeoutError, match="response body read exceeded deadline"):
+                p.llm_call([{"role": "user", "content": "hi"}], model_tier="fast", timeout=1.0)
+
+        assert mock_open.call_args.kwargs["timeout"] == 1.0
+        assert read_body.call_args.kwargs["read_timeout_s"] <= 1.0
+
     def test_llm_call_extracts_text_from_responses_output_chunks(self):
         p = OpenAICompatibleLLMProvider(
             base_url="https://api.openai.com",
@@ -1063,6 +1102,28 @@ class TestOpenAICompatibleLLMProvider:
             result = p.llm_call([{"role": "user", "content": "hi"}], model_tier="fast")
 
         assert result.text == "hello\nworld"
+
+    def test_llm_call_bounds_responses_body_read_by_timeout(self):
+        p = OpenAICompatibleLLMProvider(
+            base_url="https://api.openai.com",
+            api_key="sk-openai-test",
+            deep_model="gpt-5.4",
+            fast_model="gpt-5.4-mini",
+        )
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp) as mock_open, \
+             patch(
+                 "lib.providers._read_response_body_with_deadline",
+                 side_effect=TimeoutError("response body read exceeded deadline (1.0s)"),
+             ) as read_body:
+            with pytest.raises(TimeoutError, match="response body read exceeded deadline"):
+                p.llm_call([{"role": "user", "content": "hi"}], model_tier="fast", timeout=1.0)
+
+        assert mock_open.call_args.kwargs["timeout"] == 1.0
+        assert read_body.call_args.kwargs["read_timeout_s"] <= 1.0
 
     def test_llm_call_marks_incomplete_responses_as_truncated(self):
         p = OpenAICompatibleLLMProvider(
