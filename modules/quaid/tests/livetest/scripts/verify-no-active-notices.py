@@ -22,6 +22,8 @@ def _read_pending_entries(path: Path) -> tuple[list[dict[str, Any]], int]:
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         return [], 0
+    except OSError:
+        return [], 1
     for raw_line in lines:
         line = raw_line.strip()
         if not line:
@@ -60,6 +62,10 @@ def main() -> int:
         parser.error("--instance or INSTANCE/QUAID_INSTANCE is required")
 
     data_dir = args.quaid_home / "instances" / instance / "data"
+    if not data_dir.is_dir():
+        print(f"FAIL: instance data directory not found: {data_dir}", file=sys.stderr)
+        return 1
+
     pending: list[tuple[Path, list[dict[str, Any]], int]] = []
     for path in _pending_notice_files(data_dir):
         entries, malformed = _read_pending_entries(path)
