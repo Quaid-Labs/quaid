@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import math
+import sys
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -47,16 +50,85 @@ def test_run_all_timeout_invalid_env_raises_when_failhard(monkeypatch):
     from core import janitor_worker
 
     monkeypatch.setenv("QUAID_JANITOR_RUN_ALL_TIMEOUT_SECONDS", "bad")
+    monkeypatch.setitem(
+        sys.modules,
+        "config",
+        SimpleNamespace(
+            get_config=lambda: SimpleNamespace(
+                janitor=SimpleNamespace(task_timeout_minutes=4)
+            )
+        ),
+    )
     monkeypatch.setattr(janitor_worker, "_fail_hard_enabled", lambda: True)
 
     with pytest.raises(RuntimeError, match="QUAID_JANITOR_RUN_ALL_TIMEOUT_SECONDS config invalid"):
         janitor_worker._run_all_timeout_seconds()
 
 
+def test_run_all_timeout_uses_janitor_task_timeout_config(monkeypatch):
+    from core import janitor_worker
+
+    monkeypatch.delenv("QUAID_JANITOR_RUN_ALL_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setitem(
+        sys.modules,
+        "config",
+        SimpleNamespace(
+            get_config=lambda: SimpleNamespace(
+                janitor=SimpleNamespace(task_timeout_minutes=4)
+            )
+        ),
+    )
+
+    assert janitor_worker._run_all_timeout_seconds() == 240.0
+
+
+def test_run_all_timeout_env_overrides_config(monkeypatch):
+    from core import janitor_worker
+
+    monkeypatch.setenv("QUAID_JANITOR_RUN_ALL_TIMEOUT_SECONDS", "15")
+    monkeypatch.setitem(
+        sys.modules,
+        "config",
+        SimpleNamespace(
+            get_config=lambda: SimpleNamespace(
+                janitor=SimpleNamespace(task_timeout_minutes=4)
+            )
+        ),
+    )
+
+    assert janitor_worker._run_all_timeout_seconds() == 15.0
+
+
+def test_run_all_timeout_zero_config_preserves_unlimited_convention(monkeypatch):
+    from core import janitor_worker
+
+    monkeypatch.delenv("QUAID_JANITOR_RUN_ALL_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setitem(
+        sys.modules,
+        "config",
+        SimpleNamespace(
+            get_config=lambda: SimpleNamespace(
+                janitor=SimpleNamespace(task_timeout_minutes=0)
+            )
+        ),
+    )
+
+    assert math.isinf(janitor_worker._run_all_timeout_seconds())
+
+
 def test_run_all_timeout_invalid_env_falls_back_when_not_failhard(monkeypatch):
     from core import janitor_worker
 
     monkeypatch.setenv("QUAID_JANITOR_RUN_ALL_TIMEOUT_SECONDS", "bad")
+    monkeypatch.setitem(
+        sys.modules,
+        "config",
+        SimpleNamespace(
+            get_config=lambda: SimpleNamespace(
+                janitor=SimpleNamespace(task_timeout_minutes=4)
+            )
+        ),
+    )
     monkeypatch.setattr(janitor_worker, "_fail_hard_enabled", lambda: False)
 
-    assert janitor_worker._run_all_timeout_seconds() == 600.0
+    assert janitor_worker._run_all_timeout_seconds() == 240.0

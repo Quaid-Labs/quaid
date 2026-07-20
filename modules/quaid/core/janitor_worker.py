@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 _STOP = False
 _RUN_ALL_TIMEOUT_ENV = "QUAID_JANITOR_RUN_ALL_TIMEOUT_SECONDS"
-_DEFAULT_RUN_ALL_TIMEOUT_SECONDS = 600.0
+_FALLBACK_RUN_ALL_TIMEOUT_SECONDS = 240.0 * 60.0
 _RUN_ALL_TIMEOUT_EXIT_CODE = 124
 _RUN_ALL_TIMEOUT_MARKER_GRACE_SECONDS = 5.0
 
@@ -77,20 +77,41 @@ def _fail_hard_enabled() -> bool:
 def _run_all_timeout_seconds() -> float:
     raw = str(os.environ.get(_RUN_ALL_TIMEOUT_ENV, "") or "").strip()
     if not raw:
-        return _DEFAULT_RUN_ALL_TIMEOUT_SECONDS
+        return _configured_run_all_timeout_seconds()
     try:
         value = float(raw)
         if value <= 0:
             raise ValueError("value must be positive")
     except Exception as exc:
+        fallback = _configured_run_all_timeout_seconds()
         _print_marker_warning(
             f"invalid {_RUN_ALL_TIMEOUT_ENV}={raw!r}; using default "
-            f"{_DEFAULT_RUN_ALL_TIMEOUT_SECONDS:.1f}s: {exc}"
+            f"{fallback:.1f}s: {exc}"
         )
         if _fail_hard_enabled():
             raise RuntimeError(f"{_RUN_ALL_TIMEOUT_ENV} config invalid") from exc
-        return _DEFAULT_RUN_ALL_TIMEOUT_SECONDS
+        return fallback
     return max(1.0, value)
+
+
+def _configured_run_all_timeout_seconds() -> float:
+    try:
+        from config import get_config
+
+        cfg = get_config()
+        raw_minutes = getattr(getattr(cfg, "janitor", None), "task_timeout_minutes", None)
+        minutes = int(raw_minutes if raw_minutes is not None else 240)
+    except Exception as exc:
+        _print_marker_warning(
+            "failed to read janitor.task_timeout_minutes; using fallback "
+            f"{_FALLBACK_RUN_ALL_TIMEOUT_SECONDS:.1f}s: {exc}"
+        )
+        if _fail_hard_enabled():
+            raise RuntimeError("janitor run-all timeout config unavailable") from exc
+        return _FALLBACK_RUN_ALL_TIMEOUT_SECONDS
+    if minutes <= 0:
+        return float("inf")
+    return max(1.0, minutes * 60.0)
 
 
 def _start_run_all_deadline_watchdog(
@@ -99,6 +120,8 @@ def _start_run_all_deadline_watchdog(
     timeout_seconds: float | None = None,
 ) -> threading.Event:
     timeout = _run_all_timeout_seconds() if timeout_seconds is None else float(timeout_seconds)
+    if timeout == float("inf"):
+        return threading.Event()
     if timeout <= 0:
         raise ValueError("janitor run-all timeout must be positive")
     stop_event = threading.Event()
