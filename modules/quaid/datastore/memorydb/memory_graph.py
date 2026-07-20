@@ -7402,6 +7402,39 @@ def _validate_docs_bundle(bundle: Any) -> Dict[str, Any]:
     }
 
 
+def _docs_scope_hint_from_bundle(docs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    telemetry = docs.get("telemetry") if isinstance(docs.get("telemetry"), dict) else {}
+    scope_hint = telemetry.get("scope_hint") if isinstance(telemetry, dict) else None
+    if isinstance(scope_hint, dict) and str(scope_hint.get("type") or "") == "unlinked_project_candidates":
+        return scope_hint
+    return None
+
+
+def _docs_scope_hint_candidate_labels(scope_hint: Dict[str, Any]) -> List[str]:
+    candidates = scope_hint.get("candidates")
+    if not isinstance(candidates, list):
+        return []
+    labels: List[str] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        project = str(item.get("project") or "").strip()
+        if not project:
+            continue
+        source_root = str(item.get("source_root") or "").strip()
+        canonical_path = str(item.get("canonical_path") or "").strip()
+        fallback_path = str(item.get("path") or "").strip()
+        path_parts: List[str] = []
+        if source_root:
+            path_parts.append(f"source_root={source_root}")
+        elif fallback_path:
+            path_parts.append(f"path={fallback_path}")
+        if canonical_path and canonical_path != source_root:
+            path_parts.append(f"canonical_path={canonical_path}")
+        labels.append(f"{project} ({'; '.join(path_parts)})" if path_parts else project)
+    return labels
+
+
 def _normalize_source_chunk_output_token_limit(max_chunk_tokens: Optional[int]) -> int:
     try:
         value = int(max_chunk_tokens) if max_chunk_tokens is not None else 512
@@ -8015,39 +8048,27 @@ def _docs_bundle_to_rows(bundle: Optional[Dict[str, Any]], limit: int) -> List[D
         if consumed_chars >= total_char_budget:
             break
 
-    # If scoped docs recall missed entirely but discovered plausible matches in
-    # unlinked projects, emit a compact row so the agent can ask the user to
-    # link explicitly before filesystem fallback.
-    if not out:
-        telemetry = docs.get("telemetry") if isinstance(docs.get("telemetry"), dict) else {}
-        scope_hint = telemetry.get("scope_hint") if isinstance(telemetry, dict) else None
-        if isinstance(scope_hint, dict) and str(scope_hint.get("type") or "") == "unlinked_project_candidates":
-            candidates = scope_hint.get("candidates")
-            if isinstance(candidates, list):
-                names = []
-                for item in candidates:
-                    if not isinstance(item, dict):
-                        continue
-                    project = str(item.get("project") or "").strip()
-                    if not project:
-                        continue
-                    path = str(item.get("path") or "").strip()
-                    names.append(f"{project} ({path})" if path else project)
-                if names:
-                    out.append(
-                        {
-                            "text": (
-                                "[docs] scoped miss: likely matches may exist in unlinked project(s): "
-                                f"{', '.join(names)}. For read-only lookups or one-fact questions, "
-                                "answer from scoped recall or direct file read without linking. "
-                                "Link only when the user explicitly asks to link the project or requests "
-                                "durable work such as edits, API/tool use, or starting development."
-                            ),
-                            "similarity": 0.0,
-                            "category": "docs_scope_hint",
-                            "source_type": "docs",
-                        }
-                    )
+    # If scoped docs recall found plausible matches in unlinked projects, emit a
+    # compact discovery row even when linked scope produced weak/root overview
+    # chunks. The row contains project/path metadata only, not unlinked content.
+    scope_hint = _docs_scope_hint_from_bundle(docs)
+    if scope_hint is not None:
+        names = _docs_scope_hint_candidate_labels(scope_hint)
+        if names:
+            out.append(
+                {
+                    "text": (
+                        "[docs] scope hint: likely matches may exist in unlinked project candidate(s): "
+                        f"{', '.join(names)}. For read-only lookups or one-fact questions, "
+                        "answer from scoped recall or direct file read without linking. "
+                        "Link only when the user explicitly asks to link the project or requests "
+                        "durable work such as edits, API/tool use, or starting development."
+                    ),
+                    "similarity": 0.0,
+                    "category": "docs_scope_hint",
+                    "source_type": "docs",
+                }
+            )
     return out
 
 
@@ -11606,11 +11627,7 @@ def _print_docs_bundle(bundle: Dict[str, Any]) -> None:
     docs = _validate_docs_bundle(bundle)
     chunks = docs["chunks"]
     project_md = docs.get("project_md")
-    scope_hint = None
-    if isinstance(docs.get("telemetry"), dict):
-        candidate_hint = docs["telemetry"].get("scope_hint")
-        if isinstance(candidate_hint, dict):
-            scope_hint = candidate_hint
+    scope_hint = _docs_scope_hint_from_bundle(docs)
     workspace_prefix = ""
     try:
         workspace_prefix = str(get_workspace_dir()) + "/"
@@ -11634,18 +11651,11 @@ def _print_docs_bundle(bundle: Dict[str, Any]) -> None:
         print(project_md[:1000])
         if len(project_md) > 1000:
             print("  ... (truncated)")
-    if not chunks and isinstance(scope_hint, dict) and str(scope_hint.get("type") or "") == "unlinked_project_candidates":
-        candidates = scope_hint.get("candidates")
-        names: List[str] = []
-        if isinstance(candidates, list):
-            names = [
-                str(item.get("project") or "").strip()
-                for item in candidates
-                if isinstance(item, dict) and str(item.get("project") or "").strip()
-            ]
+    if scope_hint is not None:
+        names = _docs_scope_hint_candidate_labels(scope_hint)
         if names:
             print("\n=== Documentation Scope Hint ===")
-            print("No docs hits were found inside linked projects.")
+            print("Docs recall may have missed content because the likely project is not linked to this instance.")
             print(f"Likely unlinked project candidates: {', '.join(names)}")
             print(
                 "For read-only lookups or one-fact questions, answer from scoped recall or direct file read "

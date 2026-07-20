@@ -16272,6 +16272,48 @@ class TestRecallFastHookInjectContract:
         assert rows[0]["source_date"] == "2023-02-14"
         assert mg._recall_row_temporal_date(rows[0]) == "2023-02-14"
 
+    def test_docs_bundle_to_rows_surfaces_unlinked_scope_hint_with_project_rows(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = mg._docs_bundle_to_rows(
+            {
+                "chunks": [
+                    {
+                        "content": "Generic root project overview row.",
+                        "source": "/tmp/workspace/projects/quaid/PROJECT.md",
+                        "section_header": "Project",
+                        "similarity": 0.50,
+                        "project": "quaid",
+                    }
+                ],
+                "project": "quaid",
+                "project_md": None,
+                "telemetry": {
+                    "scope_hint": {
+                        "type": "unlinked_project_candidates",
+                        "candidates": [
+                            {
+                                "project": "livetest-agentmsg-xp",
+                                "source_root": "/tmp/workspace/projects/livetest-agentmsg-xp-src",
+                                "canonical_path": "/tmp/workspace/projects/livetest-agentmsg-xp",
+                                "content": "Ember Glass means pager escalation level 2.",
+                            }
+                        ],
+                    }
+                },
+            },
+            limit=5,
+        )
+
+        assert rows[0]["category"] == "docs"
+        hint_rows = [row for row in rows if row.get("category") == "docs_scope_hint"]
+        assert len(hint_rows) == 1
+        hint_text = hint_rows[0]["text"]
+        assert "livetest-agentmsg-xp" in hint_text
+        assert "source_root=/tmp/workspace/projects/livetest-agentmsg-xp-src" in hint_text
+        assert "canonical_path=/tmp/workspace/projects/livetest-agentmsg-xp" in hint_text
+        assert "Ember Glass means pager escalation level 2" not in hint_text
+
     def test_store_registry_requires_recall_fast_contract(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -24015,6 +24057,46 @@ class TestRecallLimitEdgeCases:
         assert "README.md > Tech Stack" in rendered
         assert "The backend uses Express middleware." in rendered
         assert "=== PROJECT.md ===" in rendered
+
+    def test_print_docs_bundle_renders_scope_hint_with_project_rows(self, capsys):
+        import datastore.memorydb.memory_graph as mg
+
+        mg._print_docs_bundle(
+            {
+                "chunks": [
+                    {
+                        "content": "Generic root project overview row.",
+                        "source": "/tmp/workspace/projects/quaid/PROJECT.md",
+                        "section_header": "Project",
+                        "similarity": 0.50,
+                        "project": "quaid",
+                    }
+                ],
+                "project": "quaid",
+                "project_md": None,
+                "telemetry": {
+                    "scope_hint": {
+                        "type": "unlinked_project_candidates",
+                        "candidates": [
+                            {
+                                "project": "livetest-agentmsg-xp",
+                                "source_root": "/tmp/workspace/projects/livetest-agentmsg-xp-src",
+                                "canonical_path": "/tmp/workspace/projects/livetest-agentmsg-xp",
+                                "snippet": "Ember Glass means pager escalation level 2.",
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+
+        rendered = capsys.readouterr().out
+        assert "=== Documentation ===" in rendered
+        assert "=== Documentation Scope Hint ===" in rendered
+        assert "Likely unlinked project candidates" in rendered
+        assert "source_root=/tmp/workspace/projects/livetest-agentmsg-xp-src" in rendered
+        assert "canonical_path=/tmp/workspace/projects/livetest-agentmsg-xp" in rendered
+        assert "Ember Glass means pager escalation level 2" not in rendered
 
     def test_cli_docs_broker_missing_handler_respects_fail_hard(self, caplog, monkeypatch, tmp_path):
         import datastore.memorydb.memory_graph as mg
