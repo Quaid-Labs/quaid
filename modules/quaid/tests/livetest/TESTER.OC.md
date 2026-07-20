@@ -190,7 +190,7 @@ ssh REMOTE_HOST 'QUAID_HOME=~/.quaid QUAID_INSTANCE=OC_INSTANCE \
 
 ## Milestone Notes
 
-### M2 — Snippets and Persona
+### M2 — Extraction: Snippets and Persona
 
 **Snippet path is in visible home (`~/quaid`), not hidden home (`~/.quaid`).**
 After extraction, snippets are written to:
@@ -212,7 +212,7 @@ completed by checking `rolling-extraction.jsonl` for a `rolling_flush`
 entry with nonzero `final_facts_stored` (see TESTER.SKILL.md extraction
 wait section) before ruling FAIL on missing facts or snippets.
 
-### M0 — Install
+### M0 — First Install
 If the installer fails at model selection with a "gateway model rejected" or
 "PING failed" error, the OC gateway does not have that model registered. Report
 to coordinator with the exact model name that was rejected — do not retry the
@@ -221,74 +221,45 @@ install. The coordinator must resolve the gateway model configuration first.
 After M0, post-M0 config (chunk_tokens, models) is applied to the OC instance
 just as for CC and CDX. See `COORDINATOR.SKILL.md` post-M0 steps.
 
-### M1 — Extraction via `/new`
-Send a message to seed a memorable fact, build 2–3 exchanges, then:
+### M1 — Supervisor and Monitor Runtime Stability
+Follow `livetest-guide/M1.md`. OC's lifecycle command is `/new`; when the guide
+asks for the lifecycle boundary, send:
 ```bash
 ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "/new"'
 # Wait 3–5 seconds for OC to process the lifecycle command
 ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/matrix-send "Hello"'
 ```
-Wait 60s, then verify via FTS direct check — use `sqlite3 ... nodes_fts` rather
-than `quaid recall` for exact keyword lookup. Use `rowid` not `id` as the column.
+For exact keyword diagnostics in this lane, prefer `sqlite3 ... nodes_fts` over
+`quaid recall`, and use `rowid` rather than `id` as the FTS column.
 
-### M2 Part C — Timeout Extraction and Compaction
+### M2 Part C — Extraction: Timeout Extraction and Compaction
 
-OC is the only platform with both. Procedure:
+OC is the only platform with both timeout extraction and timeout compaction.
+Follow `livetest-guide/M2.md` Part C exactly, including active-notice checks,
+the timeout marker baseline, `set-inactivity-timeout.py`, and
+`verify-timeout-flush-stored.py`.
 
-1. Set timeout to 1 minute through Quaid config, then restart the OC gateway service:
-   ```bash
-   ssh REMOTE_HOST 'QUAID_INSTANCE=OC_INSTANCE python3 - <<PY
-import json
-import os
-from pathlib import Path
-p = Path.home() / ".quaid" / "instances" / os.environ["QUAID_INSTANCE"] / "config.json"
-data = json.loads(p.read_text())
-data.pop("inactivity_timeout_minutes", None)
-data.setdefault("capture", {})["inactivity_timeout_minutes"] = 1
-p.write_text(json.dumps(data, indent=2) + "\n")
-PY'
-   ~/quaidcode/dev/modules/quaid/tests/livetest/scripts/livetest-openclaw-gateway-restart.sh \
-     --host REMOTE_HOST --restart
-   ```
+After changing the timeout value, restart the OC gateway service:
 
-2. Send a memorable fact via Matrix, then let it idle for >1 minute.
+```bash
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/livetest-openclaw-gateway-restart.sh \
+  --host REMOTE_HOST --restart
+```
 
-3. Verify timeout extraction fired:
-   ```bash
-   ssh REMOTE_HOST 'grep -i "timeout\|timeout_extract\|daemon-compaction" \
-     ~/.quaid/instances/OC_INSTANCE/logs/daemon.log 2>/dev/null | tail -5'
-   ```
+Do not use inline Python config edits here; the guide-owned helper is the
+authoritative mutation path.
 
-4. Restore and restart:
-   ```bash
-   ssh REMOTE_HOST 'QUAID_INSTANCE=OC_INSTANCE python3 - <<PY
-import json
-import os
-from pathlib import Path
-p = Path.home() / ".quaid" / "instances" / os.environ["QUAID_INSTANCE"] / "config.json"
-data = json.loads(p.read_text())
-data.pop("inactivity_timeout_minutes", None)
-data.setdefault("capture", {})["inactivity_timeout_minutes"] = 60
-p.write_text(json.dumps(data, indent=2) + "\n")
-PY'
-   ~/quaidcode/dev/modules/quaid/tests/livetest/scripts/livetest-openclaw-gateway-restart.sh \
-     --host REMOTE_HOST --restart
-   ```
+### M7 — System Context Refresh on Lifecycle
+Follow `livetest-guide/M7.md`. OC uses Matrix `/new` as its lifecycle boundary
+when the guide asks for a new session. If system-context refresh fails on a
+first-person canary, preserve the Matrix transcript and hook trace before
+retrying in a fresh session.
 
-**M2 Part C PASS criteria (OC):** Timeout fact extracted and stored. Daemon log shows
-`timeout_extract` signal processed.
-
-### M7 Phase 3 — Multi-hop Graph Traversal
-Owner entity in sibling edges must be the actual owner name (e.g. "Solomon"),
-not "User" or "User's mom". First-person entity resolution is injection-based.
-If sibling edge anchors to wrong entity, delete nodes and re-seed in a fresh
-Matrix session — do not retry within the same session.
-
-### M12 — Multi-Agent Silo Verification
+### M5 Part A — Silo Isolation: Multi-Agent Silo Verification
 Tests that each OC agent instance has its own silo with correct signal
 routing. Follow the guide exactly.
 
-### M13 — Multi-Instance Creation
+### M5 Part B — Silo Isolation: Multi-Instance Creation
 OC creates new instances via the native agent system, not the installer:
 
 ```bash
@@ -302,7 +273,7 @@ ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents add --help'
 ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents list'
 ```
 
-Safety: never use `~/quaid` as the M13 test workspace. `openclaw agents delete`
+Safety: never use `~/quaid` as the M5 Part B test workspace. `openclaw agents delete`
 prunes the agent workspace, so pointing at `~/quaid` can trash the visible Quaid home.
 
 When OC creates a new agent, Quaid's adapter should detect it and
@@ -311,7 +282,7 @@ auto-create the instance silo. Verify:
 2. Store a canary fact via the new agent, verify it does NOT appear
    from the livetest instance
 
-After the test, clean up:
+After the M5 Part B test, clean up:
 ```bash
 ~/quaidcode/dev/modules/quaid/tests/livetest/scripts/openclaw-cli-safe.sh \
   --timeout 45 \
@@ -327,5 +298,5 @@ delete still fails, manually remove only `~/.openclaw/agents/m13test`, then reru
 ~/.quaid/instances/openclaw-*`; production instance listing intentionally never
 deletes stale silos as a side effect.
 
-Do NOT re-run the installer for M13 — that overwrites the gateway
+Do NOT re-run the installer for M5 Part B — that overwrites the gateway
 config and disrupts the active livetest instance.

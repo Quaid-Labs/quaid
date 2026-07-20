@@ -251,26 +251,31 @@ ssh REMOTE_HOST 'QUAID_HOME=WORKSPACE QUAID_INSTANCE=CC_INSTANCE \
 
 ## Milestone Notes
 
-### M3 — Rolling Extraction + `/compact`
-CC supports `/compact` directly. After seeding and building up >1500 tokens,
-verify rolling-extraction.jsonl has `rolling_stage` events, then send `/compact`.
+### M3 — Recall
+Follow `livetest-guide/M3.md`. CC supports `/compact` directly, but rolling
+extraction and `/compact` are extraction/lifecycle details for milestones that
+ask for them; do not grade rolling extraction as M3. M3's objective is recall
+coverage across auto-inject, deliberate recall, graph traversal, and
+date-bounded recall.
 
 ### M4 — Project System and Docs CLI
 Follow `livetest-guide/M4.md`. CC has no lane-specific M4 replacement; do not
 run timeout extraction as M4.
 
-### M8 — Project CRUD
+### M8 — Temporal Provenance
+Follow `livetest-guide/M8.md`.
+
 CC is launched with `--model claude-sonnet-4-6` (see Launch section above). Do NOT
 use `/model` in-session — it writes model-switch metadata into the transcript before
 the first real user turn, which freezes the cursor and silently skips extraction.
 Sonnet is already active from launch; no model switch needed for M8.
 
-### M5 Part A — Multi-Agent Silo Verification
+### M5 Part A — Silo Isolation: Multi-Agent Silo Verification
 CC uses `claude-code-cc-livetest-c44589bcb738` as the instance ID. Runtime silo is at
 `~/.quaid/instances/claude-code-cc-livetest-c44589bcb738/` (hidden). Follow the CC
 Part A procedure in `livetest-guide/M5.md`. Never SKIP — all three platforms run M5.
 
-### M5 Part B — Multi-Instance Verification
+### M5 Part B — Silo Isolation: Multi-Instance Verification
 CC Part B verifies **auto-provisioning** from a new project PWD creates a
 properly isolated silo at first hook use.
 

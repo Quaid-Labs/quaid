@@ -320,12 +320,13 @@ then send `/new`, then send the first real prompt for the new session. If the
 prompt stages without submitting, send the documented bare Enter. Only after that
 follow-up prompt has submitted should you verify the rollout file and memory
 state. Do not gate on snippet or journal output — that is discretionary and
-covered in M11.
+not part of M2 pass criteria unless the guide explicitly asks for it.
 
-### M3 — Rolling Extraction
-CDX does not have `/compact` or `/clear`. After seeding and building context, use `/new`
-as the extraction trigger. Verify `rolling-extraction.jsonl` has `rolling_stage`
-and `rolling_flush` events the same as OC/CC.
+### M3 — Recall
+Follow `livetest-guide/M3.md`. CDX does not have `/compact` or `/clear`; when
+the guide requires a fresh post-lifecycle session before recall, use `/new`,
+send the first real follow-up prompt, and apply the bare-Enter guard if the
+prompt is staged. Do not grade rolling extraction itself as M3.
 
 ### M5 — Silo Isolation Across Sessions/Instances
 When M5 asks CDX to end Session X with `LIFECYCLE`, send `/new`, then send the
@@ -335,7 +336,7 @@ recall prompt has submitted, not from the `/new` welcome screen alone. If the
 submitted follow-up prompt still does not create a new rollout file, restart the
 Codex pane before retrying that part.
 
-### M7 — System Context Refresh
+### M7 — System Context Refresh on Lifecycle
 CDX uses `/new` as the M7 refresh trigger. Send `/new`, then send the canary
 question (`What's the office plant named?`) as the first real prompt in the new
 session. Apply the same bare-Enter and rollout-file checks above before grading
@@ -345,12 +346,12 @@ the answer. A welcome screen or resume hint immediately after `/new` is normal.
 Follow `livetest-guide/M4.md`. CDX has no lane-specific M4 replacement; do not
 run timeout extraction as M4.
 
-### M8 Phase 1 — Project Auto-Creation
-CDX agents generally follow file-placement policy. If Phase 1 fails (agent
-writes files without creating a project), report as ISSUE — do not rule
-PASS-WITH-NOTE.
+### M8 — Temporal Provenance
+Follow `livetest-guide/M8.md`. CDX agents still need to follow file-placement
+policy during all milestones, but project auto-creation is not the M8 objective
+and must not be graded as M8.
 
-### M5 Part A — Multi-Agent Silo Verification
+### M5 Part A — Silo Isolation: Multi-Agent Silo Verification
 CDX uses the path-derived instance ID for `/tmp/cdx-livetest`:
 `codex-cdx-livetest-b89008986acd` (set via `QUAID_INSTANCE`). The adapter
 derives the same ID after resolving the project dir symlink to `/private/tmp`.
@@ -358,7 +359,7 @@ Runtime silo is at `~/.quaid/instances/codex-cdx-livetest-b89008986acd/` (hidden
 Follow the CDX Part A procedure in `livetest-guide/M5.md`. Never SKIP — all three
 platforms run M5.
 
-### M5 Part B — Multi-Instance Verification
+### M5 Part B — Silo Isolation: Multi-Instance Verification
 CDX has no `make_instance` — isolation is verified by canary test between two
 `QUAID_INSTANCE` values (`codex-cdx-livetest-b89008986acd` and `codex-m13test`).
 Follow the CDX Part B procedure in `livetest-guide/M5.md`. Never SKIP — all

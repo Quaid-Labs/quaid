@@ -132,6 +132,23 @@ checkToolsDomainBlock(errors);
 {
   const checkCmd = spawnSync(
     'python3',
+    ['modules/quaid/tests/livetest/scripts/check-supplement-headings.py'],
+    { cwd: ROOT, encoding: 'utf8' },
+  );
+  if (checkCmd.status !== 0) {
+    const stderr = String(checkCmd.stderr || '').trim();
+    const stdout = String(checkCmd.stdout || '').trim();
+    errors.push(
+      'livetest tester supplement milestone headings are out of sync with livetest-guide titles' +
+      (stderr ? `; stderr: ${stderr}` : '') +
+      (stdout ? `; stdout: ${stdout}` : ''),
+    );
+  }
+}
+
+{
+  const checkCmd = spawnSync(
+    'python3',
     ['modules/quaid/scripts/generate-config-reference.py', '--check'],
     { cwd: ROOT, encoding: 'utf8' },
   );
