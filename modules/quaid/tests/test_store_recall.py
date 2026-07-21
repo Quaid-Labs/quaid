@@ -711,7 +711,7 @@ def test_relation_chain_rank_prefers_explicit_zero_hop_depth():
         ["has_fact"],
     )
 
-    assert key[6] == 0
+    assert key[8] == 0
 
 
 def test_relation_chain_boost_does_not_promote_partial_graph_row_above_direct_fact():
@@ -740,6 +740,89 @@ def test_relation_chain_boost_does_not_promote_partial_graph_row_above_direct_fa
     assert partial_graph["similarity"] == 0.97
     assert partial_graph["similarity"] <= 0.994
     assert max(rows, key=lambda row: row["similarity"])["id"] == "direct-fact"
+
+
+def test_relation_chain_sort_uses_semantic_score_for_same_terminal_path_facts():
+    import datastore.memorydb.memory_graph as mg
+
+    relevant_fact = {
+        "id": "relevant-terminal-fact",
+        "via": "graph_attached_fact",
+        "category": "fact",
+        "similarity": 0.996,
+        "graph_attached_query_similarity": 0.91,
+        "graph_relation_groups": ["spouse", "family_of", "has_fact"],
+    }
+    lower_semantic_fact = {
+        "id": "lower-semantic-terminal-fact",
+        "via": "graph_attached_fact",
+        "category": "fact",
+        "similarity": 0.996,
+        "graph_attached_query_similarity": 0.63,
+        "graph_relation_groups": ["spouse", "family_of", "has_fact"],
+    }
+    rows = [lower_semantic_fact, relevant_fact]
+
+    rows.sort(
+        key=lambda row: mg._relation_chain_sort_key(
+            row,
+            ["spouse", "sibling"],
+            query="配偶者の兄弟は何をしていますか",
+        ),
+        reverse=True,
+    )
+
+    assert rows[0]["id"] == "relevant-terminal-fact"
+
+
+def test_relation_chain_sort_prefers_terminal_subject_over_relation_restatement():
+    import datastore.memorydb.memory_graph as mg
+
+    relation_restatement = {
+        "id": "relation-restatement",
+        "via": "graph_attached_fact",
+        "category": "fact",
+        "similarity": 0.996,
+        "source_name": "Rowan",
+        "graph_attached_query_similarity": 0.91,
+        "text": "Owner Person's partner Avery has a sibling named Rowan",
+        "graph_relation_groups": ["spouse", "family_of", "has_fact"],
+    }
+    terminal_answer = {
+        "id": "terminal-answer",
+        "via": "graph_attached_fact",
+        "category": "fact",
+        "similarity": 0.996,
+        "source_name": "Rowan",
+        "graph_attached_query_similarity": 0.45,
+        "text": "Rowan repairs brass instruments in a small workshop",
+        "graph_relation_groups": ["spouse", "family_of", "has_fact"],
+    }
+    possessive_fact = {
+        "id": "possessive-terminal-fact",
+        "via": "graph_attached_fact",
+        "category": "fact",
+        "similarity": 0.996,
+        "source_name": "Rowan",
+        "graph_attached_query_similarity": 0.88,
+        "text": "Rowan's partner is Taylor",
+        "graph_relation_groups": ["spouse", "family_of", "has_fact"],
+    }
+    rows = [relation_restatement, possessive_fact, terminal_answer]
+
+    rows.sort(
+        key=lambda row: mg._relation_chain_sort_key(
+            row,
+            ["spouse", "sibling"],
+            query="配偶者の兄弟は何をしていますか",
+        ),
+        reverse=True,
+    )
+
+    assert mg._relation_chain_terminal_subject_rank(relation_restatement) == 0
+    assert mg._relation_chain_terminal_subject_rank(possessive_fact) == 1
+    assert mg._relation_chain_terminal_subject_rank(terminal_answer) == 2
+    assert rows[0]["id"] == "terminal-answer"
 
 
 def test_beam_search_graph_deduplicates_nodes_reached_from_same_level(tmp_path):

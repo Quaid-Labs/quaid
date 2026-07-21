@@ -4457,12 +4457,37 @@ def _relation_chain_activity_answer_score(
     return 2
 
 
+def _relation_chain_semantic_answer_rank(row: Dict[str, Any]) -> int:
+    try:
+        value = float((row or {}).get("graph_attached_query_similarity") or 0.0)
+    except (TypeError, ValueError):
+        value = 0.0
+    return int(round(max(0.0, min(1.0, value)) * 1000))
+
+
+def _relation_chain_terminal_subject_rank(row: Dict[str, Any]) -> int:
+    source_name = str((row or {}).get("source_name") or "").strip()
+    text = str((row or {}).get("text") or (row or {}).get("name") or "").strip()
+    if not source_name or not text:
+        return 0
+    prefix = _unicode_casefold(text.lstrip(" \t\r\n\"'“”‘’([{"))
+    source = _unicode_casefold(source_name)
+    if not prefix.startswith(source):
+        return 0
+    suffix = prefix[len(source):len(source) + 1]
+    if source.isascii() and suffix and suffix.isalnum():
+        return 0
+    if suffix in {"'", "’"} or suffix in _RELATION_CHAIN_GENITIVE_PARTICLES:
+        return 1
+    return 2
+
+
 def _rank_graph_row_for_relation_chain(
     row: Dict[str, Any],
     relation_groups: List[str],
     *,
     query: Optional[str] = None,
-) -> Tuple[int, int, int, int, int, int, int, float]:
+) -> Tuple[int, int, int, int, int, int, int, int, int, float]:
     row_groups = _graph_row_relation_groups(row)
     ordered_hits = _ordered_relation_group_match_length(row_groups, relation_groups)
     prefix_hits = _prefix_relation_group_match_length(row_groups, relation_groups)
@@ -4476,6 +4501,8 @@ def _rank_graph_row_for_relation_chain(
     ) else 0
     terminal_direct_fact = int(bool(terminal_hits and fact_bonus))
     activity_answer = _relation_chain_activity_answer_score(query, row, row_groups=row_groups)
+    terminal_subject = _relation_chain_terminal_subject_rank(row)
+    semantic_answer = _relation_chain_semantic_answer_rank(row)
     try:
         raw_depth = row.get("hop_depth") if row.get("hop_depth") is not None else row.get("depth")
         depth = int(raw_depth if raw_depth is not None else 0)
@@ -4485,7 +4512,7 @@ def _rank_graph_row_for_relation_chain(
         similarity = float(row.get("similarity") or 0.0)
     except Exception:
         similarity = 0.0
-    return ordered_hits, prefix_hits, terminal_hits, terminal_direct_fact, activity_answer, fact_bonus, depth, similarity
+    return ordered_hits, prefix_hits, terminal_hits, terminal_direct_fact, activity_answer, terminal_subject, semantic_answer, fact_bonus, depth, similarity
 
 
 def _relation_chain_sort_key(
@@ -4493,13 +4520,13 @@ def _relation_chain_sort_key(
     relation_groups: List[str],
     *,
     query: Optional[str] = None,
-) -> Tuple[int, int, int, int, int, int, int, float]:
-    ordered_hits, prefix_hits, terminal_hits, terminal_direct_fact, activity_answer, fact_bonus, depth, similarity = _rank_graph_row_for_relation_chain(
+) -> Tuple[int, int, int, int, int, int, int, int, int, float]:
+    ordered_hits, prefix_hits, terminal_hits, terminal_direct_fact, activity_answer, terminal_subject, semantic_answer, fact_bonus, depth, similarity = _rank_graph_row_for_relation_chain(
         row,
         relation_groups,
         query=query,
     )
-    return ordered_hits, prefix_hits, terminal_hits, terminal_direct_fact, activity_answer, fact_bonus, -depth, similarity
+    return ordered_hits, prefix_hits, terminal_hits, terminal_direct_fact, activity_answer, terminal_subject, semantic_answer, fact_bonus, -depth, similarity
 
 
 def _boost_relation_chain_row_scores(
@@ -4509,7 +4536,7 @@ def _boost_relation_chain_row_scores(
     query: Optional[str] = None,
 ) -> None:
     for row in rows:
-        ordered_hits, prefix_hits, terminal_hits, terminal_direct_fact, activity_answer, fact_bonus, depth, current_similarity = _rank_graph_row_for_relation_chain(
+        ordered_hits, prefix_hits, terminal_hits, terminal_direct_fact, activity_answer, _terminal_subject, _semantic_answer, fact_bonus, depth, current_similarity = _rank_graph_row_for_relation_chain(
             row,
             relation_groups,
             query=query,
@@ -5954,7 +5981,10 @@ def graph_aware_recall(
         chain_prefix_path = relation_chain_path_by_node.get(node_id)
         chain_prefix_sequence = relation_chain_sequence_by_node.get(node_id, [])
         if source_node:
-            if graph_query_embedding is None and not owner_anchored_relation_chain:
+            # Relation-chain terminal nodes often have several attached facts.
+            # Use embedding similarity to break same-path ties instead of
+            # reintroducing language-specific answer-type word lists.
+            if graph_query_embedding is None and (relation_chain_query or not owner_anchored_relation_chain):
                 try:
                     graph_query_embedding = graph.get_embedding(query)
                     if graph_query_embedding is None and _is_fail_hard_mode():
