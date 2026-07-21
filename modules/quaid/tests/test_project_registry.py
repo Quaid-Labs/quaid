@@ -261,6 +261,55 @@ class TestCreateProject:
         with pytest.raises(ValueError, match="already exists"):
             create_project("my-app")
 
+    def test_create_discards_unbacked_stale_global_entry(self, mock_adapter, caplog):
+        _, tmp_path = mock_adapter
+        stale_canonical = tmp_path / "projects" / "my-app"
+        _save_registry(
+            {
+                "projects": {
+                    "my-app": {
+                        "canonical_path": str(stale_canonical),
+                        "instances": ["openclaw-main"],
+                        "description": "stale",
+                    }
+                },
+                "deleted_projects": {},
+            }
+        )
+
+        with patch("core.project_registry._docs_db_project_rows_exist", return_value=False), \
+             patch("core.project_registry._sync_docs_registry_project"), \
+             caplog.at_level(logging.WARNING, logger="core.project_registry"):
+            entry = create_project("my-app", description="fresh", initial_instance="openclaw-main")
+
+        assert entry["description"] == "fresh"
+        assert (tmp_path / "projects" / "my-app").is_dir()
+        assert get_project("my-app")["description"] == "fresh"
+        assert "Discarding unbacked stale project registry entry before recreate: my-app" in caplog.text
+
+    def test_create_preserves_backed_global_entry_conflict(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        canonical = tmp_path / "projects" / "my-app"
+        canonical.mkdir(parents=True)
+        _save_registry(
+            {
+                "projects": {
+                    "my-app": {
+                        "canonical_path": str(canonical),
+                        "instances": ["openclaw-main"],
+                        "description": "real",
+                    }
+                },
+                "deleted_projects": {},
+            }
+        )
+
+        with patch("core.project_registry._docs_db_project_rows_exist", return_value=False), \
+             pytest.raises(ValueError, match="already exists"):
+            create_project("my-app", description="fresh", initial_instance="openclaw-main")
+
+        assert get_project("my-app")["description"] == "real"
+
     def test_rejects_duplicate_after_lowercase_normalization(self, mock_adapter):
         create_project("My-App")
         with pytest.raises(ValueError, match="already exists"):

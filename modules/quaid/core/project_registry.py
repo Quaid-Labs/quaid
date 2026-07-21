@@ -599,6 +599,44 @@ def project_deleted_raw(name: str) -> bool:
         return key in (data.get("deleted_projects") or {})
 
 
+def _project_entry_has_backing_state(name: str, entry: Dict[str, Any], fallback_canonical: Path) -> bool:
+    """Return whether an existing global registry row is backed by live project state."""
+    candidate_paths: List[Path] = [fallback_canonical]
+    raw_canonical = str(entry.get("canonical_path") or "").strip()
+    if raw_canonical:
+        candidate_paths.insert(0, Path(raw_canonical))
+
+    seen_paths: set[str] = set()
+    for candidate in candidate_paths:
+        key = str(candidate)
+        if key in seen_paths:
+            continue
+        seen_paths.add(key)
+        try:
+            if candidate.exists():
+                return True
+        except OSError as exc:
+            logger.warning(
+                "Preserving project registry conflict for %s; failed checking canonical path %s: %s",
+                name,
+                candidate,
+                exc,
+            )
+            return True
+
+    try:
+        return _docs_db_project_rows_exist(name)
+    except Exception as exc:
+        logger.warning(
+            "Preserving project registry conflict for %s; failed checking docs DB backing rows: %s",
+            name,
+            exc,
+        )
+        if _fail_hard_enabled():
+            raise
+        return True
+
+
 def create_project(
     name: str,
     description: str = "",
@@ -626,6 +664,23 @@ def create_project(
     quaid_home = _resolve_quaid_home()
     canonical = quaid_projects_dir(quaid_home) / name
     tracking_base = quaid_tracking_dir(quaid_home)
+
+    existing_entry: Optional[Dict[str, Any]] = None
+    with _registry_lock():
+        registry = _load_registry()
+        if name not in (registry.get("deleted_projects") or {}) and name in registry.get("projects", {}):
+            existing = registry["projects"][name]
+            existing_entry = dict(existing) if isinstance(existing, dict) else {}
+
+    if existing_entry is not None and not _project_entry_has_backing_state(name, existing_entry, canonical):
+        with _registry_lock():
+            registry = _load_registry()
+            deleted_projects = registry.setdefault("deleted_projects", {})
+            current_entry = registry.get("projects", {}).get(name)
+            if name not in deleted_projects and current_entry == existing_entry:
+                logger.warning("Discarding unbacked stale project registry entry before recreate: %s", name)
+                del registry["projects"][name]
+                _save_registry(registry)
 
     with _registry_lock():
         registry = _load_registry()
