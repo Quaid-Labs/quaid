@@ -365,6 +365,8 @@ _enforceFixedInstallHome();
 const VERSION = "0.3.4";
 const HOOKS_PR_URL = "https://github.com/openclaw/openclaw/releases/tag/v2026.3.7";
 const MIN_GATEWAY_VERSION = "2026.3.7";
+const OPENCLAW_REPLY_SESSION_INIT_BUG_MIN_VERSION = "2026.6.11";
+const OPENCLAW_REPLY_SESSION_INIT_FIXED_VERSION = "2026.6.33";
 const PROJECT_URL = "https://github.com/quaid-labs/quaid";
 const TOTAL_INSTALL_STEPS = 7;
 const MINIMAL_QUAID_PROJECT_AGENTS_MD = `# Quaid — Operating Guide
@@ -3513,6 +3515,18 @@ async function step1_preflight() {
       );
       bail("Unsupported OpenClaw version. Update OpenClaw and re-run.");
     }
+    if (isOpenClawReplySessionInitBugVersion(gwVersion)) {
+      s.stop(C.red("Gateway version unsupported"), 2);
+      note(
+        `Your OpenClaw version has a Matrix reply-session bug that can drop the second turn after /new.\n\n` +
+        `Installed: ${gwVersion || "unknown"}\n` +
+        `Required: ${OPENCLAW_REPLY_SESSION_INIT_FIXED_VERSION}+ or an older unaffected OpenClaw line\n\n` +
+        `Update with:\n` +
+        `  openclaw update --tag extended-stable --yes\n`,
+        "OpenClaw update required"
+      );
+      bail("Unsupported OpenClaw version. Update OpenClaw and re-run.");
+    }
     const hasHookSymbols = gatewayHasHookSymbols(gwDir);
     if (!hasHookSymbols) {
       s.message("Gateway hook symbols are bundled/renamed; using version + health gate...");
@@ -5435,6 +5449,13 @@ function isVersionAtLeast(actualRaw, minimumRaw) {
   const minimum = parseVersionTriplet(minimumRaw);
   if (!actual || !minimum) return false;
   return compareVersionTriplets(actual, minimum) >= 0;
+}
+
+function isOpenClawReplySessionInitBugVersion(actualRaw) {
+  return (
+    isVersionAtLeast(actualRaw, OPENCLAW_REPLY_SESSION_INIT_BUG_MIN_VERSION) &&
+    !isVersionAtLeast(actualRaw, OPENCLAW_REPLY_SESSION_INIT_FIXED_VERSION)
+  );
 }
 
 function readGatewayVersion(gwDir) {

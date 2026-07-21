@@ -316,6 +316,18 @@ describe("install daemon policy", () => {
     expect(setupText).not.toContain("Your gateway is missing the memory hooks Quaid needs.");
   });
 
+  it("OpenClaw installer blocks Matrix reply-session conflict versions", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain('const OPENCLAW_REPLY_SESSION_INIT_BUG_MIN_VERSION = "2026.6.11";');
+    expect(setupText).toContain('const OPENCLAW_REPLY_SESSION_INIT_FIXED_VERSION = "2026.6.33";');
+    expect(setupText).toContain("function isOpenClawReplySessionInitBugVersion(actualRaw)");
+    expect(setupText).toContain("isOpenClawReplySessionInitBugVersion(gwVersion)");
+    expect(setupText).toContain("can drop the second turn after /new");
+    expect(setupText).toContain("openclaw update --tag extended-stable --yes");
+  });
+
   it("OpenClaw add-instance still writes gateway runtime env", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
@@ -537,7 +549,7 @@ describe("install daemon policy", () => {
     );
 
     expect(presnapshotText).toContain("run_presnapshot_matrix_plugin_install() {");
-    expect(presnapshotText).toContain('min_openclaw_version="${OPENCLAW_MATRIX_MIN_OPENCLAW_VERSION:-2026.6.11}"');
+    expect(presnapshotText).toContain('min_openclaw_version="${OPENCLAW_MATRIX_MIN_OPENCLAW_VERSION:-2026.6.33}"');
     expect(presnapshotText).toContain('matrix_plugin_version="${OPENCLAW_MATRIX_PLUGIN_VERSION:-2026.6.1}"');
     expect(presnapshotText).toContain('matrix_plugin_spec="${OPENCLAW_MATRIX_PLUGIN_SPEC:-@openclaw/matrix@${matrix_plugin_version}}"');
     expect(presnapshotText).toContain("openclaw plugins list");

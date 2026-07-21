@@ -8,6 +8,15 @@
   "matrix": [
     {
       "host": "openclaw",
+      "host_range": ">=2026.6.11 <2026.6.33",
+      "quaid_range": ">=0.3.4",
+      "status": "incompatible",
+      "data_risk": false,
+      "message": "OpenClaw 2026.6.11 through 2026.6.32 can drop Matrix replies after a /new reply-session initialization conflict. Update OpenClaw to 2026.6.33 extended-stable or later.",
+      "fix": "openclaw update --tag extended-stable --yes"
+    },
+    {
+      "host": "openclaw",
       "host_range": ">=2026.3.7 <2026.3.12",
       "quaid_range": ">=0.2.15-alpha",
       "status": "compatible",

@@ -1138,7 +1138,7 @@ PYEOF
 
     if [[ "$RUN_PLATFORM_UPGRADES" != "1" ]]; then
         drift=0
-        matrix_min_openclaw_version="${OPENCLAW_MATRIX_MIN_OPENCLAW_VERSION:-2026.6.11}"
+        matrix_min_openclaw_version="${OPENCLAW_MATRIX_MIN_OPENCLAW_VERSION:-2026.6.33}"
         oc_enabled="$(read_config platforms.oc.enabled)"
         echo "  remote version -> npm latest:"
         echo "    claude   : $BEFORE_CLAUDE -> $LATEST_CLAUDE"

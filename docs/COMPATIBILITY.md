@@ -101,6 +101,22 @@ Hosts that implement these interfaces get the full Quaid lifecycle behavior with
 
 This section records behaviors discovered during live testing that materially change what Quaid can deliver on a given platform. These are not bugs in Quaid's core — they are host/model behaviors that constrain or shape what the platform integration can provide. This list is intended to grow over time and may eventually become a list of issues to raise with platform providers.
 
+### Matrix reply-session initialization — OpenClaw 2026.6.11 through 2026.6.32
+
+**Symptom:** On Matrix, the first message after `/new` can reply successfully, then the next turn in the same room can be dropped before prompt construction. Quaid sees the inbound message, but OpenClaw dispatch reports `reply session initialization conflicted` and no agent response is produced.
+
+**Root cause:** OpenClaw 2026.6.11 through 2026.6.32 compare volatile session metadata while initializing reply sessions. Concurrent metadata updates can make the initialization revision conflict even though the user turn is valid. OpenClaw 2026.6.33 narrows the revision to stable session identity fields.
+
+**Impact:** Quaid blocks new OpenClaw installs on this known-bad range and live-test base preparation requires OpenClaw 2026.6.33 or later for Matrix runs.
+
+**Current workaround:** Update OpenClaw to the extended-stable line:
+
+```bash
+openclaw update --tag extended-stable --yes
+```
+
+---
+
 ### Model availability — openai-codex OAuth path
 
 **Symptom:** Only `gpt-5.4` is confirmed valid for the Responses API (`/v1/responses`) via the ChatGPT Codex OAuth authentication path. `gpt-5.4-mini`, `gpt-5.2`, and other model variants all return HTTP 400 Bad Request.

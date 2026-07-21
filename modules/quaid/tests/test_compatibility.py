@@ -211,6 +211,33 @@ class TestEvaluateCompatibility:
         assert state.status == DEGRADED
         assert "API changed" in state.message
 
+    def test_openclaw_reply_session_conflict_range_is_degraded_only_until_fixed(self):
+        matrix = self._matrix(entries=[{
+            "host": "openclaw",
+            "host_range": ">=2026.6.11 <2026.6.33",
+            "quaid_range": ">=0.3.4",
+            "status": "incompatible",
+            "data_risk": False,
+            "message": "Matrix replies can drop after /new",
+            "fix": "openclaw update --tag extended-stable --yes",
+        }])
+
+        bad = evaluate_compatibility(
+            HostInfo(platform="openclaw", version="2026.6.11"),
+            "0.3.4",
+            matrix,
+        )
+        fixed = evaluate_compatibility(
+            HostInfo(platform="openclaw", version="2026.6.33"),
+            "0.3.4",
+            matrix,
+        )
+
+        assert bad.status == DEGRADED
+        assert "Matrix replies can drop" in bad.message
+        assert fixed.status == NORMAL
+        assert fixed.untested is True
+
     def test_incompatible_with_data_risk(self):
         info = HostInfo(platform="openclaw", version="2026.5.0")
         matrix = self._matrix(entries=[{
