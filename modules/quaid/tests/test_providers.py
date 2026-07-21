@@ -58,6 +58,8 @@ class TestLLMResult:
         assert r.model == ""
         assert r.truncated is False
         assert r.model_usage == {}
+        assert r.recovered_from_eof is False
+        assert r.recovery_reason == ""
 
     def test_all_fields(self):
         r = LLMResult(
@@ -65,9 +67,13 @@ class TestLLMResult:
             cache_read_tokens=80, cache_creation_tokens=20,
             model="test", truncated=True,
             model_usage={"test": {"input": 100, "output": 50}},
+            recovered_from_eof=True,
+            recovery_reason="codex_eof_without_final_payload",
         )
         assert r.cache_read_tokens == 80
         assert r.truncated is True
+        assert r.recovered_from_eof is True
+        assert r.recovery_reason == "codex_eof_without_final_payload"
 
     def test_none_text(self):
         r = LLMResult(text=None, duration=0.5)
@@ -1341,6 +1347,7 @@ class TestOpenAICodexOAuthLLMProvider:
                 'data: {"type":"response.created"}',
                 'data: {"type":"response.output_text.delta","delta":"Consolidated "}',
                 'data: {"type":"response.output_text.delta","delta":"profile update."}',
+                'data: {"type":"response.output_text.done","text":"Consolidated profile update."}',
             ]
         ).encode()
         mock_resp = self._mock_sse_response(sse_body)
@@ -1357,9 +1364,41 @@ class TestOpenAICodexOAuthLLMProvider:
 
         assert result.text == "Consolidated profile update."
         assert result.model == "gpt-5.4"
-        assert result.input_tokens == 0
-        assert result.output_tokens == 0
+        assert result.input_tokens > 0
+        assert result.output_tokens > 0
+        assert result.recovered_from_eof is True
+        assert result.recovery_reason == "codex_eof_without_final_payload"
+        assert result.truncated is False
         assert "ended without final response payload" in caplog.text
+        assert "estimated_input_tokens=" in caplog.text
+        assert "estimated_output_tokens=" in caplog.text
+
+    def test_llm_call_uses_done_text_when_codex_eof_has_no_final_payload(self):
+        p = OpenAICodexOAuthLLMProvider(
+            api_key="token",
+            deep_model="gpt-5.4",
+            fast_model="gpt-5.4-mini",
+        )
+        sse_body = "\n\n".join(
+            [
+                'data: {"type":"response.created"}',
+                'data: {"type":"response.output_text.done","text":"Done-only profile update."}',
+            ]
+        ).encode()
+        mock_resp = self._mock_sse_response(sse_body)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp):
+            result = p.llm_call(
+                [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+                model_tier="deep",
+                timeout=1.0,
+            )
+
+        assert result.text == "Done-only profile update."
+        assert result.input_tokens > 0
+        assert result.output_tokens > 0
+        assert result.recovered_from_eof is True
+        assert result.truncated is False
 
     def test_llm_call_rejects_codex_eof_without_final_payload_or_text(self):
         p = OpenAICodexOAuthLLMProvider(
@@ -1367,7 +1406,12 @@ class TestOpenAICodexOAuthLLMProvider:
             deep_model="gpt-5.4",
             fast_model="gpt-5.4-mini",
         )
-        sse_body = b'data: {"type":"response.created"}'
+        sse_body = "\n\n".join(
+            [
+                'data: {"type":"response.created"}',
+                'data: {"type":"response.output_text.done","text":"   "}',
+            ]
+        ).encode()
         mock_resp = self._mock_sse_response(sse_body)
 
         with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp):

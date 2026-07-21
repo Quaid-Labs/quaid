@@ -256,6 +256,35 @@ class TestTokenUsage:
         finally:
             llm_clients.reset_token_budget()
 
+    def test_recovered_eof_usage_counts_toward_budget_and_model_usage(self):
+        import core.llm.clients as llm_clients
+
+        reset_token_usage()
+        llm_clients.set_token_budget(1000)
+        try:
+            result = LLMResult(
+                "salvaged",
+                0.01,
+                input_tokens=42,
+                output_tokens=7,
+                model="gpt-5.4",
+                recovered_from_eof=True,
+                recovery_reason="codex_eof_without_final_payload",
+            )
+
+            llm_clients._track_usage(result)
+
+            used, total = get_token_budget_usage()
+            assert used == 49
+            assert total == 1000
+            usage = get_token_usage()
+            assert usage["input_tokens"] == 42
+            assert usage["output_tokens"] == 7
+            assert usage["model_usage"]["gpt-5.4"]["input_tokens"] == 42
+            assert usage["model_usage"]["gpt-5.4"]["output_tokens"] == 7
+        finally:
+            llm_clients.reset_token_budget()
+
     def test_load_pricing_warns_once_and_uses_defaults_when_failhard_disabled(self):
         import core.llm.clients as llm_clients
         old_loaded = llm_clients._pricing_loaded
@@ -520,6 +549,36 @@ class TestCallLlmProvider:
         assert payload["api_calls"] == 1
         assert payload["duration_ms"] >= 0
         assert isinstance(payload["model_usage"], dict)
+        assert payload["recovered_from_eof"] is False
+        assert payload["recovery_reason"] == ""
+
+    def test_usage_event_marks_recovered_eof_result(self, tmp_path, monkeypatch):
+        import core.llm.clients as llm_clients
+
+        usage_log = tmp_path / "logs" / "llm-usage.jsonl"
+        monkeypatch.setenv("QUAID_LLM_USAGE_LOG_PATH", str(usage_log))
+        result = LLMResult(
+            "salvaged",
+            0.01,
+            input_tokens=42,
+            output_tokens=7,
+            model="gpt-5.4",
+            recovered_from_eof=True,
+            recovery_reason="codex_eof_without_final_payload",
+        )
+
+        llm_clients._append_usage_event(
+            result,
+            tier="deep",
+            provider_name="OpenAICodexOAuthLLMProvider",
+            requested_model="gpt-5.4",
+        )
+
+        payload = json.loads(usage_log.read_text(encoding="utf-8").strip())
+        assert payload["input_tokens"] == 42
+        assert payload["output_tokens"] == 7
+        assert payload["recovered_from_eof"] is True
+        assert payload["recovery_reason"] == "codex_eof_without_final_payload"
 
     def test_usage_event_logs_malformed_quaid_now_when_failhard_disabled(
         self, tmp_path, monkeypatch, caplog

@@ -636,6 +636,8 @@ def _append_usage_event(
             "api_calls": 1,
             "duration_ms": round(float(result.duration) * 1000),
             "model_usage": model_usage,
+            "recovered_from_eof": bool(getattr(result, "recovered_from_eof", False)),
+            "recovery_reason": str(getattr(result, "recovery_reason", "") or ""),
         }
         with _usage_log_lock:
             with path.open("a", encoding="utf-8") as f:
@@ -923,6 +925,8 @@ def call_llm(system_prompt: str, user_message: str,
                     "request_preview": _preview(user_message, 30),
                     "system_preview": _preview(system_prompt, 30),
                     "response_preview": _preview(result.text, 30),
+                    "recovered_from_eof": bool(getattr(result, "recovered_from_eof", False)),
+                    "recovery_reason": str(getattr(result, "recovery_reason", "") or ""),
                     "error_code": "",
                     "key_fp": _key_fp(),
                 })
@@ -935,6 +939,8 @@ def call_llm(system_prompt: str, user_message: str,
                     attempt=attempt + 1,
                     duration_ms=int(max(0.0, float(result.duration or 0.0)) * 1000),
                     response_preview=_preview(result.text, 30),
+                    recovered_from_eof=bool(getattr(result, "recovered_from_eof", False)),
+                    recovery_reason=str(getattr(result, "recovery_reason", "") or ""),
                 )
                 try:
                     from lib.agent_notice import clear_pending_notices_by_source

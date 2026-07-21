@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from lib.fail_policy import is_fail_hard_enabled
+from lib.tokens import estimate_tokens
 logger = logging.getLogger(__name__)
 
 _ANTHROPIC_OAUTH_IDENTITY_TEXT = (
@@ -250,6 +251,8 @@ class LLMResult:
     # Per-model token breakdown (for ClaudeCodeLLMProvider which may report
     # usage across multiple models in a single call).
     model_usage: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    recovered_from_eof: bool = False
+    recovery_reason: str = ""
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1529,10 +1532,18 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
             raise holder["error"]  # type: ignore[misc]
         return str(holder["data"] or "")
 
-    def _parse_response(self, raw_text: str, model: str, start_time: float) -> LLMResult:
+    def _parse_response(
+        self,
+        raw_text: str,
+        model: str,
+        start_time: float,
+        fallback_input_tokens: int = 0,
+    ) -> LLMResult:
         final_response = None
         text_chunks = []
         done_text = ""
+        recovered_from_eof = False
+        recovery_reason = ""
         for event in self._iter_sse_events(raw_text):
             event_type = str(event.get("type") or "").strip()
             if event_type == "error":
@@ -1559,17 +1570,29 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
             text = "".join(text_chunks).strip() or done_text.strip()
             if not text:
                 raise RuntimeError("Codex responses stream completed without a final response payload")
+            estimated_input_tokens = max(1, int(fallback_input_tokens or 0))
+            estimated_output_tokens = estimate_tokens(text)
             logger.warning(
                 "Codex responses stream ended without final response payload; using streamed text delta fallback "
-                "(model=%s, text_len=%d)",
+                "(model=%s, text_len=%d, estimated_input_tokens=%d, estimated_output_tokens=%d)",
                 model,
                 len(text),
+                estimated_input_tokens,
+                estimated_output_tokens,
             )
+            recovered_from_eof = True
+            recovery_reason = "codex_eof_without_final_payload"
+            # Keep the salvaged answer usable under failHard; the structured
+            # recovery fields below distinguish it from a normal completion.
             final_response = {
                 "status": "completed",
                 "model": model,
                 "output": [{"type": "message", "content": [{"type": "output_text", "text": text}]}],
-                "usage": {},
+                "usage": {
+                    "input_tokens": estimated_input_tokens,
+                    "output_tokens": estimated_output_tokens,
+                    "input_tokens_details": {},
+                },
             }
 
         usage = final_response.get("usage", {})
@@ -1590,6 +1613,8 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
             cache_creation_tokens=int(input_details.get("cache_creation_tokens", 0) or 0),
             model=str(final_response.get("model", model) or model),
             truncated=status == "incomplete",
+            recovered_from_eof=recovered_from_eof,
+            recovery_reason=recovery_reason,
         )
 
     def llm_call(self, messages, model_tier="deep",
@@ -1612,6 +1637,7 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
             },
         }
         payload = {k: v for k, v in payload.items() if v not in (None, "", [])}
+        fallback_input_tokens = estimate_tokens(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
         req = urllib.request.Request(
             self._resolve_url(),
@@ -1626,7 +1652,7 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
             if remaining <= 0:
                 raise TimeoutError(f"OpenAI Codex OAuth response timed out before body read ({float(timeout):.1f}s)")
             raw = self._read_stream_body_with_deadline(resp, read_timeout_s=remaining)
-        return self._parse_response(raw, model, start_time)
+        return self._parse_response(raw, model, start_time, fallback_input_tokens=fallback_input_tokens)
 
     def get_profiles(self):
         return {
