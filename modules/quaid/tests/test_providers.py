@@ -18,6 +18,7 @@ import pytest
 from lib.providers import (
     LLMResult,
     LLMProvider,
+    TransientLLMProviderError,
     EmbeddingsProvider,
     AnthropicLLMProvider,
     ClaudeCodeLLMProvider,
@@ -1415,7 +1416,7 @@ class TestOpenAICodexOAuthLLMProvider:
         mock_resp = self._mock_sse_response(sse_body)
 
         with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp):
-            with pytest.raises(RuntimeError, match="without a final response payload"):
+            with pytest.raises(TransientLLMProviderError, match="without a final response payload"):
                 p.llm_call(
                     [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
                     model_tier="deep",

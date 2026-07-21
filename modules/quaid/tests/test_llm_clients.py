@@ -30,7 +30,7 @@ from core.llm.clients import (
     call_fast_reasoning,
     call_deep_reasoning,
 )
-from lib.providers import LLMResult
+from lib.providers import LLMResult, TransientLLMProviderError
 
 
 # ---------------------------------------------------------------------------
@@ -1048,6 +1048,46 @@ class TestCallLlmProvider:
         test_adapter._llm.llm_call = flaky_llm_call
         result, _duration = llm_clients.call_llm("system", "user", max_retries=2)
         assert result is not None
+        assert call_count[0] == 2
+
+    def test_retries_on_transient_provider_error(self, test_adapter):
+        """Typed transient provider responses should retry before failHard policy fires."""
+        import core.llm.clients as llm_clients
+
+        call_count = [0]
+        original_llm_call = test_adapter._llm.llm_call
+
+        def flaky_llm_call(messages, model_tier="deep", max_tokens=4000, timeout=120):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise TransientLLMProviderError(
+                    "Codex responses stream completed without a final response payload"
+                )
+            return original_llm_call(messages, model_tier, max_tokens, timeout)
+
+        test_adapter._llm.llm_call = flaky_llm_call
+        with patch("core.llm.clients.time.sleep"):
+            result, _duration = llm_clients.call_llm("system", "user", max_retries=2)
+        assert result is not None
+        assert call_count[0] == 2
+
+    def test_transient_provider_error_still_raises_after_retries_when_failhard_enabled(self, test_adapter):
+        """Retries do not bypass failHard when a textless provider stream persists."""
+        import core.llm.clients as llm_clients
+
+        call_count = [0]
+
+        def always_empty(*_args, **_kwargs):
+            call_count[0] += 1
+            raise TransientLLMProviderError(
+                "Codex responses stream completed without a final response payload"
+            )
+
+        test_adapter._llm.llm_call = always_empty
+        with patch("core.llm.clients.time.sleep"), \
+             patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="LLM call failed after retries.*TransientLLMProviderError"):
+                llm_clients.call_llm("system", "user", max_retries=1)
         assert call_count[0] == 2
 
     def test_usage_event_failure_after_success_is_not_retried(self, test_adapter):

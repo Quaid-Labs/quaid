@@ -29,7 +29,7 @@ import urllib.error
 
 from lib.fail_policy import is_fail_hard_enabled
 from lib.llm_pool import acquire_llm_slot
-from lib.providers import LLMResult
+from lib.providers import LLMResult, TransientLLMProviderError
 from lib.runtime_context import get_llm_provider, notify_agent
 from lib.tokens import estimate_tokens
 from prompt_sets import get_prompt
@@ -147,6 +147,7 @@ def _is_retryable_llm_transport_error(exc: Optional[BaseException]) -> bool:
             subprocess.TimeoutExpired,
             urllib.error.URLError,
             http.client.IncompleteRead,
+            TransientLLMProviderError,
         ),
     )
 

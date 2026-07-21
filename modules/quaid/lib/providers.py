@@ -255,6 +255,10 @@ class LLMResult:
     recovery_reason: str = ""
 
 
+class TransientLLMProviderError(RuntimeError):
+    """Provider returned a transiently unusable response that should be retried."""
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # LLM Provider ABC
 # ═══════════════════════════════════════════════════════════════════════
@@ -1569,7 +1573,9 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
         if not isinstance(final_response, dict):
             text = "".join(text_chunks).strip() or done_text.strip()
             if not text:
-                raise RuntimeError("Codex responses stream completed without a final response payload")
+                raise TransientLLMProviderError(
+                    "Codex responses stream completed without a final response payload"
+                )
             estimated_input_tokens = max(1, int(fallback_input_tokens or 0))
             estimated_output_tokens = estimate_tokens(text)
             logger.warning(
