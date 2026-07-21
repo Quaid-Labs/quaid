@@ -145,8 +145,6 @@ def _http_body_indicates_model_config_error(body: str, model: str) -> bool:
         "not_found_error",
         "model_not_found",
     )
-    if any(marker in text for marker in ("invalid_model", "model_not_found")):
-        return True
     if model_text and model_text in text and any(marker in text for marker in markers):
         return True
     return False

@@ -82,6 +82,39 @@ def test_http_401_model_error_does_not_queue_auth_refresh_notice(monkeypatch) ->
     assert notify.call_args.kwargs["source"] == "provider"
 
 
+def test_http_401_ambiguous_model_marker_without_model_keeps_auth_refresh(monkeypatch) -> None:
+    provider = ClaudeCodeOAuthLLMProvider(
+        deep_model="invalid-model-m6-probe",
+        fast_model="claude-haiku-4-5",
+    )
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+
+    http_err = urllib.error.HTTPError(
+        url="https://api.anthropic.com/v1/messages",
+        code=401,
+        msg="unauthorized",
+        hdrs={},
+        fp=io.BytesIO(b'{"type":"error","error":{"type":"model_not_found"}}'),
+    )
+
+    with patch.object(provider, "_api_call", side_effect=http_err), patch(
+        "adaptors.claude_code.providers.queue_deferred_notice",
+        return_value=True,
+    ) as queued, patch(
+        "adaptors.claude_code.providers.notify_agent",
+        return_value=True,
+    ) as notify, patch("adaptors.claude_code.providers.is_fail_hard_enabled", return_value=False), patch.object(
+        provider,
+        "_get_api_key_provider",
+        return_value=None,
+    ):
+        with pytest.raises(RuntimeError, match="All LLM auth methods failed"):
+            provider.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+
+    assert queued.call_count == 1
+    assert notify.call_count == 0
+
+
 def test_http_400_model_error_is_provider_config_error(monkeypatch) -> None:
     provider = ClaudeCodeOAuthLLMProvider(
         deep_model="claude-sonnet-4-6",
