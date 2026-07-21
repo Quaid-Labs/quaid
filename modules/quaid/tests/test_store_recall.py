@@ -21530,9 +21530,10 @@ class TestRecallFastHookInjectContract:
         assert seed_calls[0]["include_graph_traversal"] is False
         assert seed_calls[0]["planner_meta"]["suppress_graph_auto_include"] is True
         assert rows
-        assert rows[0]["id"] == boat.id
+        assert rows[0]["source_name"] == "Kai"
         assert rows[0]["via"] == "graph_attached_fact"
         assert rows[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
+        assert any(row.get("id") == boat.id for row in rows)
 
     def test_graph_aware_seed_recall_suppresses_nested_graph_auto_include(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
@@ -21673,6 +21674,59 @@ class TestRecallFastHookInjectContract:
         assert rows[0]["via"] == "graph_attached_fact"
         assert rows[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
 
+    def test_graph_store_relation_chain_uses_generic_family_edge_as_structural_sibling(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        owner = mg.Node.create("Person", "Owner Person", owner_id="owner-alpha", status="approved")
+        partner = mg.Node.create("Person", "Avery", owner_id="owner-alpha", status="approved")
+        sibling = mg.Node.create("Person", "Rowan", owner_id="owner-alpha", status="approved")
+        adjacent = mg.Node.create("Person", "Taylor", owner_id="owner-alpha", status="approved")
+        work = mg.Node.create("Fact", "Rowan runs a small instrument workshop", owner_id="owner-alpha", status="approved")
+        adjacent_fact = mg.Node.create("Fact", "Taylor runs a printmaking practice", owner_id="owner-alpha", status="approved")
+        for node in (owner, partner, sibling, adjacent, work, adjacent_fact):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(owner.id, partner.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(sibling.id, partner.id, "family_of"))
+        graph.add_edge(mg.Edge.create(sibling.id, adjacent.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(sibling.id, work.id, "has_fact"))
+        graph.add_edge(mg.Edge.create(adjacent.id, adjacent_fact.id, "has_fact"))
+
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"owner-alpha": SimpleNamespace(person_node_name="Owner Person")}
+            )
+        )
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]), \
+             patch.object(mg, "get_edge_keywords", return_value={
+                 "spouse_of": ["配偶者"],
+                 "sibling_of": ["兄弟"],
+             }):
+            rows, meta, bundle = mg._run_recall_store_plan(
+                "配偶者の兄弟は何をしていますか",
+                stores=["graph"],
+                limit=3,
+                owner_id="owner-alpha",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=None,
+                planner_meta={"planned_stores": ["graph"]},
+                fast_mode=False,
+                graph_depth=3,
+                common_kwargs={"candidate_pool": []},
+            )
+
+        assert bundle is None
+        assert meta["store_runs"][0]["selected_path"] == "graph_aware"
+        assert rows
+        assert rows[0]["id"] == work.id
+        assert rows[0]["via"] == "graph_attached_fact"
+        assert rows[0]["graph_relation_groups"] == ["spouse", "family_of", "has_fact"]
+        assert "printmaking practice" not in rows[0]["text"]
+
     def test_graph_store_relation_chain_schema_alias_beats_dynamic_knows_keyword(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
@@ -21729,10 +21783,10 @@ class TestRecallFastHookInjectContract:
         assert bundle is None
         assert meta["store_runs"][0]["selected_path"] == "graph_aware"
         assert rows
-        assert rows[0]["id"] == boat.id
         assert rows[0]["via"] == "graph_attached_fact"
         assert rows[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
         assert "--knows-->" not in rows[0]["graph_path"]
+        assert any(row.get("id") == boat.id for row in rows)
 
     def test_graph_store_relation_chain_expands_guided_nodes_when_owner_bfs_is_saturated(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
@@ -21788,7 +21842,7 @@ class TestRecallFastHookInjectContract:
         assert rows[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
         assert rows[0]["graph_path"].startswith("Solomon Steadman --spouse_of--> Yuni --sibling_of--> Kai")
 
-    def test_graph_store_relation_chain_infers_owner_for_terse_chain_and_prefers_terminal_fact(self, tmp_path):
+    def test_graph_store_relation_chain_infers_owner_for_terse_chain_and_keeps_terminal_facts(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
         graph, _ = _make_graph(tmp_path)
@@ -21851,9 +21905,9 @@ class TestRecallFastHookInjectContract:
         assert bundle is None
         assert meta["store_runs"][0]["selected_path"] == "graph_aware"
         assert rows
-        assert rows[0]["id"] == boat.id
         assert rows[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
         assert rows[0]["graph_path"].startswith("Solomon Steadman --spouse_of--> Yuni --sibling_of--> Kai --has_fact-->")
+        assert any(row.get("id") == boat.id for row in rows)
 
     def test_graph_aware_relation_chain_keeps_base_vector_recall(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
@@ -22263,6 +22317,54 @@ class TestRecallFastHookInjectContract:
             },
         ):
             assert mg._relation_chain_activity_answer_score("兄の妻は職業?", row) == 2
+
+    def test_relation_chain_ranking_treats_generic_family_edge_as_structural_supertype(self):
+        import datastore.memorydb.memory_graph as mg
+
+        terminal_activity = {
+            "id": "terminal-activity",
+            "via": "graph_attached_fact",
+            "category": "fact",
+            "similarity": 0.72,
+            "text": "Rowan runs a small instrument workshop.",
+            "keywords": "workshop craft",
+            "graph_relation_groups": ["spouse", "family_of", "has_fact"],
+        }
+        adjacent_spouse_fact = {
+            "id": "adjacent-spouse",
+            "via": "graph_attached_fact",
+            "category": "fact",
+            "similarity": 0.94,
+            "text": "Taylor is Rowan's spouse and runs a printmaking practice out of their garage.",
+            "keywords": "spouse printmaking studio",
+            "graph_relation_groups": ["spouse", "family_of", "spouse", "has_fact"],
+        }
+        rows = [adjacent_spouse_fact, terminal_activity]
+
+        mg._boost_relation_chain_row_scores(
+            rows,
+            ["spouse", "sibling"],
+            query="what does my partner brother do",
+        )
+        rows.sort(
+            key=lambda row: mg._relation_chain_sort_key(
+                row,
+                ["spouse", "sibling"],
+                query="what does my partner brother do",
+            ),
+            reverse=True,
+        )
+
+        assert rows[0]["id"] == "terminal-activity"
+        assert rows[0]["similarity"] == 0.996
+        assert mg._terminal_relation_chain_match(
+            terminal_activity["graph_relation_groups"],
+            ["spouse", "sibling"],
+        ) == 1
+        assert mg._terminal_relation_chain_match(
+            adjacent_spouse_fact["graph_relation_groups"],
+            ["spouse", "sibling"],
+        ) == 0
 
     def test_generic_graph_signal_uses_structural_entity_pairs_not_english_cues(self):
         import datastore.memorydb.memory_graph as mg

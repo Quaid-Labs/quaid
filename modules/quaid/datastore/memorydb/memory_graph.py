@@ -4139,7 +4139,9 @@ def _iter_relation_chain_step_edges(
             )
         relation_group = _canonical_relation_group_for_relation(relation)
         if relation in _SYMMETRIC_RELATIONS or relation_group in _SYMMETRIC_RELATION_GROUPS:
-            return relation_group == expected_group
+            return _relation_group_matches_intent(relation_group, expected_group)
+        if relation_group in _RELATION_GROUP_SUPERTYPE_MATCHES:
+            return _relation_group_matches_intent(relation_group, expected_group)
         return direction == "out" and relation_group == expected_group
 
     def _append(edge: "Edge", next_id: str, direction: str) -> None:
@@ -4340,6 +4342,29 @@ def _relation_descriptor_tokens() -> set[str]:
     return tokens
 
 
+_RELATION_GROUP_SUPERTYPE_MATCHES: Dict[str, set[str]] = {
+    # family_of is the graph schema's explicit fallback for kinship when
+    # extraction cannot choose a more specific relation. Treat it as a
+    # structured supertype for traversal/ranking, not as evidence from fact text.
+    "family": {"spouse", "parent", "sibling", "child", "extended_family"},
+    "family_of": {"spouse", "parent", "sibling", "child", "extended_family"},
+    "relative": {"spouse", "parent", "sibling", "child", "extended_family"},
+    "relative_of": {"spouse", "parent", "sibling", "child", "extended_family"},
+    "kin": {"spouse", "parent", "sibling", "child", "extended_family"},
+    "kin_of": {"spouse", "parent", "sibling", "child", "extended_family"},
+}
+
+
+def _relation_group_matches_intent(row_group: str, intent_group: str) -> bool:
+    clean_row_group = str(row_group or "").strip()
+    clean_intent_group = str(intent_group or "").strip()
+    if not clean_row_group or not clean_intent_group:
+        return False
+    if clean_row_group == clean_intent_group:
+        return True
+    return clean_intent_group in _RELATION_GROUP_SUPERTYPE_MATCHES.get(clean_row_group, set())
+
+
 def _has_generic_graph_signal(query: str) -> bool:
     relation_intent_sequence = _relation_intent_sequence_for_query(query)
     if len(relation_intent_sequence) >= 2 and _has_relation_chain_structure(query):
@@ -4385,7 +4410,7 @@ def _ordered_relation_group_match_length(row_groups: List[str], intent_groups: L
     matched = 0
     row_index = 0
     for group in intent_groups:
-        while row_index < len(row_groups) and row_groups[row_index] != group:
+        while row_index < len(row_groups) and not _relation_group_matches_intent(row_groups[row_index], group):
             row_index += 1
         if row_index >= len(row_groups):
             break
@@ -4397,7 +4422,7 @@ def _ordered_relation_group_match_length(row_groups: List[str], intent_groups: L
 def _prefix_relation_group_match_length(row_groups: List[str], intent_groups: List[str]) -> int:
     matched = 0
     for row_group, intent_group in zip(row_groups, intent_groups):
-        if row_group != intent_group:
+        if not _relation_group_matches_intent(row_group, intent_group):
             break
         matched += 1
     return matched
@@ -4407,29 +4432,28 @@ def _terminal_relation_chain_match(row_groups: List[str], intent_groups: List[st
     if not row_groups or not intent_groups:
         return 0
     path_groups = [group for group in row_groups if group != "has_fact"]
-    return int(path_groups == intent_groups)
+    if len(path_groups) != len(intent_groups):
+        return 0
+    return int(all(
+        _relation_group_matches_intent(row_group, intent_group)
+        for row_group, intent_group in zip(path_groups, intent_groups)
+    ))
 
 
-def _relation_chain_activity_answer_score(query: Optional[str], row: Dict[str, Any]) -> int:
+def _relation_chain_activity_answer_score(
+    query: Optional[str],
+    row: Dict[str, Any],
+    *,
+    row_groups: Optional[List[str]] = None,
+) -> int:
     relation_groups = _relation_chain_groups_for_query(query or "")
     if len(relation_groups) < 2:
         return 0
-    row_groups = _graph_row_relation_groups(row)
-    if not row_groups or row_groups[-1] != "has_fact":
+    ranking_groups = row_groups if row_groups is not None else _graph_row_relation_groups(row)
+    if not ranking_groups or ranking_groups[-1] != "has_fact":
         return 0
-    if not _terminal_relation_chain_match(row_groups, relation_groups):
+    if not _terminal_relation_chain_match(ranking_groups, relation_groups):
         return 0
-    searchable = " ".join([
-        str((row or {}).get("text") or ""),
-        str((row or {}).get("keywords") or ""),
-    ])
-    relation_descriptors = _relation_descriptor_tokens()
-    if relation_descriptors and any(
-        _text_contains_anchor_term(searchable, term)
-        for term in relation_descriptors
-        if str(term or "").strip()
-    ):
-        return 1
     return 2
 
 
@@ -4451,7 +4475,7 @@ def _rank_graph_row_for_relation_chain(
         or row_type in _SUBJECT_ATTACHABLE_MEMORY_TYPES
     ) else 0
     terminal_direct_fact = int(bool(terminal_hits and fact_bonus))
-    activity_answer = _relation_chain_activity_answer_score(query, row)
+    activity_answer = _relation_chain_activity_answer_score(query, row, row_groups=row_groups)
     try:
         raw_depth = row.get("hop_depth") if row.get("hop_depth") is not None else row.get("depth")
         depth = int(raw_depth if raw_depth is not None else 0)
