@@ -2174,7 +2174,9 @@ class DocsRAG:
 
                 content = row[3]
                 is_dated_project_log = False
-                if (date_from or date_to) and _is_project_log_source(source_file):
+                if date_from or date_to:
+                    if not _is_project_log_source(source_file):
+                        continue
                     filtered_content = _filter_project_log_content_by_date(
                         content,
                         date_from=date_from,
@@ -2182,6 +2184,11 @@ class DocsRAG:
                         query_terms=project_log_query_terms,
                     )
                     if not filtered_content:
+                        logger.debug(
+                            "Excluding PROJECT.log chunk from date-bounded docs recall because it has no "
+                            "in-range dated content: %s",
+                            source_file,
+                        )
                         continue
                     content = filtered_content
                     is_dated_project_log = True

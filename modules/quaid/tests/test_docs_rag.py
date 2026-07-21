@@ -1560,7 +1560,7 @@ class TestDocsSearchFiltering:
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
-    def test_search_docs_filters_project_log_lines_by_date_and_keeps_undated_docs(
+    def test_search_docs_filters_project_log_lines_by_date_and_excludes_non_project_log_docs(
         self,
         _sim,
         _unpack,
@@ -1624,17 +1624,94 @@ class TestDocsSearchFiltering:
         )
 
         by_source = {Path(result["source"]).name: result for result in results}
-        assert set(by_source) == {"PROJECT.log", "PROJECT.md", "examples.md"}
+        assert set(by_source) == {"PROJECT.log"}
         assert "Added legacy recall mode" in by_source["PROJECT.log"]["content"]
         assert "Preserved CLI context for the legacy recall migration." in by_source["PROJECT.log"]["content"]
         assert "Testing confirmed the date-bounded path." in by_source["PROJECT.log"]["content"]
         assert "Switched recall planner to hybrid" not in by_source["PROJECT.log"]["content"]
         assert "This hybrid continuation should stay outside the March 10 cutoff." not in by_source["PROJECT.log"]["content"]
         assert by_source["PROJECT.log"]["source_date"] == "2026-03-05"
-        assert by_source["PROJECT.md"]["content"] == "Current recall planner summary"
-        assert by_source["PROJECT.md"]["source_date"] is None
-        assert by_source["examples.md"]["content"] == "Current recall examples should not answer dated docs recall."
-        assert by_source["examples.md"]["source_date"] is None
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_date_filtered_project_log_excludes_undated_chunks(
+        self,
+        _sim,
+        _unpack,
+        _embed,
+        tmp_path,
+    ):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "log-undated:0",
+                    "/tmp/workspace/projects/quaid/PROJECT.log",
+                    0,
+                    "Static config note: opal cache budget is 64.",
+                    None,
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        results = rag.search_docs(
+            "opal cache budget",
+            limit=5,
+            docs=["PROJECT.log"],
+            date_from="2026-03-01",
+            date_to="2026-03-10",
+        )
+
+        assert results == []
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_date_filtered_project_log_drops_all_out_of_range_dated_chunks(
+        self,
+        _sim,
+        _unpack,
+        _embed,
+        tmp_path,
+    ):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "log-out-of-range:0",
+                    "/tmp/workspace/projects/quaid/PROJECT.log",
+                    0,
+                    "\n".join(
+                        [
+                            "- [2026-03-15T23:59:59] Added opal cache budget note",
+                            "  This continuation stays outside the requested date range.",
+                        ]
+                    ),
+                    None,
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        results = rag.search_docs(
+            "opal cache budget",
+            limit=5,
+            docs=["PROJECT.log"],
+            date_from="2026-03-01",
+            date_to="2026-03-10",
+        )
+
+        assert results == []
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
