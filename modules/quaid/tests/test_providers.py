@@ -1330,6 +1330,54 @@ class TestOpenAICodexOAuthLLMProvider:
                     timeout=1.0,
                 )
 
+    def test_llm_call_uses_streamed_text_when_codex_eof_has_no_final_payload(self, caplog):
+        p = OpenAICodexOAuthLLMProvider(
+            api_key="token",
+            deep_model="gpt-5.4",
+            fast_model="gpt-5.4-mini",
+        )
+        sse_body = "\n\n".join(
+            [
+                'data: {"type":"response.created"}',
+                'data: {"type":"response.output_text.delta","delta":"Consolidated "}',
+                'data: {"type":"response.output_text.delta","delta":"profile update."}',
+            ]
+        ).encode()
+        mock_resp = self._mock_sse_response(sse_body)
+
+        with caplog.at_level("WARNING", logger="lib.providers"), patch(
+            "lib.providers.urllib.request.urlopen",
+            return_value=mock_resp,
+        ):
+            result = p.llm_call(
+                [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+                model_tier="deep",
+                timeout=1.0,
+            )
+
+        assert result.text == "Consolidated profile update."
+        assert result.model == "gpt-5.4"
+        assert result.input_tokens == 0
+        assert result.output_tokens == 0
+        assert "ended without final response payload" in caplog.text
+
+    def test_llm_call_rejects_codex_eof_without_final_payload_or_text(self):
+        p = OpenAICodexOAuthLLMProvider(
+            api_key="token",
+            deep_model="gpt-5.4",
+            fast_model="gpt-5.4-mini",
+        )
+        sse_body = b'data: {"type":"response.created"}'
+        mock_resp = self._mock_sse_response(sse_body)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp):
+            with pytest.raises(RuntimeError, match="without a final response payload"):
+                p.llm_call(
+                    [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+                    model_tier="deep",
+                    timeout=1.0,
+                )
+
 
 class TestCodexLLMProvider:
     class _FakeManager:

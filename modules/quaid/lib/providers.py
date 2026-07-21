@@ -1532,6 +1532,7 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
     def _parse_response(self, raw_text: str, model: str, start_time: float) -> LLMResult:
         final_response = None
         text_chunks = []
+        done_text = ""
         for event in self._iter_sse_events(raw_text):
             event_type = str(event.get("type") or "").strip()
             if event_type == "error":
@@ -1547,11 +1548,29 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
                 delta = event.get("delta")
                 if isinstance(delta, str) and delta:
                     text_chunks.append(delta)
+            if event_type == "response.output_text.done":
+                text = event.get("text")
+                if isinstance(text, str) and text.strip():
+                    done_text = text
             if event_type in ("response.done", "response.completed", "response.incomplete"):
                 final_response = event.get("response") if isinstance(event.get("response"), dict) else {}
                 break
         if not isinstance(final_response, dict):
-            raise RuntimeError("Codex responses stream completed without a final response payload")
+            text = "".join(text_chunks).strip() or done_text.strip()
+            if not text:
+                raise RuntimeError("Codex responses stream completed without a final response payload")
+            logger.warning(
+                "Codex responses stream ended without final response payload; using streamed text delta fallback "
+                "(model=%s, text_len=%d)",
+                model,
+                len(text),
+            )
+            final_response = {
+                "status": "completed",
+                "model": model,
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": text}]}],
+                "usage": {},
+            }
 
         usage = final_response.get("usage", {})
         if not isinstance(usage, dict):
