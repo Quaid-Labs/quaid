@@ -599,6 +599,25 @@ def project_deleted_raw(name: str) -> bool:
         return key in (data.get("deleted_projects") or {})
 
 
+def _project_backing_path_exists(name: str, path: Path) -> bool:
+    """Stat a project backing path without treating permission failures as absence."""
+    try:
+        os.stat(path)
+        return True
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "Preserving project registry conflict for %s; failed checking canonical path %s: %s",
+            name,
+            path,
+            exc,
+        )
+        if _fail_hard_enabled():
+            raise
+        return True
+
+
 def _project_entry_has_backing_state(name: str, entry: Dict[str, Any], fallback_canonical: Path) -> bool:
     """Return whether an existing global registry row is backed by live project state."""
     candidate_paths: List[Path] = [fallback_canonical]
@@ -612,16 +631,7 @@ def _project_entry_has_backing_state(name: str, entry: Dict[str, Any], fallback_
         if key in seen_paths:
             continue
         seen_paths.add(key)
-        try:
-            if candidate.exists():
-                return True
-        except OSError as exc:
-            logger.warning(
-                "Preserving project registry conflict for %s; failed checking canonical path %s: %s",
-                name,
-                candidate,
-                exc,
-            )
+        if _project_backing_path_exists(name, candidate):
             return True
 
     try:

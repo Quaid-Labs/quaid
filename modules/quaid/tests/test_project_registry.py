@@ -310,6 +310,91 @@ class TestCreateProject:
 
         assert get_project("my-app")["description"] == "real"
 
+    def test_create_preserves_docs_backed_global_entry_conflict(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        stale_canonical = tmp_path / "projects" / "my-app"
+        _save_registry(
+            {
+                "projects": {
+                    "my-app": {
+                        "canonical_path": str(stale_canonical),
+                        "instances": ["openclaw-main"],
+                        "description": "docs-backed",
+                    }
+                },
+                "deleted_projects": {},
+            }
+        )
+
+        with patch("core.project_registry._docs_db_project_rows_exist", return_value=True), \
+             pytest.raises(ValueError, match="already exists"):
+            create_project("my-app", description="fresh", initial_instance="openclaw-main")
+
+        assert not stale_canonical.exists()
+        assert get_project("my-app")["description"] == "docs-backed"
+
+    def test_create_preserves_conflict_when_backing_path_check_is_indeterminate(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        canonical = tmp_path / "projects" / "my-app"
+        _save_registry(
+            {
+                "projects": {
+                    "my-app": {
+                        "canonical_path": str(canonical),
+                        "instances": ["openclaw-main"],
+                        "description": "indeterminate",
+                    }
+                },
+                "deleted_projects": {},
+            }
+        )
+
+        with patch("core.project_registry._project_backing_path_exists", return_value=True), \
+             pytest.raises(ValueError, match="already exists"):
+            create_project("my-app", description="fresh", initial_instance="openclaw-main")
+
+        assert get_project("my-app")["description"] == "indeterminate"
+
+    def test_create_raises_when_backing_path_check_fails_under_failhard(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        canonical = tmp_path / "projects" / "my-app"
+        _save_registry(
+            {
+                "projects": {
+                    "my-app": {
+                        "canonical_path": str(canonical),
+                        "instances": ["openclaw-main"],
+                        "description": "indeterminate",
+                    }
+                },
+                "deleted_projects": {},
+            }
+        )
+
+        with patch("core.project_registry._project_backing_path_exists", side_effect=PermissionError("blocked")), \
+             pytest.raises(PermissionError, match="blocked"):
+            create_project("my-app", description="fresh", initial_instance="openclaw-main")
+
+        assert get_project("my-app")["description"] == "indeterminate"
+
+    def test_project_backing_path_check_fails_closed_on_oserror_failsoft(self, mock_adapter, caplog):
+        from core import project_registry as registry_mod
+
+        with patch("core.project_registry.os.stat", side_effect=PermissionError("blocked")), \
+             patch("core.project_registry._fail_hard_enabled", return_value=False), \
+             caplog.at_level(logging.WARNING, logger="core.project_registry"):
+            assert registry_mod._project_backing_path_exists("my-app", Path("/blocked/my-app")) is True
+
+        assert "Preserving project registry conflict for my-app; failed checking canonical path" in caplog.text
+
+    def test_project_backing_path_check_raises_on_oserror_under_failhard(self, mock_adapter):
+        from core import project_registry as registry_mod
+
+        with patch("core.project_registry.os.stat", side_effect=PermissionError("blocked")), \
+             patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(PermissionError, match="blocked"):
+            registry_mod._project_backing_path_exists("my-app", Path("/blocked/my-app"))
+
     def test_rejects_duplicate_after_lowercase_normalization(self, mock_adapter):
         create_project("My-App")
         with pytest.raises(ValueError, match="already exists"):
