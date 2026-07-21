@@ -48,6 +48,73 @@ def test_http_401_queues_auth_refresh_notice(monkeypatch) -> None:
     assert "credentials.json" not in notice
 
 
+def test_http_401_model_error_does_not_queue_auth_refresh_notice(monkeypatch) -> None:
+    provider = ClaudeCodeOAuthLLMProvider(
+        deep_model="invalid-model-m6-probe",
+        fast_model="claude-haiku-4-5",
+    )
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+
+    http_err = urllib.error.HTTPError(
+        url="https://api.anthropic.com/v1/messages",
+        code=401,
+        msg="unauthorized",
+        hdrs={},
+        fp=io.BytesIO(
+            b'{"type":"error","error":{"type":"not_found_error",'
+            b'"message":"model invalid-model-m6-probe does not exist"}}'
+        ),
+    )
+
+    with patch.object(provider, "_api_call", side_effect=http_err), patch(
+        "adaptors.claude_code.providers.queue_deferred_notice",
+        return_value=True,
+    ) as queued, patch(
+        "adaptors.claude_code.providers.notify_agent",
+        return_value=True,
+    ) as notify, patch("adaptors.claude_code.providers.is_fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="invalid-model-m6-probe"):
+            provider.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+
+    assert queued.call_count == 0
+    assert notify.call_count == 1
+    assert "invalid-model-m6-probe" in notify.call_args.args[0]
+    assert notify.call_args.kwargs["source"] == "provider"
+
+
+def test_http_400_model_error_is_provider_config_error(monkeypatch) -> None:
+    provider = ClaudeCodeOAuthLLMProvider(
+        deep_model="claude-sonnet-4-6",
+        fast_model="invalid-model-m6-probe",
+    )
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+
+    http_err = urllib.error.HTTPError(
+        url="https://api.anthropic.com/v1/messages",
+        code=400,
+        msg="bad request",
+        hdrs={},
+        fp=io.BytesIO(
+            b'{"type":"error","error":{"type":"invalid_request_error",'
+            b'"message":"unknown model invalid-model-m6-probe"}}'
+        ),
+    )
+
+    with patch.object(provider, "_api_call", side_effect=http_err), patch(
+        "adaptors.claude_code.providers.queue_deferred_notice",
+        return_value=True,
+    ) as queued, patch(
+        "adaptors.claude_code.providers.notify_agent",
+        return_value=True,
+    ) as notify, patch("adaptors.claude_code.providers.is_fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="invalid-model-m6-probe"):
+            provider.llm_call([{"role": "user", "content": "hi"}], model_tier="fast")
+
+    assert queued.call_count == 0
+    assert notify.call_count == 1
+    assert "invalid-model-m6-probe" in notify.call_args.args[0]
+
+
 def test_auth_refresh_notice_queue_failure_warns_when_fail_open(caplog) -> None:
     with patch(
         "adaptors.claude_code.providers.queue_deferred_notice",

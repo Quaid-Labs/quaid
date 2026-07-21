@@ -132,6 +132,26 @@ def _warn_api_key_fallback() -> None:
     )
 
 
+def _http_body_indicates_model_config_error(body: str, model: str) -> bool:
+    text = str(body or "").lower()
+    model_text = str(model or "").strip().lower()
+    markers = (
+        "invalid model",
+        "unknown model",
+        "unsupported model",
+        "model not found",
+        "model does not exist",
+        "no such model",
+        "not_found_error",
+        "model_not_found",
+    )
+    if any(marker in text for marker in ("invalid_model", "model_not_found")):
+        return True
+    if model_text and model_text in text and any(marker in text for marker in markers):
+        return True
+    return False
+
+
 class _OAuthUnavailable(Exception):
     """Internal signal: OAuth path failed, try next layer."""
     pass
@@ -320,6 +340,26 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
                 body = e.read().decode("utf-8", errors="replace") or "<empty>"
             except Exception:
                 pass
+            if e.code in {400, 401} and _http_body_indicates_model_config_error(body, model):
+                logger.error(
+                    "[claude-code-oauth] HTTP %d model configuration error. "
+                    "model=%s body: %s",
+                    e.code, model, body[:1200],
+                )
+                msg = (
+                    f"claude-code-oauth HTTP {e.code} model={model}. "
+                    "Check fastReasoning/deepReasoning in config.json."
+                )
+                try:
+                    notify_agent(
+                        msg,
+                        severity="error",
+                        source="provider",
+                        dedupe_key=f"cc-model-error:{model_tier}:{e.code}:{model}",
+                    )
+                except Exception:
+                    logger.debug("notify_agent unavailable; logging provider error locally: %s", msg)
+                raise RuntimeError(msg) from e
             if e.code == 401:
                 _queue_auth_refresh_notice()
                 logger.warning(
