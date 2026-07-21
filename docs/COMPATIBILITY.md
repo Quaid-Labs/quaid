@@ -107,7 +107,7 @@ This section records behaviors discovered during live testing that materially ch
 
 **Root cause:** OpenClaw 2026.6.11 through 2026.6.32 compare volatile session metadata while initializing reply sessions. Concurrent metadata updates can make the initialization revision conflict even though the user turn is valid. OpenClaw 2026.6.33 narrows the revision to stable session identity fields.
 
-**Impact:** Quaid blocks new OpenClaw installs on this known-bad range and live-test base preparation requires OpenClaw 2026.6.33 or later for Matrix runs.
+**Impact:** Quaid blocks new OpenClaw installs on this known-bad range and live-test base preparation requires OpenClaw 2026.6.33 or later for Matrix runs. Existing OpenClaw installs in this range are marked degraded by the compatibility watcher: read/recall remain available, but extraction/storage pause until OpenClaw is updated. This degraded state is intentionally host-wide because the compatibility matrix is scoped by host version, not by individual OpenClaw channels.
 
 **Current workaround:** Update OpenClaw to the extended-stable line:
 

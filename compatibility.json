@@ -2,7 +2,7 @@
   "kill_switch": false,
   "kill_message": null,
   "schema_version": 1,
-  "updated_at": "2026-05-15",
+  "updated_at": "2026-07-22",
   "latest_quaid": "0.3.4",
   "update_message": null,
   "matrix": [
@@ -12,8 +12,9 @@
       "quaid_range": ">=0.3.4",
       "status": "incompatible",
       "data_risk": false,
-      "message": "OpenClaw 2026.6.11 through 2026.6.32 can drop Matrix replies after a /new reply-session initialization conflict. Update OpenClaw to 2026.6.33 extended-stable or later.",
-      "fix": "openclaw update --tag extended-stable --yes"
+      "message": "OpenClaw 2026.6.11 through 2026.6.32 can drop Matrix replies after a /new reply-session initialization conflict. Existing installs in this range run in degraded mode: read/recall remain available, but extraction/storage pause until OpenClaw is updated.",
+      "fix": "openclaw update --tag extended-stable --yes",
+      "notes": "R286 live validation reproduced the dropped second turn on OpenClaw 2026.6.11 and confirmed that upgrading OpenClaw alone to 2026.6.33 fixed /new -> Hello -> grinder recall dispatch."
     },
     {
       "host": "openclaw",
