@@ -1803,6 +1803,15 @@ class DocsRegistry:
         project_md_path = home_abs / "PROJECT.md"
         _write_text_if_missing(project_md_path, project_md)
 
+        try:
+            from lib.project_registry import clear_deleted as clear_global_project_deleted
+
+            clear_global_project_deleted(name)
+        except Exception as exc:
+            logger.warning("Failed to clear global project delete marker for %s: %s", name, exc)
+            if _fail_hard_enabled():
+                raise RuntimeError(f"Failed to clear global project delete marker for {name!r}") from exc
+
         # Save project definition to DB (source of truth)
         from config import ProjectDefinition
         defn = ProjectDefinition(
@@ -2215,14 +2224,24 @@ class DocsRegistry:
         defn: Optional[Any],
         *,
         states: Tuple[str, ...],
+        ignore_visibility: bool = False,
     ) -> int:
         """Remove docs RAG chunks for project-owned document paths."""
         rag_paths: list[str] = []
         for state in states:
-            for row in self.list_docs(project=project_name, state=state):
-                path_val = str(row.get("file_path") or "").strip()
-                if path_val:
-                    rag_paths.append(path_val)
+            if ignore_visibility:
+                with get_connection(self.db_path) as conn:
+                    self._ensure_doc_registry_table(conn)
+                    rows = conn.execute(
+                        "SELECT file_path FROM doc_registry WHERE project = ? AND state = ?",
+                        (project_name, state),
+                    ).fetchall()
+                rag_paths.extend(str(row["file_path"] or "").strip() for row in rows)
+            else:
+                for row in self.list_docs(project=project_name, state=state):
+                    path_val = str(row.get("file_path") or "").strip()
+                    if path_val:
+                        rag_paths.append(path_val)
         if defn:
             rag_paths.append(str(self._resolve_path(defn.home_dir) / "PROJECT.md"))
 
@@ -2338,12 +2357,22 @@ class DocsRegistry:
         if not has_definition and not has_docs:
             raise ValueError(f"Project '{project_name}' does not exist.")
 
+        try:
+            from lib.project_registry import mark_deleted as mark_global_project_deleted
+
+            mark_global_project_deleted(project_name)
+        except Exception as e:
+            if _fail_hard_enabled():
+                raise RuntimeError(f"Failed to mark global project registry delete marker {project_name!r}") from e
+            logger.warning("Global project registry delete marker skipped: %s", e)
+
         # Clean docs RAG chunks for all project paths before registry state transition.
         # This prevents deleted project content from continuing to inject via recall.
         rag_chunk_deleted = self._remove_project_rag_chunks(
             project_name,
             defn,
             states=("active", "archived"),
+            ignore_visibility=True,
         )
 
         # 1. Bulk delete registry entries

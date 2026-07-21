@@ -1710,6 +1710,33 @@ class TestDeleteProject:
         assert "docs/linger.md" in removed_paths
         assert str(project_md.resolve()) in removed_paths
 
+    def test_delete_project_marks_global_tombstone_before_docs_cleanup(self, setup_env, monkeypatch):
+        from lib.project_registry import is_deleted as global_project_deleted
+        from lib.project_registry import lookup as global_project_lookup
+
+        r = _get_registry()
+        r.register("projects/test-project/PROJECT.md", project="test-project")
+
+        def assert_tombstoned(project_name, *_args, **_kwargs):
+            assert project_name == "test-project"
+            assert global_project_deleted(project_name) is True
+            return 0
+
+        def _trash_side_effect(cmd, **kwargs):
+            target = Path(cmd[1])
+            if target.exists():
+                import shutil
+                shutil.rmtree(target)
+            return None
+
+        monkeypatch.setattr(r, "_remove_project_rag_chunks", assert_tombstoned)
+        with patch("datastore.docsdb.registry.subprocess.run") as mock_run:
+            mock_run.side_effect = _trash_side_effect
+            r.delete_project("test-project")
+
+        assert global_project_deleted("test-project") is True
+        assert global_project_lookup("test-project") is None
+
 
 class TestMoveFile:
     def test_reassigns_project_in_registry(self, setup_env):
@@ -1778,6 +1805,22 @@ class TestCreateProjectConfig:
         assert defn is not None
         assert defn.label == "New Proj"
         assert defn.home_dir == "projects/new-proj/"
+
+    def test_create_project_clears_global_delete_tombstone(self, setup_env):
+        from lib.project_registry import is_deleted as global_project_deleted
+        from lib.project_registry import lookup as global_project_lookup
+        from lib.project_registry import mark_deleted as mark_global_project_deleted
+
+        r = _get_registry()
+        mark_global_project_deleted("new-proj")
+        assert global_project_deleted("new-proj") is True
+
+        r.create_project("new-proj", label="New Proj", description="Testing")
+
+        assert global_project_deleted("new-proj") is False
+        entry = global_project_lookup("new-proj")
+        assert entry is not None
+        assert entry["description"] == "Testing"
 
     def test_registers_project_md(self, setup_env):
         r = _get_registry()
