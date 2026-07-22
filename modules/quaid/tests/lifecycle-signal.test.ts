@@ -802,6 +802,56 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("keeps adjacent Matrix user turns that differ by internal whitespace", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserve-adjacent-whitespace-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "414d671f-a77a-4fda-9a69-dfc5c6840c4a";
+
+      const first = isolatedTest.appendPreservedTranscriptMessage(
+        sessionId,
+        "user",
+        "Please remember line one\nline two exactly.",
+        "message_received",
+      );
+      const second = isolatedTest.appendPreservedTranscriptMessage(
+        sessionId,
+        "user",
+        "Please remember line one line two exactly.",
+        "message_received",
+      );
+      expect(second).toBe(first);
+
+      const userMessages = isolatedTest.parseSessionMessagesJsonl(String(second))
+        .filter((m: any) => m.role === "user");
+      expect(userMessages).toHaveLength(2);
+      expect(userMessages.map((m: any) => m.content)).toEqual([
+        "Please remember line one\nline two exactly.",
+        "Please remember line one line two exactly.",
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("does not overwrite richer message_received preserved transcript with shorter native transcript", async () => {
     const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserve-richer-cache-"));
     const quaidHome = path.join(baseDir, ".quaid");

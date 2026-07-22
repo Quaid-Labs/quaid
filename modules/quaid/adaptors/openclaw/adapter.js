@@ -2385,7 +2385,7 @@ function normalizeConversationTranscriptMessages(messages) {
   return normalized;
 }
 function canonicalTranscriptMessageText(text) {
-  return preprocessTranscriptText(String(text || "")).replace(/(?:\r?\n\s*)+---\s*$/g, "").trim().replace(/\s+/g, " ");
+  return preprocessTranscriptText(String(text || "")).replace(/(?:\r?\n\s*)+---\s*$/g, "").trim();
 }
 function transcriptMessageDedupKey(role, text) {
   const normalizedRole = String(role || "").trim().toLowerCase();

@@ -3000,8 +3000,7 @@ function normalizeConversationTranscriptMessages(messages: any[]): Array<{ role:
 function canonicalTranscriptMessageText(text: string): string {
   return preprocessTranscriptText(String(text || ""))
     .replace(/(?:\r?\n\s*)+---\s*$/g, "")
-    .trim()
-    .replace(/\s+/g, " ");
+    .trim();
 }
 
 function transcriptMessageDedupKey(role: string, text: string): string {
