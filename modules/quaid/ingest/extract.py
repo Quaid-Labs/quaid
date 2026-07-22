@@ -1508,7 +1508,9 @@ def _is_persistable_structural_anchor(token: str) -> bool:
     # Lowercase prose compounds like "topic-wise" are not durable exact anchors.
     # Preserve identifier-shaped tokens whose exact spelling materially matters
     # if model normalization omits them: digits/underscores, or hyphenated names
-    # with uppercase signal in every segment.
+    # with uppercase signal in every segment. Uppercase is a bicameral-script
+    # rescue signal; non-bicameral scripts still rely on primary LLM extraction
+    # or digit/underscore exact anchors here.
     hyphen_name_shape = False
     if "-" in value:
         parts = value.split("-")
