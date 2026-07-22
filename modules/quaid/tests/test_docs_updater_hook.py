@@ -519,6 +519,96 @@ class TestUpdateProjectDocs:
 
         assert doc_path.read_text(encoding="utf-8") == original
 
+    def test_project_md_empty_section_sentinel_rejects_prose_before_managed_child(
+        self, tmp_path
+    ):
+        project_dir = tmp_path / "projects" / "my-app"
+        project_dir.mkdir(parents=True)
+        doc_path = project_dir / "PROJECT.md"
+        original = (
+            "# Project: Demo\n\n"
+            "## Where To Learn More\n\n"
+            "Read the project overview before editing.\n\n"
+            "### Registered Docs\n"
+            "<!-- BEGIN:REGISTERED_DOCS -->\n"
+            "| Document | Why Read It | Auto-Update |\n"
+            "|----------|-------------|-------------|\n"
+            "<!-- END:REGISTERED_DOCS -->\n\n"
+            "## Related Projects\n"
+        )
+        doc_path.write_text(original, encoding="utf-8")
+        snapshots = [{
+            "project": "my-app",
+            "is_initial": False,
+            "diff": "diff --git a/README.md b/README.md\n+Useful details.",
+            "changes": [{"status": "M", "path": "README.md", "old_path": None}],
+        }]
+        response = (
+            "<<<EDIT\n"
+            "SECTION: Where To Learn More\n"
+            "OLD: (empty)\n"
+            "NEW: - `README.md` explains the fixture purpose.\n"
+            ">>>"
+        )
+
+        with patch("datastore.docsdb.updater.classify_doc_change") as mock_classify, \
+             patch("core.project_registry.get_project", return_value={"canonical_path": str(project_dir)}), \
+             patch("core.docs_updater_hook.is_fail_hard_enabled", return_value=True), \
+             patch("lib.llm_clients.call_deep_reasoning", return_value=(response, 0.1)):
+            mock_classify.return_value = {
+                "classification": "significant",
+                "confidence": 0.8,
+                "reasons": ["clear doc update"],
+            }
+
+            with pytest.raises(RuntimeError, match="did not match PROJECT.md content"):
+                update_project_docs(snapshots)
+
+        assert doc_path.read_text(encoding="utf-8") == original
+
+    def test_project_md_empty_section_sentinel_rejects_unmanaged_child_section(
+        self, tmp_path
+    ):
+        project_dir = tmp_path / "projects" / "my-app"
+        project_dir.mkdir(parents=True)
+        doc_path = project_dir / "PROJECT.md"
+        original = (
+            "# Project: Demo\n\n"
+            "## Where To Learn More\n\n"
+            "### My Custom Notes\n"
+            "- Keep this hand-written note.\n\n"
+            "## Related Projects\n"
+        )
+        doc_path.write_text(original, encoding="utf-8")
+        snapshots = [{
+            "project": "my-app",
+            "is_initial": False,
+            "diff": "diff --git a/README.md b/README.md\n+Useful details.",
+            "changes": [{"status": "M", "path": "README.md", "old_path": None}],
+        }]
+        response = (
+            "<<<EDIT\n"
+            "SECTION: Where To Learn More\n"
+            "OLD: (empty)\n"
+            "NEW: - `README.md` explains the fixture purpose.\n"
+            ">>>"
+        )
+
+        with patch("datastore.docsdb.updater.classify_doc_change") as mock_classify, \
+             patch("core.project_registry.get_project", return_value={"canonical_path": str(project_dir)}), \
+             patch("core.docs_updater_hook.is_fail_hard_enabled", return_value=True), \
+             patch("lib.llm_clients.call_deep_reasoning", return_value=(response, 0.1)):
+            mock_classify.return_value = {
+                "classification": "significant",
+                "confidence": 0.8,
+                "reasons": ["clear doc update"],
+            }
+
+            with pytest.raises(RuntimeError, match="did not match PROJECT.md content"):
+                update_project_docs(snapshots)
+
+        assert doc_path.read_text(encoding="utf-8") == original
+
     def test_project_md_managed_marker_edit_is_ignored_under_fail_hard(self, tmp_path, caplog):
         project_dir = tmp_path / "projects" / "my-app"
         project_dir.mkdir(parents=True)
