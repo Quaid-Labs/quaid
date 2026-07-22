@@ -878,17 +878,20 @@ describe("lifecycle signal detection", () => {
       const sessionId = "cbfed00e-6556-4bb5-bb63-0d7a35200817";
       const nativePath = path.join(sessionsDir, `${sessionId}.jsonl`);
       const preservedPath = path.join(quaidHome, "instances", "openclaw-main", "logs", "quaid", "sessions", `${sessionId}.jsonl`);
-      const chunkOne = "Chunk 1: Ginkgo checklist lives beside the monitor.";
-      const chunkTwo = "Chunk 2: Baxter keeps the orange linen notebook from Emília Rosa.";
+      const promptPrefix = "This is a test of Quaid's automatic extraction pipeline. Reply ACK only.";
+      const chunkOnePayload = "Chunk 1: Ginkgo checklist lives beside the monitor.";
+      const chunkTwoPayload = "Chunk 2: Baxter keeps the orange linen notebook from Emília Rosa.";
+      const chunkOne = `${promptPrefix}\n\n${chunkOnePayload}`;
+      const chunkTwo = `${promptPrefix}\n\n${chunkTwoPayload}`;
 
       fs.mkdirSync(path.dirname(preservedPath), { recursive: true });
       fs.writeFileSync(
         preservedPath,
         [
+          JSON.stringify({ type: "message", message: { role: "user", content: `${promptPrefix}\n\n---\n\n${chunkOnePayload}\n\n---` } }),
           JSON.stringify({ type: "message", message: { role: "user", content: `${chunkOne}\n\n---` } }),
-          JSON.stringify({ type: "message", message: { role: "user", content: chunkOne } }),
+          JSON.stringify({ type: "message", message: { role: "user", content: `${promptPrefix}\n\n---\n\n${chunkTwoPayload}\n\n---` } }),
           JSON.stringify({ type: "message", message: { role: "user", content: `${chunkTwo}\n\n---` } }),
-          JSON.stringify({ type: "message", message: { role: "user", content: chunkTwo } }),
         ].join("\n") + "\n",
         "utf8",
       );

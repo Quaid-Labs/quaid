@@ -3011,7 +3011,10 @@ function normalizeConversationTranscriptMessages(messages: any[]): NormalizedTra
 
 function canonicalTranscriptMessageText(text: string): string {
   return preprocessTranscriptText(String(text || ""))
-    .replace(/(?:\r?\n\s*)+---\s*$/g, "")
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== "---")
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
@@ -3021,7 +3024,7 @@ function transcriptMessageDedupKey(role: string, text: string): string {
   return normalizedRole && normalizedText ? `${normalizedRole}\0${normalizedText}` : "";
 }
 
-function transcriptTextHasTrailingSeparatorArtifact(text: string): boolean {
+function transcriptTextHasSeparatorArtifact(text: string): boolean {
   const raw = preprocessTranscriptText(String(text || "")).trim();
   return Boolean(raw) && raw !== canonicalTranscriptMessageText(raw);
 }
@@ -3038,8 +3041,8 @@ function shouldDedupeAdjacentTranscriptMessages(
     return false;
   }
   return (
-    transcriptTextHasTrailingSeparatorArtifact(previousText)
-    || transcriptTextHasTrailingSeparatorArtifact(nextText)
+    transcriptTextHasSeparatorArtifact(previousText)
+    || transcriptTextHasSeparatorArtifact(nextText)
   );
 }
 
@@ -3051,12 +3054,13 @@ function dedupeAdjacentTranscriptMessages(messages: NormalizedTranscriptMessage[
       previous
       && shouldDedupeAdjacentTranscriptMessages(previous.role, previous.content, message.role, message.content)
     ) {
-      if (
-        transcriptTextHasTrailingSeparatorArtifact(previous.content)
-        && !transcriptTextHasTrailingSeparatorArtifact(message.content)
-      ) {
-        deduped[deduped.length - 1] = message;
-      }
+      const replacement = !transcriptTextHasSeparatorArtifact(message.content)
+        ? message
+        : (!transcriptTextHasSeparatorArtifact(previous.content) ? previous : message);
+      deduped[deduped.length - 1] = {
+        ...replacement,
+        content: canonicalTranscriptMessageText(replacement.content),
+      };
       continue;
     }
     deduped.push(message);

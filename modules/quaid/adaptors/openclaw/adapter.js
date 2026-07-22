@@ -2391,14 +2391,14 @@ function normalizeConversationTranscriptMessages(messages) {
   return normalized;
 }
 function canonicalTranscriptMessageText(text) {
-  return preprocessTranscriptText(String(text || "")).replace(/(?:\r?\n\s*)+---\s*$/g, "").trim();
+  return preprocessTranscriptText(String(text || "")).split(/\r?\n/).filter((line) => line.trim() !== "---").join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 function transcriptMessageDedupKey(role, text) {
   const normalizedRole = String(role || "").trim().toLowerCase();
   const normalizedText = canonicalTranscriptMessageText(text);
   return normalizedRole && normalizedText ? `${normalizedRole}\0${normalizedText}` : "";
 }
-function transcriptTextHasTrailingSeparatorArtifact(text) {
+function transcriptTextHasSeparatorArtifact(text) {
   const raw = preprocessTranscriptText(String(text || "")).trim();
   return Boolean(raw) && raw !== canonicalTranscriptMessageText(raw);
 }
@@ -2408,16 +2408,18 @@ function shouldDedupeAdjacentTranscriptMessages(previousRole, previousText, next
   if (transcriptMessageDedupKey(previousRole, previousText) !== transcriptMessageDedupKey(nextRole, nextText)) {
     return false;
   }
-  return transcriptTextHasTrailingSeparatorArtifact(previousText) || transcriptTextHasTrailingSeparatorArtifact(nextText);
+  return transcriptTextHasSeparatorArtifact(previousText) || transcriptTextHasSeparatorArtifact(nextText);
 }
 function dedupeAdjacentTranscriptMessages(messages) {
   const deduped = [];
   for (const message of Array.isArray(messages) ? messages : []) {
     const previous = deduped[deduped.length - 1];
     if (previous && shouldDedupeAdjacentTranscriptMessages(previous.role, previous.content, message.role, message.content)) {
-      if (transcriptTextHasTrailingSeparatorArtifact(previous.content) && !transcriptTextHasTrailingSeparatorArtifact(message.content)) {
-        deduped[deduped.length - 1] = message;
-      }
+      const replacement = !transcriptTextHasSeparatorArtifact(message.content) ? message : !transcriptTextHasSeparatorArtifact(previous.content) ? previous : message;
+      deduped[deduped.length - 1] = {
+        ...replacement,
+        content: canonicalTranscriptMessageText(replacement.content)
+      };
       continue;
     }
     deduped.push(message);
