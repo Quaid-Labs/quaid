@@ -102,6 +102,21 @@ def test_project_docs_utc_now_rejects_malformed_quaid_now(monkeypatch):
         project_docs.utc_now()
 
 
+def test_scrub_background_process_env_removes_wrapper_binding_tag():
+    from core import project_docs
+
+    env = project_docs.scrub_background_process_env(
+        {
+            "QUAID_HOME": "/tmp/quaid-home",
+            "_QUAID_WRAPPER_CMD": "daemon",
+            "QUAID_INSTANCE": "codex-wrong",
+            "CODEX_PROJECT_DIR": "/tmp/cdx-livetest",
+        }
+    )
+
+    assert env == {"QUAID_HOME": "/tmp/quaid-home"}
+
+
 def test_request_update_writes_hidden_state(project_env):
     tmp_path, _src, _entry = project_env
     from core import project_docs
@@ -2504,6 +2519,7 @@ def test_start_supervisor_reaps_matching_orphans_before_spawn(project_env, monke
     monkeypatch.setenv("LANE", "cc")
     monkeypatch.setenv("QUAID_ADAPTER_TYPE", "claude-code")
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp/cc-livetest")
+    monkeypatch.setenv("_QUAID_WRAPPER_CMD", "daemon")
     monkeypatch.setenv("MEMORY_DB_PATH", str(_tmp_path / "instances" / "openclaw-main" / "data" / "memory.db"))
     monkeypatch.setenv(
         "MEMORY_ARCHIVE_DB_PATH",
@@ -2523,6 +2539,7 @@ def test_start_supervisor_reaps_matching_orphans_before_spawn(project_env, monke
     assert "SILO" not in captured["env"]
     assert "LANE" not in captured["env"]
     assert "QUAID_ADAPTER_TYPE" not in captured["env"]
+    assert "_QUAID_WRAPPER_CMD" not in captured["env"]
     assert captured["env"]["QUAID_NOW"] == "2026-03-11T05:06:07Z"
     assert "CLAUDE_PROJECT_DIR" not in captured["env"]
     assert "MEMORY_DB_PATH" not in captured["env"]
