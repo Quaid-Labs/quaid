@@ -256,12 +256,30 @@ def _apply_project_md_empty_section_edits(
         )
         content_start = match.end()
         content_end = len(updated) if next_heading is None else content_start + next_heading.start()
-        if updated[content_start:content_end].strip():
+        replace_start = content_start
+        replace_end = content_end
+        section_body = updated[content_start:content_end]
+        if section_body.strip():
+            # PROJECT.md can nest registry-managed child sections under an
+            # editable parent; filling an empty parent intro must not edit them.
+            child_heading = re.search(r"^(#{1,6})[ \t]+(.+?)[ \t]*\n", section_body, flags=re.MULTILINE)
+            if child_heading and len(child_heading.group(1)) > level:
+                direct_intro = section_body[:child_heading.start()]
+                child_section = _normalize_heading(child_heading.group(2))
+                if not direct_intro.strip() and child_section in _PROJECT_MD_MANAGED_SECTIONS:
+                    replace_end = content_start + child_heading.start()
+                else:
+                    remaining.append(edit_block)
+                    continue
+            else:
+                remaining.append(edit_block)
+                continue
+        if updated[replace_start:replace_end].strip():
             remaining.append(edit_block)
             continue
 
         replacement = "\n" + parsed["new"].strip() + "\n\n"
-        updated = updated[:content_start] + replacement + updated[content_end:]
+        updated = updated[:replace_start] + replacement + updated[replace_end:]
         applied += 1
 
     return updated, remaining, applied

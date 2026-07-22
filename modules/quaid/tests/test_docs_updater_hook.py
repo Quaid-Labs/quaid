@@ -425,6 +425,58 @@ class TestUpdateProjectDocs:
         assert "- Not for production use; livetest fixture only." in content
         assert "## Key Constraints and Decisions\n\n- Not for production use" in content
 
+    def test_project_md_empty_section_sentinel_allows_managed_child_block(
+        self, tmp_path
+    ):
+        project_dir = tmp_path / "projects" / "my-app"
+        project_dir.mkdir(parents=True)
+        doc_path = project_dir / "PROJECT.md"
+        doc_path.write_text(
+            "# Project: Demo\n\n"
+            "## Where To Learn More\n\n"
+            "### Registered Docs\n"
+            "<!-- BEGIN:REGISTERED_DOCS -->\n"
+            "| Document | Why Read It | Auto-Update |\n"
+            "|----------|-------------|-------------|\n"
+            "<!-- END:REGISTERED_DOCS -->\n\n"
+            "## Related Projects\n",
+            encoding="utf-8",
+        )
+        snapshots = [{
+            "project": "my-app",
+            "is_initial": False,
+            "diff": "diff --git a/README.md b/README.md\n+Useful details.",
+            "changes": [{"status": "M", "path": "README.md", "old_path": None}],
+        }]
+        response = (
+            "<<<EDIT\n"
+            "SECTION: Where To Learn More\n"
+            "OLD: (empty)\n"
+            "NEW: - `README.md` explains the fixture purpose.\n"
+            ">>>"
+        )
+
+        with patch("datastore.docsdb.updater.classify_doc_change") as mock_classify, \
+             patch("core.project_registry.get_project", return_value={"canonical_path": str(project_dir)}), \
+             patch("core.docs_updater_hook.is_fail_hard_enabled", return_value=True), \
+             patch("lib.llm_clients.call_deep_reasoning", return_value=(response, 0.1)):
+            mock_classify.return_value = {
+                "classification": "significant",
+                "confidence": 0.8,
+                "reasons": ["clear doc update"],
+            }
+
+            metrics = update_project_docs(snapshots)
+
+        content = doc_path.read_text(encoding="utf-8")
+        assert metrics["docs_updated"] == 1
+        assert (
+            "## Where To Learn More\n\n"
+            "- `README.md` explains the fixture purpose.\n\n"
+            "### Registered Docs\n"
+        ) in content
+        assert "<!-- BEGIN:REGISTERED_DOCS -->" in content
+
     def test_project_md_empty_section_sentinel_rejects_nonempty_section_under_fail_hard(
         self, tmp_path
     ):
