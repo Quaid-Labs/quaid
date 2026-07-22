@@ -357,6 +357,46 @@ def test_deliver_deferred_notices_skips_turn_scoped_deferred_adapters(clean_adap
     assert "Deferred notice immediate delivery skipped for turn-scoped adapter" in caplog.text
 
 
+def test_deferred_notice_capability_failure_logs_and_falls_back_when_fail_open(clean_adapter, monkeypatch, caplog):
+    queue_deferred_notice("first", kind="janitor_summary", priority="low")
+
+    def failing_get_capability(*_args, **_kwargs):
+        raise RuntimeError("capability unavailable")
+
+    monkeypatch.setattr(clean_adapter, "get_capability", failing_get_capability)
+
+    with patch("lib.runtime_context.send_notification", return_value=True) as mock_send, \
+         patch("lib.agent_notice.is_fail_hard_enabled", return_value=False), \
+         caplog.at_level("WARNING", logger="lib.agent_notice"):
+        delivered = deliver_deferred_notices(limit=10)
+
+    assert [item["kind"] for item in delivered] == ["janitor_summary"]
+    mock_send.assert_called_once()
+    requests = _read_requests(clean_adapter)
+    assert len(requests) == 1
+    assert requests[0]["status"] == "delivered"
+    assert "_uses_turn_scoped_deferred_notices failed" in caplog.text
+
+
+def test_deferred_notice_capability_failure_raises_when_failhard(clean_adapter, monkeypatch):
+    queue_deferred_notice("first", kind="janitor_summary", priority="low")
+
+    def failing_get_capability(*_args, **_kwargs):
+        raise RuntimeError("capability unavailable")
+
+    monkeypatch.setattr(clean_adapter, "get_capability", failing_get_capability)
+
+    with patch("lib.runtime_context.send_notification") as mock_send, \
+         patch("lib.agent_notice.is_fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="capability unavailable"):
+            deliver_deferred_notices(limit=10)
+
+    mock_send.assert_not_called()
+    requests = _read_requests(clean_adapter)
+    assert len(requests) == 1
+    assert requests[0]["status"] == "pending"
+
+
 def test_deliver_deferred_notices_raises_send_failure_when_failhard(clean_adapter):
     queue_deferred_notice("first", kind="janitor_summary", priority="low")
 
