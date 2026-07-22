@@ -1146,6 +1146,38 @@ class TestExtractFromTranscript:
             "Assistant: Entendido."
         )
 
+    def test_explicit_anchor_ignores_prose_hyphen_compounds_when_fact_is_normalized(self):
+        from ingest.extract import materialize_cached_extraction_payload
+
+        payload = materialize_cached_extraction_payload(
+            transcript=(
+                "User: Studio-wise: I keep the kiln wrench beside the teal clamp. "
+                "Routine-wise: I do a ten-minute cold-plunge beside the cedar screen.\n\n"
+                "Assistant: Noted."
+            ),
+            parsed_payload={
+                "chunk_assessment": "usable",
+                "facts": [
+                    {
+                        "text": "Noor keeps the kiln wrench beside the teal clamp.",
+                        "category": "fact",
+                        "speaker": "user",
+                        "domains": ["personal"],
+                        "extraction_confidence": "high",
+                        "privacy": "private",
+                    }
+                ],
+                "soul_snippets": {},
+                "journal_entries": {},
+                "project_logs": {},
+            },
+            owner_id="Noor",
+        )
+
+        texts = [fact["text"] for fact in payload["raw_facts"]]
+        assert payload["explicit_structural_anchor_facts"] == 0
+        assert texts == ["Noor keeps the kiln wrench beside the teal clamp."]
+
     def test_explicit_anchor_infers_unknown_counterpart_in_alternating_transcript(self):
         from ingest.extract import _canonicalize_explicit_anchor_transcript
 

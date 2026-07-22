@@ -1505,6 +1505,11 @@ def _is_persistable_structural_anchor(token: str) -> bool:
         return False
     if _UUID_ANCHOR_RE.fullmatch(value) or _DATE_ANCHOR_RE.fullmatch(value):
         return False
+    # Plain alphabetic compounds like "topic-wise" are prose labels, not durable
+    # exact anchors. Preserve only identifier-shaped tokens whose exact spelling
+    # materially matters if model normalization omits them.
+    if not ("_" in value or any(char.isdigit() for char in value)):
+        return False
     letters = sum(1 for char in value if char.isalpha())
     digits = sum(1 for char in value if char.isdigit())
     if letters == 0:
