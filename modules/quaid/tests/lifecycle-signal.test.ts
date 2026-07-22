@@ -852,6 +852,106 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("keeps adjacent Matrix user turns that differ only by blank-line runs", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserve-adjacent-blank-runs-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "914ee1de-65ab-465c-a978-aefddba03c3a";
+
+      const first = isolatedTest.appendPreservedTranscriptMessage(
+        sessionId,
+        "user",
+        "Please remember line one\n\n\nline two exactly.",
+        "message_received",
+      );
+      const second = isolatedTest.appendPreservedTranscriptMessage(
+        sessionId,
+        "user",
+        "Please remember line one\n\nline two exactly.",
+        "message_received",
+      );
+      expect(second).toBe(first);
+
+      const userMessages = isolatedTest.parseSessionMessagesJsonl(String(second))
+        .filter((m: any) => m.role === "user");
+      expect(userMessages).toHaveLength(2);
+      expect(userMessages.map((m: any) => m.content)).toEqual([
+        "Please remember line one\n\n\nline two exactly.",
+        "Please remember line one\n\nline two exactly.",
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
+  it("keeps adjacent Matrix user turns when standalone markdown separators are content", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserve-adjacent-hr-content-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "1e1e4e5d-85a7-4e90-b821-066515f2a2de";
+
+      const first = isolatedTest.appendPreservedTranscriptMessage(
+        sessionId,
+        "user",
+        "Please remember section A\n\n---\n\nsection B exactly.",
+        "message_received",
+      );
+      const second = isolatedTest.appendPreservedTranscriptMessage(
+        sessionId,
+        "user",
+        "Please remember section A\n\nsection B exactly.",
+        "message_received",
+      );
+      expect(second).toBe(first);
+
+      const userMessages = isolatedTest.parseSessionMessagesJsonl(String(second))
+        .filter((m: any) => m.role === "user");
+      expect(userMessages).toHaveLength(2);
+      expect(userMessages.map((m: any) => m.content)).toEqual([
+        "Please remember section A\n\n---\n\nsection B exactly.",
+        "Please remember section A\n\nsection B exactly.",
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("repairs preserved transcript with multiple separator duplicate pairs", async () => {
     const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserve-multi-pair-dedupe-"));
     const quaidHome = path.join(baseDir, ".quaid");

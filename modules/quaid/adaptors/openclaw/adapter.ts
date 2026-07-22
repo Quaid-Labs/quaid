@@ -3010,12 +3010,29 @@ function normalizeConversationTranscriptMessages(messages: any[]): NormalizedTra
 }
 
 function canonicalTranscriptMessageText(text: string): string {
-  return preprocessTranscriptText(String(text || ""))
-    .split(/\r?\n/)
-    .filter((line) => line.trim() !== "---")
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  const raw = preprocessTranscriptText(String(text || "")).trim();
+  if (!raw) return "";
+  const withoutTrailingSeparator = raw.replace(/(?:\r?\n\s*)+---\s*$/g, "").trim();
+  if (withoutTrailingSeparator === raw) return raw;
+  const canonicalLines: string[] = [];
+  let skipSeparatorTrailingBlanks = false;
+  for (const line of withoutTrailingSeparator.split(/\r?\n/)) {
+    if (line.trim() === "---") {
+      while (
+        canonicalLines.length > 0
+        && canonicalLines[canonicalLines.length - 1].trim() === ""
+      ) {
+        canonicalLines.pop();
+      }
+      if (canonicalLines.length > 0) canonicalLines.push("");
+      skipSeparatorTrailingBlanks = true;
+      continue;
+    }
+    if (skipSeparatorTrailingBlanks && line.trim() === "") continue;
+    skipSeparatorTrailingBlanks = false;
+    canonicalLines.push(line);
+  }
+  return canonicalLines.join("\n").trim();
 }
 
 function transcriptMessageDedupKey(role: string, text: string): string {
