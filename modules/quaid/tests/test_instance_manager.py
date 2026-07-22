@@ -965,6 +965,7 @@ def test_auto_provision_binds_explicit_codex_instance_to_project_dir(tmp_path, m
     monkeypatch.setenv("CODEX_PROJECT_DIR", str(project_dir))
     monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("_QUAID_WRAPPER_CMD", raising=False)
     monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
     monkeypatch.delenv("QUAID_WORKSPACE", raising=False)
 
@@ -984,6 +985,44 @@ def test_auto_provision_binds_explicit_codex_instance_to_project_dir(tmp_path, m
 
     assert os.environ.get("QUAID_INSTANCE") == explicit_instance
     assert not (tmp_path / "instances" / f"codex-{slug}" / "config.json").exists()
+
+
+def test_auto_provision_does_not_bind_explicit_instance_from_wrapper_command(tmp_path, monkeypatch):
+    from lib import adapter as adapter_mod
+    from lib.instance import instance_slug_from_project_dir
+
+    project_dir = tmp_path / "cdx-livetest"
+    project_dir.mkdir()
+    explicit_instance = "codex-quaid-a396ac195a38"
+    slug = instance_slug_from_project_dir(str(project_dir))
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setenv("QUAID_INSTANCE", explicit_instance)
+    monkeypatch.setenv("CODEX_PROJECT_DIR", str(project_dir))
+    monkeypatch.setenv("_QUAID_WRAPPER_CMD", "daemon")
+    monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
+    monkeypatch.delenv("QUAID_WORKSPACE", raising=False)
+
+    adapter_mod.reset_adapter()
+    adapter_mod._auto_provision_from_env_if_needed()
+
+    binding_path = tmp_path / "shared" / "instance-bindings" / "codex" / f"{slug}.json"
+    assert (tmp_path / "instances" / explicit_instance / "config.json").is_file()
+    assert not binding_path.exists()
+
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    adapter_mod.reset_adapter()
+    adapter_mod._auto_provision_from_env_if_needed()
+
+    derived_instance = f"codex-{slug}"
+    assert os.environ.get("QUAID_INSTANCE") == derived_instance
+    assert (tmp_path / "instances" / derived_instance / "config.json").is_file()
+    binding = json.loads(binding_path.read_text(encoding="utf-8"))
+    assert binding["instance"] == derived_instance
+    assert binding["project_dir"] == str(project_dir.resolve())
 
 
 def test_auto_provision_infers_adapter_from_manifest_prefix_for_existing_instance_env(tmp_path, monkeypatch):

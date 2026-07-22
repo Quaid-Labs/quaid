@@ -82,6 +82,13 @@ def test_quaid_cli_derives_openclaw_instance_from_agent_workspace(tmp_path: Path
     assert result.stdout.strip().endswith("/instances/openclaw-m13test/config.json")
 
 
+def test_quaid_wrapper_tags_commands_for_binding_guards() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    quaid_bin = repo_root / "quaid"
+
+    assert 'export _QUAID_WRAPPER_CMD="$CMD"' in quaid_bin.read_text(encoding="utf-8")
+
+
 def test_quaid_project_create_links_claude_code_instance_from_safe_cwd(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     quaid_bin = repo_root / "quaid"

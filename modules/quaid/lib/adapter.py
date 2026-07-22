@@ -1992,6 +1992,11 @@ def _write_project_instance_binding(
             raise
 
 
+def _can_persist_explicit_env_project_binding() -> bool:
+    """Do not let one-off `QUAID_INSTANCE=... quaid ...` invocations rebind a project."""
+    return not os.environ.get("_QUAID_WRAPPER_CMD", "").strip()
+
+
 def _auto_provision_from_env_if_needed() -> None:
     """Scaffold a default silo when QUAID_INSTANCE is set but has no config yet.
 
@@ -2104,7 +2109,10 @@ def _auto_provision_from_env_if_needed() -> None:
             binding_project_dir
             and (
                 instance_origin in {"project_env", "cwd"}
-                or not _read_project_instance_binding(home, adapter_type_hint, binding_project_dir)
+                or (
+                    _can_persist_explicit_env_project_binding()
+                    and not _read_project_instance_binding(home, adapter_type_hint, binding_project_dir)
+                )
             )
         ):
             _write_project_instance_binding(home, adapter_type_hint, binding_project_dir, instance)
