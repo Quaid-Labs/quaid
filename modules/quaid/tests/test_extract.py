@@ -1178,6 +1178,49 @@ class TestExtractFromTranscript:
         assert payload["explicit_structural_anchor_facts"] == 0
         assert texts == ["Noor keeps the kiln wrench beside the teal clamp."]
 
+    def test_explicit_anchor_preserves_hyphenated_name_identifier_without_digits(self):
+        from ingest.extract import materialize_cached_extraction_payload
+
+        payload = materialize_cached_extraction_payload(
+            transcript=(
+                "User: The archive marker Winston-Salem is taped to the kiln wrench.\n\n"
+                "Assistant: Noted."
+            ),
+            parsed_payload={
+                "chunk_assessment": "usable",
+                "facts": [
+                    {
+                        "text": "Noor keeps the kiln wrench in the archive room.",
+                        "category": "fact",
+                        "speaker": "user",
+                        "domains": ["personal"],
+                        "extraction_confidence": "high",
+                        "privacy": "private",
+                    }
+                ],
+                "soul_snippets": {},
+                "journal_entries": {},
+                "project_logs": {},
+            },
+            owner_id="Noor",
+        )
+
+        texts = [fact["text"] for fact in payload["raw_facts"]]
+        assert payload["explicit_structural_anchor_facts"] == 1
+        assert texts[0] == "The archive marker Winston-Salem is taped to the kiln wrench"
+
+    def test_persistable_structural_anchor_distinguishes_hyphenated_names_from_prose(self):
+        from ingest.extract import _is_persistable_structural_anchor
+
+        assert _is_persistable_structural_anchor("Cedar-Clamp")
+        assert _is_persistable_structural_anchor("Wi-Fi")
+        assert _is_persistable_structural_anchor("Winston-Salem")
+        assert _is_persistable_structural_anchor("walnut-umbrella-7142")
+
+        assert not _is_persistable_structural_anchor("Studio-wise")
+        assert not _is_persistable_structural_anchor("ten-minute")
+        assert not _is_persistable_structural_anchor("cold-plunge")
+
     def test_explicit_anchor_infers_unknown_counterpart_in_alternating_transcript(self):
         from ingest.extract import _canonicalize_explicit_anchor_transcript
 

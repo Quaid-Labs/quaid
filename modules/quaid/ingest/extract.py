@@ -1505,10 +1505,19 @@ def _is_persistable_structural_anchor(token: str) -> bool:
         return False
     if _UUID_ANCHOR_RE.fullmatch(value) or _DATE_ANCHOR_RE.fullmatch(value):
         return False
-    # Plain alphabetic compounds like "topic-wise" are prose labels, not durable
-    # exact anchors. Preserve only identifier-shaped tokens whose exact spelling
-    # materially matters if model normalization omits them.
-    if not ("_" in value or any(char.isdigit() for char in value)):
+    # Lowercase prose compounds like "topic-wise" are not durable exact anchors.
+    # Preserve identifier-shaped tokens whose exact spelling materially matters
+    # if model normalization omits them: digits/underscores, or hyphenated names
+    # with uppercase signal in every segment.
+    hyphen_name_shape = False
+    if "-" in value:
+        parts = value.split("-")
+        hyphen_name_shape = (
+            len(parts) >= 2
+            and all(part and any(char.isalpha() for char in part) for part in parts)
+            and all(any(char.isupper() for char in part if char.isalpha()) for part in parts)
+        )
+    if not ("_" in value or any(char.isdigit() for char in value) or hyphen_name_shape):
         return False
     letters = sum(1 for char in value if char.isalpha())
     digits = sum(1 for char in value if char.isdigit())
