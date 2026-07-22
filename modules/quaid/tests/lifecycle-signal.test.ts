@@ -727,6 +727,81 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("deduplicates preserved Matrix user turn when the native transcript catches up", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserve-catchup-dedupe-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    const sessionsDir = path.join(baseDir, ".openclaw", "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "42b776d1-a071-4188-85b6-e21072fe9a64";
+      const nativePath = path.join(sessionsDir, `${sessionId}.jsonl`);
+      const userChunk = "My R287 grinder transcript chunk should appear once in the preserved mirror.";
+
+      const preserved = isolatedTest.appendPreservedTranscriptMessage(
+        sessionId,
+        "user",
+        `${userChunk}\n\n---`,
+        "message_received",
+      );
+      expect(preserved).toBeTruthy();
+      const dedupedPreserved = isolatedTest.appendPreservedTranscriptMessage(
+        sessionId,
+        "user",
+        userChunk,
+        "embedded_prompt_build_fallback",
+      );
+      expect(dedupedPreserved).toBe(preserved);
+      expect(isolatedTest.parseSessionMessagesJsonl(String(preserved)).filter((m: any) => m.role === "user")).toHaveLength(1);
+
+      fs.writeFileSync(
+        String(preserved),
+        [
+          JSON.stringify({ type: "message", message: { role: "user", content: `${userChunk}\n\n---` } }),
+          JSON.stringify({ type: "message", message: { role: "user", content: userChunk } }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+      fs.writeFileSync(
+        nativePath,
+        [
+          JSON.stringify({ type: "message", message: { role: "user", content: userChunk } }),
+          JSON.stringify({ type: "message", message: { role: "assistant", content: "ACK" } }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const preservedAgain = isolatedTest.preserveSessionTranscript(
+        sessionId,
+        nativePath,
+        "transcript-update-mirror",
+      );
+      expect(preservedAgain).toBe(preserved);
+      const messages = isolatedTest.parseSessionMessagesJsonl(String(preservedAgain));
+      expect(messages.filter((m: any) => m.role === "user")).toHaveLength(1);
+      expect(messages.filter((m: any) => m.role === "assistant")).toHaveLength(1);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("does not overwrite richer message_received preserved transcript with shorter native transcript", async () => {
     const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserve-richer-cache-"));
     const quaidHome = path.join(baseDir, ".quaid");
@@ -763,7 +838,7 @@ describe("lifecycle signal detection", () => {
         [
           JSON.stringify({
             type: "message",
-            message: { role: "user", content: firstChunk },
+            message: { role: "user", content: `${firstChunk}\n\n---` },
           }),
           JSON.stringify({
             type: "message",

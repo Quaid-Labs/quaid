@@ -2997,6 +2997,19 @@ function normalizeConversationTranscriptMessages(messages: any[]): Array<{ role:
   return normalized;
 }
 
+function canonicalTranscriptMessageText(text: string): string {
+  return preprocessTranscriptText(String(text || ""))
+    .replace(/(?:\r?\n\s*)+---\s*$/g, "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function transcriptMessageDedupKey(role: string, text: string): string {
+  const normalizedRole = String(role || "").trim().toLowerCase();
+  const normalizedText = canonicalTranscriptMessageText(text);
+  return normalizedRole && normalizedText ? `${normalizedRole}\0${normalizedText}` : "";
+}
+
 function conversationTranscriptCharCount(messages: any[]): number {
   return normalizeConversationTranscriptMessages(messages).reduce(
     (sum, message) => sum + String(message.content || "").trim().length,
@@ -3021,7 +3034,25 @@ function shouldKeepRicherPreservedTranscript(destPath: string, sourcePath: strin
   if (!existingUserText || !sourceUserText || existingUserText.length <= sourceUserText.length) {
     return false;
   }
-  return existingUserText.includes(sourceUserText);
+  const sourceUserKeys = new Set(
+    normalizeConversationTranscriptMessages(parseSessionMessagesJsonl(sourcePath))
+      .filter((message) => message.role === "user")
+      .map((message) => transcriptMessageDedupKey(message.role, message.content))
+      .filter(Boolean),
+  );
+  const existingUserKeys = new Set(
+    normalizeConversationTranscriptMessages(parseSessionMessagesJsonl(destPath))
+      .filter((message) => message.role === "user")
+      .map((message) => transcriptMessageDedupKey(message.role, message.content))
+      .filter(Boolean),
+  );
+  const sourceCoveredByExisting = Array.from(sourceUserKeys).every((key) => existingUserKeys.has(key));
+  const existingHasDistinctExtraUserTurn = Array.from(existingUserKeys)
+    .some((key) => !sourceUserKeys.has(key));
+  if (!sourceCoveredByExisting || !existingHasDistinctExtraUserTurn) {
+    return false;
+  }
+  return true;
 }
 
 function persistHookPayloadTranscript(
@@ -3096,7 +3127,7 @@ function appendPreservedTranscriptMessage(
           const parsed = JSON.parse(last);
           const lastRole = String(parsed?.message?.role || parsed?.role || "").trim().toLowerCase();
           const lastText = String(parsed?.message?.content || parsed?.content || "").trim();
-          if (lastRole === role && lastText === text) {
+          if (transcriptMessageDedupKey(lastRole, lastText) === transcriptMessageDedupKey(role, text)) {
             sessionTranscriptPaths.set(sid, destPath);
             return destPath;
           }
