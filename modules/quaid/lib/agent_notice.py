@@ -149,6 +149,17 @@ def _uses_turn_scoped_provider_notices(adapter: Any, *, severity: str, source: s
         return False
 
 
+def _uses_turn_scoped_deferred_notices(adapter: Any) -> bool:
+    """Adapters with prompt-visible relays should not finalize notices via side-channel sends."""
+    try:
+        return adapter.get_capability("turn_scoped_deferred_notices", False) is True
+    except Exception as exc:
+        logger.warning("_uses_turn_scoped_deferred_notices failed: %s", exc)
+        if is_fail_hard_enabled():
+            raise
+        return False
+
+
 def _now_iso() -> str:
     return _now_datetime().isoformat()
 
@@ -769,6 +780,22 @@ def deliver_deferred_notices(
         channel_override=str(channel_override or ""),
     )
     if not target:
+        return []
+
+    adapter = get_adapter()
+    if _uses_turn_scoped_deferred_notices(adapter):
+        logger.warning(
+            "Deferred notice immediate delivery skipped for turn-scoped adapter %s; "
+            "pending notices will relay on the next user turn.",
+            str(adapter.adapter_id() if hasattr(adapter, "adapter_id") else type(adapter).__name__),
+        )
+        _trace_m15(
+            "deferred_notice.deliver.turn_scoped_skipped",
+            path=str(path),
+            limit=limit,
+            target_count=len(target),
+            adapter=str(adapter.adapter_id() if hasattr(adapter, "adapter_id") else ""),
+        )
         return []
 
     try:

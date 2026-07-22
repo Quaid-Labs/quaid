@@ -911,6 +911,10 @@ class TestBaseAdapterConfig:
 
 @pytest.mark.adapter_openclaw
 class TestOpenClawAdapter:
+    def test_turn_scoped_deferred_notices_enabled(self):
+        adapter = OpenClawAdapter()
+        assert adapter.get_capability("turn_scoped_deferred_notices", False) is True
+
     def test_quaid_home_from_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         adapter = OpenClawAdapter()

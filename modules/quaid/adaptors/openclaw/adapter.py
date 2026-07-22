@@ -67,6 +67,7 @@ class OpenClawAdapter(QuaidAdapter):
     ADAPTER_CONFIG = {
         "supports_compaction_control": True,
         "platform_config_scope": "openclaw",
+        "turn_scoped_deferred_notices": True,
         "turn_scoped_provider_notices": True,
         "preserve_transcript_mirror_session_prefixes": [
             "agent:main:matrix:channel:",

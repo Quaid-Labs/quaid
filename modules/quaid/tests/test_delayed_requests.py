@@ -336,6 +336,27 @@ def test_deliver_deferred_notices_marks_only_successful_sends(clean_adapter):
     assert pending_items[0]["kind"] == "janitor_summary"
 
 
+def test_deliver_deferred_notices_skips_turn_scoped_deferred_adapters(clean_adapter, monkeypatch, caplog):
+    queue_deferred_notice("first", kind="janitor_summary", priority="low")
+
+    def get_capability(key, default=None):
+        if key == "turn_scoped_deferred_notices":
+            return True
+        return default
+
+    monkeypatch.setattr(clean_adapter, "get_capability", get_capability)
+    with patch("lib.runtime_context.send_notification") as mock_send, \
+         caplog.at_level("WARNING", logger="lib.agent_notice"):
+        delivered = deliver_deferred_notices(limit=10)
+
+    assert delivered == []
+    mock_send.assert_not_called()
+    requests = _read_requests(clean_adapter)
+    assert len(requests) == 1
+    assert requests[0]["status"] == "pending"
+    assert "Deferred notice immediate delivery skipped for turn-scoped adapter" in caplog.text
+
+
 def test_deliver_deferred_notices_raises_send_failure_when_failhard(clean_adapter):
     queue_deferred_notice("first", kind="janitor_summary", priority="low")
 
