@@ -852,6 +852,117 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("repairs preserved transcript with multiple separator duplicate pairs", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserve-multi-pair-dedupe-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    const sessionsDir = path.join(baseDir, ".openclaw", "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "cbfed00e-6556-4bb5-bb63-0d7a35200817";
+      const nativePath = path.join(sessionsDir, `${sessionId}.jsonl`);
+      const preservedPath = path.join(quaidHome, "instances", "openclaw-main", "logs", "quaid", "sessions", `${sessionId}.jsonl`);
+      const chunkOne = "Chunk 1: Ginkgo checklist lives beside the monitor.";
+      const chunkTwo = "Chunk 2: Baxter keeps the orange linen notebook from Emília Rosa.";
+
+      fs.mkdirSync(path.dirname(preservedPath), { recursive: true });
+      fs.writeFileSync(
+        preservedPath,
+        [
+          JSON.stringify({ type: "message", message: { role: "user", content: `${chunkOne}\n\n---` } }),
+          JSON.stringify({ type: "message", message: { role: "user", content: chunkOne } }),
+          JSON.stringify({ type: "message", message: { role: "user", content: `${chunkTwo}\n\n---` } }),
+          JSON.stringify({ type: "message", message: { role: "user", content: chunkTwo } }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+      fs.writeFileSync(
+        nativePath,
+        [
+          JSON.stringify({ type: "message", message: { role: "user", content: chunkOne } }),
+          JSON.stringify({ type: "message", message: { role: "assistant", content: "ACK" } }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const preservedAgain = isolatedTest.preserveSessionTranscript(
+        sessionId,
+        nativePath,
+        "transcript-update-late-content",
+      );
+      expect(preservedAgain).toBe(preservedPath);
+      const userMessages = isolatedTest.parseSessionMessagesJsonl(String(preservedAgain))
+        .filter((m: any) => m.role === "user");
+      expect(userMessages.map((m: any) => m.content)).toEqual([chunkOne, chunkTwo]);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
+  it("keeps adjacent exact repeated Matrix user turns without separator artifacts", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserve-adjacent-repeat-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "b77f2aaa-6868-4885-9f0e-51b15ab5df67";
+      const repeated = "Please remember the blue latch.";
+
+      const first = isolatedTest.appendPreservedTranscriptMessage(
+        sessionId,
+        "user",
+        repeated,
+        "message_received",
+      );
+      const second = isolatedTest.appendPreservedTranscriptMessage(
+        sessionId,
+        "user",
+        repeated,
+        "message_received",
+      );
+      expect(second).toBe(first);
+
+      const userMessages = isolatedTest.parseSessionMessagesJsonl(String(second))
+        .filter((m: any) => m.role === "user");
+      expect(userMessages.map((m: any) => m.content)).toEqual([repeated, repeated]);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("does not overwrite richer message_received preserved transcript with shorter native transcript", async () => {
     const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserve-richer-cache-"));
     const quaidHome = path.join(baseDir, ".quaid");

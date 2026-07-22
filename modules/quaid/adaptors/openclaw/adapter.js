@@ -2352,9 +2352,10 @@ function preserveSessionTranscript(sessionId, preferredPath, reason) {
         existing_chars: conversationTranscriptCharCount(parseSessionMessagesJsonl(destPath)),
         source_chars: conversationTranscriptCharCount(parseSessionMessagesJsonl(sourcePath))
       });
+      rewritePreservedTranscriptDeduped(destPath, reason);
       return destPath;
     }
-    fs.copyFileSync(sourcePath, destPath);
+    copyPreservedTranscriptDedupingSeparatorPairs(sourcePath, destPath);
     sessionTranscriptPaths.set(sid, destPath);
     writeHookTrace("session_index.transcript_preserved", {
       session_id: sid,
@@ -2380,7 +2381,12 @@ function normalizeConversationTranscriptMessages(messages) {
     if (role !== "user" && role !== "assistant") continue;
     const text = preprocessTranscriptText(extractSessionMessageText(message)).trim();
     if (!text) continue;
-    normalized.push({ role, content: text });
+    const timestamp = String(message?.timestamp || "").trim();
+    normalized.push({
+      role,
+      content: text,
+      ...timestamp ? { timestamp } : {}
+    });
   }
   return normalized;
 }
@@ -2392,8 +2398,66 @@ function transcriptMessageDedupKey(role, text) {
   const normalizedText = canonicalTranscriptMessageText(text);
   return normalizedRole && normalizedText ? `${normalizedRole}\0${normalizedText}` : "";
 }
+function transcriptTextHasTrailingSeparatorArtifact(text) {
+  const raw = preprocessTranscriptText(String(text || "")).trim();
+  return Boolean(raw) && raw !== canonicalTranscriptMessageText(raw);
+}
+function shouldDedupeAdjacentTranscriptMessages(previousRole, previousText, nextRole, nextText) {
+  if (String(previousRole || "").trim().toLowerCase() !== "user") return false;
+  if (String(nextRole || "").trim().toLowerCase() !== "user") return false;
+  if (transcriptMessageDedupKey(previousRole, previousText) !== transcriptMessageDedupKey(nextRole, nextText)) {
+    return false;
+  }
+  return transcriptTextHasTrailingSeparatorArtifact(previousText) || transcriptTextHasTrailingSeparatorArtifact(nextText);
+}
+function dedupeAdjacentTranscriptMessages(messages) {
+  const deduped = [];
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const previous = deduped[deduped.length - 1];
+    if (previous && shouldDedupeAdjacentTranscriptMessages(previous.role, previous.content, message.role, message.content)) {
+      if (transcriptTextHasTrailingSeparatorArtifact(previous.content) && !transcriptTextHasTrailingSeparatorArtifact(message.content)) {
+        deduped[deduped.length - 1] = message;
+      }
+      continue;
+    }
+    deduped.push(message);
+  }
+  return deduped;
+}
+function writePreservedConversationTranscript(destPath, messages) {
+  const payload = messages.map((message) => JSON.stringify({
+    type: "message",
+    message: {
+      role: message.role,
+      content: message.content,
+      ...message.timestamp ? { timestamp: message.timestamp } : {}
+    }
+  })).join("\n") + "\n";
+  fs.writeFileSync(destPath, payload, "utf8");
+}
+function rewritePreservedTranscriptDeduped(destPath, reason) {
+  const normalized = normalizeConversationTranscriptMessages(parseSessionMessagesJsonl(destPath));
+  const deduped = dedupeAdjacentTranscriptMessages(normalized);
+  if (deduped.length === normalized.length) return;
+  writePreservedConversationTranscript(destPath, deduped);
+  writeHookTrace("session_index.transcript_preserved_deduped", {
+    reason,
+    dest_path: destPath,
+    original_messages: normalized.length,
+    deduped_messages: deduped.length
+  });
+}
+function copyPreservedTranscriptDedupingSeparatorPairs(sourcePath, destPath) {
+  const normalized = normalizeConversationTranscriptMessages(parseSessionMessagesJsonl(sourcePath));
+  const deduped = dedupeAdjacentTranscriptMessages(normalized);
+  if (!normalized.length || deduped.length === normalized.length) {
+    fs.copyFileSync(sourcePath, destPath);
+    return;
+  }
+  writePreservedConversationTranscript(destPath, deduped);
+}
 function conversationTranscriptCharCount(messages) {
-  return normalizeConversationTranscriptMessages(messages).reduce(
+  return dedupeAdjacentTranscriptMessages(normalizeConversationTranscriptMessages(messages)).reduce(
     (sum, message) => sum + String(message.content || "").trim().length,
     0
   );
@@ -2402,16 +2466,22 @@ function shouldKeepRicherPreservedTranscript(destPath, sourcePath, reason) {
   if (!destPath || !sourcePath || destPath === sourcePath || !fs.existsSync(destPath) || !fs.existsSync(sourcePath)) {
     return false;
   }
-  const existingUserText = normalizeConversationTranscriptMessages(parseSessionMessagesJsonl(destPath)).filter((message) => message.role === "user").map((message) => message.content).join("\n\n").trim();
-  const sourceUserText = normalizeConversationTranscriptMessages(parseSessionMessagesJsonl(sourcePath)).filter((message) => message.role === "user").map((message) => message.content).join("\n\n").trim();
+  const existingMessages = dedupeAdjacentTranscriptMessages(
+    normalizeConversationTranscriptMessages(parseSessionMessagesJsonl(destPath))
+  );
+  const sourceMessages = dedupeAdjacentTranscriptMessages(
+    normalizeConversationTranscriptMessages(parseSessionMessagesJsonl(sourcePath))
+  );
+  const existingUserText = existingMessages.filter((message) => message.role === "user").map((message) => message.content).join("\n\n").trim();
+  const sourceUserText = sourceMessages.filter((message) => message.role === "user").map((message) => message.content).join("\n\n").trim();
   if (!existingUserText || !sourceUserText || existingUserText.length <= sourceUserText.length) {
     return false;
   }
   const sourceUserKeys = new Set(
-    normalizeConversationTranscriptMessages(parseSessionMessagesJsonl(sourcePath)).filter((message) => message.role === "user").map((message) => transcriptMessageDedupKey(message.role, message.content)).filter(Boolean)
+    sourceMessages.filter((message) => message.role === "user").map((message) => transcriptMessageDedupKey(message.role, message.content)).filter(Boolean)
   );
   const existingUserKeys = new Set(
-    normalizeConversationTranscriptMessages(parseSessionMessagesJsonl(destPath)).filter((message) => message.role === "user").map((message) => transcriptMessageDedupKey(message.role, message.content)).filter(Boolean)
+    existingMessages.filter((message) => message.role === "user").map((message) => transcriptMessageDedupKey(message.role, message.content)).filter(Boolean)
   );
   const sourceCoveredByExisting = Array.from(sourceUserKeys).every((key) => existingUserKeys.has(key));
   const existingHasDistinctExtraUserTurn = Array.from(existingUserKeys).some((key) => !sourceUserKeys.has(key));
@@ -2424,25 +2494,19 @@ function persistHookPayloadTranscript(sessionId, messages, reason) {
   const sid = String(sessionId || "").trim();
   if (!sid) return null;
   const normalized = normalizeConversationTranscriptMessages(messages);
-  if (!normalized.length) return null;
+  const deduped = dedupeAdjacentTranscriptMessages(normalized);
+  if (!deduped.length) return null;
   const destPath = getPreservedSessionFile(sid);
-  const payload = normalized.map((message) => JSON.stringify({
-    type: "message",
-    message: {
-      role: message.role,
-      content: message.content
-    }
-  })).join("\n") + "\n";
   try {
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
-    fs.writeFileSync(destPath, payload, "utf8");
+    writePreservedConversationTranscript(destPath, deduped);
     sessionTranscriptPaths.set(sid, destPath);
     writeHookTrace("session_index.transcript_preserved_from_hook_payload", {
       session_id: sid,
       reason,
       dest_path: destPath,
-      message_count: normalized.length,
-      char_count: payload.length
+      message_count: deduped.length,
+      char_count: conversationTranscriptCharCount(deduped)
     });
     return destPath;
   } catch (err) {
@@ -2477,7 +2541,7 @@ function appendPreservedTranscriptMessage(sessionId, role, content, source) {
           const parsed = JSON.parse(last);
           const lastRole = String(parsed?.message?.role || parsed?.role || "").trim().toLowerCase();
           const lastText = String(parsed?.message?.content || parsed?.content || "").trim();
-          if (transcriptMessageDedupKey(lastRole, lastText) === transcriptMessageDedupKey(role, text)) {
+          if (shouldDedupeAdjacentTranscriptMessages(lastRole, lastText, role, text)) {
             sessionTranscriptPaths.set(sid, destPath);
             return destPath;
           }
