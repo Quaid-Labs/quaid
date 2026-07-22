@@ -17903,8 +17903,12 @@ def _temporal_date_bounds_from_values(
     start_field: str = "temporal_start",
     end_field: str = "temporal_end",
 ) -> Tuple[str, str]:
+    start_present = _temporal_value_is_present(start_value)
+    end_present = _temporal_value_is_present(end_value)
     start_parts = _temporal_date_parts_for_bounds(start_value, start_field)
     end_parts = _temporal_date_parts_for_bounds(end_value, end_field)
+    if (start_present and not start_parts) or (end_present and not end_parts):
+        return "", ""
     start = min(start_parts) if start_parts else ""
     end = max(end_parts) if end_parts else ""
     if start_parts and not end_parts:

@@ -6475,6 +6475,38 @@ class TestTimestampOverride:
         assert filtered == []
         assert "Invalid temporal value for occurred_start" in caplog.text
 
+    def test_temporal_filter_excludes_malformed_start_even_with_valid_end_without_failhard(self, caplog):
+        """A valid occurred_end must not mask a corrupted occurred_start."""
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "bad-interval",
+                "text": "The row has a corrupted occurrence start and valid end",
+                "occurred_start": "not-a-date",
+                "occurred_end": "2023-05-31T23:59:59+00:00",
+                "created_at": "2026-05-07T05:10:00",
+            },
+            {
+                "id": "good-interval",
+                "text": "The row has a valid occurrence interval",
+                "occurred_start": "2023-05-01T23:59:59+00:00",
+                "occurred_end": "2023-05-31T23:59:59+00:00",
+                "created_at": "2026-05-07T05:11:00",
+            },
+        ]
+
+        with patch.object(mg, "_is_fail_hard_mode", return_value=False), caplog.at_level("WARNING"):
+            filtered = mg._filter_recall_rows_by_date_bounds(
+                rows,
+                date_from="2023-01-01",
+                date_to="2023-12-31",
+                temporal_dimension="occurred",
+            )
+
+        assert [row["id"] for row in filtered] == ["good-interval"]
+        assert "Invalid temporal value for occurred_start" in caplog.text
+
     def test_temporal_filter_logs_undated_row_exclusion(self, caplog):
         import datastore.memorydb.memory_graph as mg
 
