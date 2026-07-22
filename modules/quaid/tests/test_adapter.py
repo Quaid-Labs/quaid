@@ -3177,6 +3177,67 @@ class TestClaudeCodeAdapter:
         with pytest.raises(OSError, match="unlink failed"):
             adapter.get_pending_context()
 
+    def test_parse_session_jsonl_strips_relayed_extraction_notice_block(self, tmp_path):
+        path = tmp_path / "claude-extraction-relay.jsonl"
+        path.write_text(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Quaid notices from session start:\n\n"
+                                    "- Memory extraction ran: 3 stored, 0 skipped, 0 edges; 27\n"
+                                    "facts stored, 36 skipped as duplicates, 3 graph edges.\n"
+                                    "- Journal entry written to USER.md: timeout markers stored in the celadon\n"
+                                    "owlet keepsake box.\n\n"
+                                    "Got the marker — m2ccc20260722021447 in the celadon owlet keepsake box."
+                                ),
+                            }
+                        ],
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        transcript = ClaudeCodeAdapter().parse_session_jsonl(path)
+
+        assert "Memory extraction ran" not in transcript
+        assert "Journal entry written" not in transcript
+        assert "Assistant: Got the marker" in transcript
+        assert "m2ccc20260722021447" in transcript
+
+    def test_parse_session_jsonl_preserves_non_extraction_quaid_notice_block(self, tmp_path):
+        path = tmp_path / "claude-operator-notice.jsonl"
+        path.write_text(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "Quaid notices:\n\n"
+                            "- Janitor has never completed successfully.\n\n"
+                            "What do you want to work on next?"
+                        ),
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        transcript = ClaudeCodeAdapter().parse_session_jsonl(path)
+
+        assert "Quaid notices:" in transcript
+        assert "Janitor has never completed successfully" in transcript
+        assert "What do you want to work on next?" in transcript
+
     def test_parse_session_jsonl_strips_local_command_wrapper_blocks(self, tmp_path):
         path = tmp_path / "claude-local-command.jsonl"
         path.write_text(

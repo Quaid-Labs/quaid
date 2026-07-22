@@ -74,6 +74,26 @@ class ClaudeCodeAdapter(QuaidAdapter):
         r"<quaid_notification>.*?</quaid_notification>",
         flags=re.DOTALL | re.IGNORECASE,
     )
+    _QUAID_RELAY_HEADER_RE = re.compile(
+        r"^\s*Quaid notices(?: from session start)?:\s*$",
+        flags=re.IGNORECASE,
+    )
+    _QUAID_EXTRACTION_RELAY_START_RE = re.compile(
+        r"^\s*(?:[-*•]\s*)?(?:\*\*)?"
+        r"(?:Memory extraction ran\b|Journal entry written to\b|\[Quaid\s+[—-]\s+Memory Extraction\b)",
+        flags=re.IGNORECASE,
+    )
+    _QUAID_EXTRACTION_RELAY_CONTINUATION_RE = re.compile(
+        r"^\s*(?:"
+        r"[-*•]\s*|"
+        r"(?:\*\*)?(?:Summary|Trigger|Journal Entries|[A-Z0-9_.-]+\.md\b|\[Quaid\s+[—-]\s+Memory Extraction)|"
+        r"[✅🔄⏭️⚠️❌📝✨]|"
+        r"↳|"
+        r"_Trigger:|"
+        r"_Sources:"
+        r")",
+        flags=re.IGNORECASE,
+    )
     _LOCAL_COMMAND_CAVEAT_RE = re.compile(
         r"<local-command-caveat>.*?</local-command-caveat>",
         flags=re.DOTALL | re.IGNORECASE,
@@ -904,6 +924,48 @@ class ClaudeCodeAdapter(QuaidAdapter):
             parts.append(f"[{timestamp}] {rendered}" if timestamp else rendered)
         return "\n\n".join(parts)
 
+    @classmethod
+    def _strip_relayed_extraction_notice_blocks(cls, text: str) -> str:
+        """Remove assistant-relayed Quaid extraction status blocks before extraction."""
+        lines = str(text or "").splitlines()
+        if not lines:
+            return ""
+
+        cleaned: list[str] = []
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            if cls._QUAID_RELAY_HEADER_RE.match(line):
+                first_notice_line = index + 1
+                while first_notice_line < len(lines) and not lines[first_notice_line].strip():
+                    first_notice_line += 1
+                if (
+                    first_notice_line < len(lines)
+                    and cls._QUAID_EXTRACTION_RELAY_START_RE.match(lines[first_notice_line])
+                ):
+                    index = first_notice_line
+                    while index < len(lines):
+                        if lines[index].strip():
+                            index += 1
+                            continue
+                        next_line = index + 1
+                        while next_line < len(lines) and not lines[next_line].strip():
+                            next_line += 1
+                        if next_line >= len(lines):
+                            index = next_line
+                            break
+                        if cls._QUAID_EXTRACTION_RELAY_CONTINUATION_RE.match(lines[next_line]):
+                            index = next_line
+                            continue
+                        index = next_line
+                        break
+                    continue
+
+            cleaned.append(line)
+            index += 1
+
+        return "\n".join(cleaned).strip()
+
     def parse_session_jsonl(self, path: Path) -> str:
         """Parse Claude Code session JSONL into a normalized transcript.
 
@@ -985,6 +1047,10 @@ class ClaudeCodeAdapter(QuaidAdapter):
                 content = content.strip()
                 if not content:
                     continue
+                if role == "assistant":
+                    content = self._strip_relayed_extraction_notice_blocks(content).strip()
+                    if not content:
+                        continue
 
                 source_type = ""
                 if bool(obj.get("isSidechain")) or str(obj.get("agentId", "")).strip():
