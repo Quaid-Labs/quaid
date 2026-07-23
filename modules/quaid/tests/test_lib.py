@@ -453,6 +453,21 @@ class TestLibConfigPaths:
             assert get_db_path() == fake_home / "db" / "main.db"
             assert get_archive_db_path() == fake_home / "db" / "archive.db"
 
+    def test_env_db_path_override_allows_env_home_without_instance(self, tmp_path):
+        from lib.config import get_db_path
+
+        db_path = tmp_path / "explicit" / "memory.db"
+        with patch.dict(
+            os.environ,
+            {
+                "QUAID_HOME": str(tmp_path / ".quaid"),
+                "QUAID_INSTANCE": "",
+                "MEMORY_DB_PATH": str(db_path),
+            },
+            clear=False,
+        ):
+            assert get_db_path() == db_path
+
     def test_env_db_path_rejects_other_instance_memory_db(self, tmp_path):
         from lib.config import get_db_path
 

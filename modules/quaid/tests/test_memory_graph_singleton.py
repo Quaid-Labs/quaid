@@ -4,6 +4,8 @@ import os
 import threading
 import time
 
+import pytest
+
 
 # Ensure plugin root is importable
 import sys
@@ -48,6 +50,35 @@ def test_get_graph_initializes_singleton_once_under_concurrency():
     finally:
         mg.MemoryGraph = old_memory_graph_cls
         mg._graph = old_graph
+
+
+def test_get_graph_requires_instance_when_home_is_set_without_instance(tmp_path, monkeypatch):
+    from lib.adapter import reset_adapter
+    import datastore.memorydb.memory_graph as mg
+
+    work_dir = tmp_path / "work"
+    quaid_home = tmp_path / ".quaid"
+    work_dir.mkdir()
+    quaid_home.mkdir()
+    old_graph = mg._graph
+    mg._graph = None
+    reset_adapter()
+    monkeypatch.chdir(work_dir)
+    monkeypatch.setenv("QUAID_HOME", str(quaid_home))
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.delenv("MEMORY_DB_PATH", raising=False)
+    monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("CODEX_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
+    try:
+        with pytest.raises(RuntimeError, match="QUAID_HOME is set but QUAID_INSTANCE is not set"):
+            mg.get_graph()
+    finally:
+        mg._graph = old_graph
+        reset_adapter()
+
+    assert not (quaid_home / "data" / "memory.db").exists()
 
 
 def test_health_repairs_missing_visible_identity_stubs(tmp_path, monkeypatch):

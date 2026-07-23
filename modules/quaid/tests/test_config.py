@@ -2467,12 +2467,27 @@ class TestLightweightLibConfig:
 
         assert get_ollama_url() == "http://localhost:11434"
 
-    def test_db_paths_use_env_home_without_instance(self, tmp_path, monkeypatch):
-        from lib.config import get_archive_db_path, get_db_path
+    @pytest.mark.parametrize(
+        ("path_func_name", "path_kind"),
+        [
+            ("get_db_path", "memory database path"),
+            ("get_session_db_path", "session database path"),
+            ("get_archive_db_path", "archive memory database path"),
+        ],
+    )
+    def test_db_paths_require_instance_when_env_home_is_set_without_instance(
+        self,
+        tmp_path,
+        monkeypatch,
+        path_func_name,
+        path_kind,
+    ):
+        import lib.config as config_mod
 
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.delenv("QUAID_INSTANCE", raising=False)
         monkeypatch.delenv("MEMORY_DB_PATH", raising=False)
+        monkeypatch.delenv("SESSION_DB_PATH", raising=False)
         monkeypatch.delenv("MEMORY_ARCHIVE_DB_PATH", raising=False)
         fake_cfg = SimpleNamespace(
             database=SimpleNamespace(
@@ -2481,10 +2496,40 @@ class TestLightweightLibConfig:
             )
         )
 
+        path_func = getattr(config_mod, path_func_name)
         with patch("config.get_config", return_value=fake_cfg), \
-             patch("lib.adapter.get_adapter", side_effect=AssertionError("adapter should not be used")):
-            assert get_db_path() == (tmp_path / "data" / "memory.db").resolve()
-            assert get_archive_db_path() == (tmp_path / "data" / "memory_archive.db").resolve()
+             patch("lib.adapter.get_adapter", side_effect=RuntimeError("No config file found")):
+            with pytest.raises(RuntimeError, match=rf"QUAID_INSTANCE is not set.*{path_kind}"):
+                path_func()
+
+    def test_db_path_derives_instance_from_project_env_before_resolving(self, tmp_path, monkeypatch):
+        from lib.adapter import reset_adapter
+        from lib.config import get_db_path
+        from lib.instance import instance_slug_from_project_dir
+
+        quaid_home = tmp_path / ".quaid"
+        project_dir = tmp_path / "cdx-project"
+        project_dir.mkdir()
+        slug = instance_slug_from_project_dir(str(project_dir))
+        instance = f"codex-{slug}"
+        instance_cfg = quaid_home / "instances" / instance / "config.json"
+        instance_cfg.parent.mkdir(parents=True)
+        instance_cfg.write_text(json.dumps({"adapter": {"type": "codex"}}), encoding="utf-8")
+        fake_cfg = SimpleNamespace(database=SimpleNamespace(path="data/memory.db"))
+
+        monkeypatch.setenv("QUAID_HOME", str(quaid_home))
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(project_dir))
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.delenv("MEMORY_DB_PATH", raising=False)
+        monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+        reset_adapter()
+        try:
+            with patch("config.get_config", return_value=fake_cfg), \
+                 patch("lib.adapter._ensure_instance_projects_bootstrapped", lambda _adapter: None):
+                assert get_db_path() == quaid_home / "instances" / instance / "data" / "memory.db"
+                assert os.environ["QUAID_INSTANCE"] == instance
+        finally:
+            reset_adapter()
 
     def test_docs_db_path_uses_memory_override_sibling(self, tmp_path, monkeypatch):
         from lib.config import get_docs_db_path

@@ -328,6 +328,28 @@ def _validated_memory_override(env_name: str) -> Path | None:
     return path
 
 
+def _ensure_instance_context_for_instance_db(path_kind: str) -> None:
+    """Require an active instance before resolving normal instance-scoped DB paths."""
+    home = os.environ.get("QUAID_HOME", "").strip()
+    if not home or os.environ.get("QUAID_INSTANCE", "").strip():
+        return
+    try:
+        from lib.adapter import get_adapter
+
+        get_adapter()
+    except Exception as exc:
+        raise RuntimeError(
+            "QUAID_HOME is set but QUAID_INSTANCE is not set; refusing to resolve "
+            f"{path_kind} without instance context. Set QUAID_INSTANCE or run from "
+            "a host project context that can derive the instance."
+        ) from exc
+    if not os.environ.get("QUAID_INSTANCE", "").strip():
+        raise RuntimeError(
+            "QUAID_HOME is set but QUAID_INSTANCE is not set; refusing to resolve "
+            f"{path_kind} without instance context. Set QUAID_INSTANCE explicitly."
+        )
+
+
 def get_db_path() -> Path:
     """Get the main memory database path.
 
@@ -336,6 +358,7 @@ def get_db_path() -> Path:
     env_path = _validated_memory_override("MEMORY_DB_PATH")
     if env_path is not None:
         return env_path
+    _ensure_instance_context_for_instance_db("memory database path")
     cfg = _get_cfg()
     raw = str(getattr(getattr(cfg, "database", None), "path", "") or "").strip() or "data/memory.db"
     p = Path(raw).expanduser()
@@ -371,6 +394,7 @@ def get_session_db_path() -> Path:
     if memory_override is not None:
         return memory_override.with_name("session.db")
 
+    _ensure_instance_context_for_instance_db("session database path")
     cfg = _get_cfg()
     raw = str(getattr(getattr(cfg, "database", None), "session_path", "") or "").strip()
     if raw:
@@ -387,6 +411,7 @@ def get_archive_db_path() -> Path:
     env_path = _validated_memory_override("MEMORY_ARCHIVE_DB_PATH")
     if env_path is not None:
         return env_path
+    _ensure_instance_context_for_instance_db("archive memory database path")
     cfg = _get_cfg()
     raw = (
         str(getattr(getattr(cfg, "database", None), "archive_path", "") or "").strip()
