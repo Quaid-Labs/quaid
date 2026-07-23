@@ -7813,7 +7813,7 @@ def _sanitize_default_recall_output_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return sanitized
 
 
-def _sanitize_rrf_telemetry_for_default_output(meta: Dict[str, Any]) -> Dict[str, Any]:
+def _sanitize_recall_meta_for_default_output(meta: Dict[str, Any]) -> Dict[str, Any]:
     """Redact raw chunk/text identities from default recall diagnostic telemetry."""
     redacted_keys: Dict[str, str] = {}
 
@@ -7830,15 +7830,6 @@ def _sanitize_rrf_telemetry_for_default_output(meta: Dict[str, Any]) -> Dict[str
         redacted_keys[value] = redacted
         return redacted
 
-    def _sanitize_value(value: Any) -> Any:
-        if isinstance(value, str):
-            return _redact_key(value)
-        if isinstance(value, list):
-            return [_sanitize_value(item) for item in value]
-        if isinstance(value, dict):
-            return {key: _sanitize_value(item) for key, item in value.items()}
-        return value
-
     def _sanitize_top_row(row: Dict[str, Any]) -> Dict[str, Any]:
         out: Dict[str, Any] = {}
         for field in _DEFAULT_RECALL_RRF_TOP_ROW_FIELDS:
@@ -7847,46 +7838,37 @@ def _sanitize_rrf_telemetry_for_default_output(meta: Dict[str, Any]) -> Dict[str
             value = row.get(field)
             if field == "key":
                 value = _redact_key(value)
-            elif field in {"source_ranks", "source_confidences", "source_weights"} and isinstance(value, dict):
-                value = dict(value)
+            elif field in {"source_ranks", "source_confidences", "source_weights"}:
+                value = _sanitize_value(value)
             out[field] = value
         return out
 
-    sanitized: Dict[str, Any] = {}
-    for key, value in dict(meta or {}).items():
-        if key == "top_rows" and isinstance(value, list):
-            sanitized[key] = [
-                _sanitize_top_row(row)
-                for row in value
-                if isinstance(row, dict)
-            ]
-            continue
-        if key == "comparison" and isinstance(value, dict):
-            comparison: Dict[str, Any] = {}
-            for comparison_key, comparison_value in value.items():
-                if comparison_key == "rrf_only_top_rows" and isinstance(comparison_value, list):
-                    comparison[comparison_key] = [
-                        _sanitize_top_row(row)
-                        for row in comparison_value
-                        if isinstance(row, dict)
-                    ]
-                else:
-                    comparison[comparison_key] = _sanitize_value(comparison_value)
-            sanitized[key] = comparison
-            continue
-        sanitized[key] = _sanitize_value(value)
-    return sanitized
+    def _sanitize_value(value: Any, *, field_name: str = "") -> Any:
+        if isinstance(value, str):
+            return _redact_key(value)
+        if isinstance(value, list):
+            if field_name in {"top_rows", "rrf_only_top_rows"}:
+                return [
+                    _sanitize_top_row(row)
+                    for row in value
+                    if isinstance(row, dict)
+                ]
+            return [_sanitize_value(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                _redact_key(key): _sanitize_value(item, field_name=str(key))
+                for key, item in value.items()
+            }
+        return value
+
+    sanitized = _sanitize_value(dict(meta or {}))
+    return sanitized if isinstance(sanitized, dict) else {}
 
 
 def _sanitize_default_recall_output_meta(meta: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not isinstance(meta, dict):
         return meta
-    sanitized = dict(meta)
-    for field in ("rrf_shadow", "rrf_fusion"):
-        value = sanitized.get(field)
-        if isinstance(value, dict):
-            sanitized[field] = _sanitize_rrf_telemetry_for_default_output(value)
-    return sanitized
+    return _sanitize_recall_meta_for_default_output(meta)
 
 
 def _prepare_recall_output_rows(

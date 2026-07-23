@@ -7741,6 +7741,8 @@ class TestSourceChunkStorage:
                         "source_type": "session_chunk",
                         "id": "sch-secret",
                         "chunk_id": "sch-secret",
+                        "debug_chunk_id": "sch-secret",
+                        "raw_excerpt": "User: raw transcript with private context",
                         "text": "User: raw transcript with private context",
                     },
                     {
@@ -7785,12 +7787,45 @@ class TestSourceChunkStorage:
                 "enabled": True,
                 "top_keys": ["session_chunk:sch-secret", "id:fact-safe"],
             },
+            "store_plan_preserved_branch_tops": {
+                "preserved": 1,
+                "rows": [
+                    {
+                        "store": "session_chunks",
+                        "confidence": 0.91,
+                        "key": "session_chunk:sch-preserved",
+                    }
+                ],
+            },
+            "preserved_shared_quoted_item_rows": {
+                "preserved": 1,
+                "rows": [
+                    {
+                        "key": "session_chunk:sch-quoted",
+                        "item_keys": ["opal", "cedar"],
+                        "confidence": 0.99,
+                    }
+                ],
+            },
+            "preserved_source_dated_fact_rows": {
+                "preserved": 1,
+                "rows": [
+                    {
+                        "key": "session_chunk:sch-dated",
+                        "fact_overlap": 2,
+                        "query_overlap": 1,
+                    }
+                ],
+            },
         }
 
         _rows, output_meta = mg._prepare_recall_output_rows([], meta, include_chunks=False)
 
         payload = json.dumps(output_meta, sort_keys=True)
         assert "sch-secret" not in payload
+        assert "sch-preserved" not in payload
+        assert "sch-quoted" not in payload
+        assert "sch-dated" not in payload
         assert "User: raw transcript" not in payload
         assert output_meta["rrf_shadow"]["top_keys"] == [
             "session_chunk:<redacted-1>",
@@ -7815,6 +7850,9 @@ class TestSourceChunkStorage:
             "session_chunk:<redacted-1>",
             "id:fact-safe",
         ]
+        assert output_meta["store_plan_preserved_branch_tops"]["rows"][0]["key"] == "session_chunk:<redacted-3>"
+        assert output_meta["preserved_shared_quoted_item_rows"]["rows"][0]["key"] == "session_chunk:<redacted-4>"
+        assert output_meta["preserved_source_dated_fact_rows"]["rows"][0]["key"] == "session_chunk:<redacted-5>"
 
     def test_include_chunks_recall_meta_preserves_rrf_shadow_chunk_provenance(self):
         """Explicit chunk evidence mode keeps diagnostic chunk identifiers intact."""
@@ -15927,6 +15965,14 @@ class TestRecallFastHookInjectContract:
         assert rows[0]["similarity"] > rows[1]["similarity"]
         assert rows[1]["store_plan_preserved_branch_top"] == "session_chunks"
         assert meta["store_plan_preserved_branch_tops"]["preserved"] == 1
+        assert meta["store_plan_preserved_branch_tops"]["rows"][0]["key"] == "session_chunk:session-archive-marker"
+
+        _output_rows, output_meta = mg._prepare_recall_output_rows([], meta, include_chunks=False)
+        output_meta_payload = json.dumps(output_meta, sort_keys=True)
+        assert "session-archive-marker" not in output_meta_payload
+        assert output_meta["store_plan_preserved_branch_tops"]["rows"][0]["key"].startswith(
+            "session_chunk:<redacted-"
+        )
 
     def test_recall_store_plan_preserves_target_date_docs_rows(self):
         import datastore.memorydb.memory_graph as mg
