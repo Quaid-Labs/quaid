@@ -2271,6 +2271,36 @@ def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
     return 0
 
 
+def _supervisor_janitor_artifact_errors(request: Dict[str, Any]) -> List[str]:
+    """Recheck completed worker artifacts so status cannot mask stale success payloads."""
+    status = str(request.get("status") or "").strip().lower()
+    if status != "completed":
+        return []
+    try:
+        from core import project_docs_supervisor
+
+        instances = project_docs_supervisor._janitor_request_started_instances(request)
+        request_started_at = str(request.get("started_at") or "").strip()
+        errors: List[str] = []
+        for instance in instances:
+            try:
+                checkpoint_status, checkpoint_error = project_docs_supervisor._janitor_checkpoint_status(
+                    instance,
+                    request_started_at=request_started_at,
+                    raise_on_error=False,
+                )
+            except Exception as exc:
+                errors.append(str(exc) or f"instance {instance} janitor checkpoint inspection failed")
+                continue
+            if checkpoint_error:
+                errors.append(checkpoint_error)
+            elif checkpoint_status != "completed":
+                errors.append(f"instance {instance} janitor checkpoint status={checkpoint_status}")
+        return errors
+    except Exception as exc:
+        return [f"janitor status artifact inspection failed: {exc}"]
+
+
 def _print_supervisor_janitor_status() -> int:
     """Print the current supervisor-owned janitor request without starting work."""
     from core import project_docs
@@ -2297,9 +2327,10 @@ def _print_supervisor_janitor_status() -> int:
         rendered = ", ".join(f"{name}={code}" for name, code in sorted(exit_codes.items()))
         print(f"[janitor] exit_codes: {rendered}")
     errors = list(request.get("errors") or [])
+    errors.extend(_supervisor_janitor_artifact_errors(request))
     for error in errors:
         print(f"[janitor] Error: {error}", file=sys.stderr)
-    return 1 if status == "failed" else 0
+    return 1 if status == "failed" or errors else 0
 
 
 @contextlib.contextmanager

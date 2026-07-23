@@ -716,13 +716,15 @@ def _janitor_checkpoint_status(
     instance: str,
     *,
     request_started_at: object = "",
+    raise_on_error: bool | None = None,
 ) -> tuple[str, Optional[str]]:
     name = validate_instance_id(instance)
     checkpoint_path = quaid_home() / "instances" / name / "logs" / "janitor" / "checkpoint-all.json"
 
     def _checkpoint_error(message: str, exc: Exception | None = None) -> tuple[str, str]:
         _LOGGER.warning(message)
-        if _fail_hard_enabled():
+        should_raise = _fail_hard_enabled() if raise_on_error is None else bool(raise_on_error)
+        if should_raise:
             raise RuntimeError(message) from exc
         return "", message
 
@@ -836,8 +838,6 @@ def _finalize_janitor_request_payload(
         if code is not None and code != 0:
             final_errors.append(f"instance {instance} janitor exited rc={code}")
             continue
-        if code == 0:
-            continue
         if code is None and int(worker_pids.get(instance, 0) or 0) > 0:
             final_errors.append(
                 f"instance {instance} janitor worker pid={int(worker_pids[instance])} is no longer active"
@@ -846,6 +846,7 @@ def _finalize_janitor_request_payload(
             checkpoint_status, checkpoint_error = _janitor_checkpoint_status(
                 instance,
                 request_started_at=request_started_at,
+                raise_on_error=False,
             )
         except Exception as exc:
             final_errors.append(str(exc) or f"instance {instance} janitor checkpoint inspection failed")

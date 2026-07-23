@@ -701,6 +701,63 @@ def test_janitor_status_returns_nonzero_for_failed_supervisor_request(monkeypatc
     assert "instance alpha janitor exited rc=1" in captured.err
 
 
+def test_janitor_status_returns_nonzero_when_completed_request_artifacts_failed(monkeypatch, tmp_path, capsys):
+    from core import project_docs, project_docs_supervisor
+    from core.lifecycle import janitor
+
+    logs_dir = tmp_path / "instances" / "alpha" / "logs"
+    checkpoint_path = logs_dir / "janitor" / "checkpoint-all.json"
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "task": "all",
+                "status": "completed",
+                "started_at": "2026-07-23T07:50:34+00:00",
+                "finished_at": "2026-07-23T07:50:35+00:00",
+                "last_completed_at": "2026-07-23T07:50:35+00:00",
+                "terminal_status": "completed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (logs_dir / "janitor-stats.json").write_text(
+        json.dumps(
+            {
+                "last_run": "2026-07-23T07:50:35+00:00",
+                "task": "all",
+                "dry_run": False,
+                "success": False,
+                "metrics": {"errors": 1},
+                "applied_changes": {},
+                "api_usage": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(project_docs_supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(project_docs_supervisor, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(
+        project_docs,
+        "read_janitor_request",
+        lambda: {
+            "request_id": "req-masked-failure",
+            "status": "completed",
+            "started_at": "2026-07-23T07:50:33+00:00",
+            "started_instances": ["alpha"],
+            "exit_codes": {"alpha": 0},
+            "errors": [],
+        },
+    )
+
+    assert janitor.main(["--status"]) == 1
+    captured = capsys.readouterr()
+    assert "Request status: completed" in captured.out
+    assert "exit_codes: alpha=0" in captured.out
+    assert "instance alpha janitor stats success=false" in captured.err
+
+
 def test_janitor_main_all_dry_run_without_instance_uses_ambient_boot_guard(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
