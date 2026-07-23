@@ -1441,6 +1441,87 @@ def test_format_project_docs_prefers_returned_chunk_project_attribution():
     assert "beacon-status.md" in context
 
 
+def test_format_project_docs_labels_multiple_returned_chunk_projects():
+    from core.interface import hooks
+
+    context = hooks._format_project_docs(
+        {
+            "project": "ambient-project",
+            "chunks": [
+                {
+                    "content": "The north pier beacon is green.",
+                    "source": "/tmp/projects/north-docs/docs/beacon-status.md",
+                    "project": "north-docs",
+                    "similarity": 0.88,
+                },
+                {
+                    "content": "The west pier beacon is amber.",
+                    "source": "/tmp/projects/west-docs/docs/beacon-status.md",
+                    "project": "west-docs",
+                    "similarity": 0.84,
+                },
+            ],
+        }
+    )
+
+    assert "[Quaid Project Docs: multiple projects]" in context
+    assert "[Quaid Project Docs: ambient-project]" not in context
+    assert "north pier beacon" in context
+    assert "west pier beacon" in context
+
+
+def test_hook_inject_docs_done_trace_uses_returned_chunk_project(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    adapter = _adapter_mock()
+    adapter.get_pending_context.return_value = ""
+    adapter.resolve_prompt_submit_signal.return_value = None
+    adapter.adapter_id.return_value = "codex"
+    adapter.get_session_path.return_value = None
+    adapter.get_sessions_dir.return_value = str(tmp_path / "sessions")
+    trace_entries = []
+
+    docs_bundle = {
+        "project": "ambient-project",
+        "chunks": [
+            {
+                "content": "The north pier beacon is green.",
+                "source": str(tmp_path / "projects" / "cross-live-docs" / "docs" / "beacon-status.md"),
+                "project": "cross-live-docs",
+                "similarity": 0.88,
+            }
+        ],
+    }
+
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("lib.adapter._ensure_instance_projects_bootstrapped", lambda _adapter: None)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
+    monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+    monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_relay_context", lambda: "")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
+    monkeypatch.setattr(hooks, "_write_hook_trace", lambda event, payload=None: trace_entries.append((event, payload or {})))
+
+    with patch("core.interface.api.recall_fast", return_value=([], None)), \
+         patch("core.interface.api.projects_search_docs", return_value=docs_bundle):
+        out, _err = _run_hook_inject(
+            {
+                "prompt": "What does the cross-live project say about the beacon?",
+                "session_id": "sess-cross-project-docs-trace",
+                "cwd": str(tmp_path),
+            },
+            monkeypatch=monkeypatch,
+        )
+
+    payload = json.loads(out)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "[Quaid Project Docs: cross-live-docs]" in context
+    docs_done = [payload for event, payload in trace_entries if event == "hook.inject.docs_done"][-1]
+    assert docs_done["project"] == "cross-live-docs"
+    assert docs_done["bundle_project"] == "ambient-project"
+    assert docs_done["chunk_projects"] == ["cross-live-docs"]
+
+
 def test_codex_stop_does_not_write_signal_for_regular_turn(monkeypatch, tmp_path, cursor_dir):
     transcript_path = tmp_path / "rollout-test.jsonl"
     transcript_path.write_text(
