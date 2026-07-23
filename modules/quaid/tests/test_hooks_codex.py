@@ -1419,6 +1419,28 @@ def test_hook_inject_appends_scope_hint_to_project_docs(monkeypatch, tmp_path):
     assert "do not run `quaid project link`" in context
 
 
+def test_format_project_docs_prefers_returned_chunk_project_attribution():
+    from core.interface import hooks
+
+    context = hooks._format_project_docs(
+        {
+            "project": "ambient-project",
+            "chunks": [
+                {
+                    "content": "The north pier beacon is green.",
+                    "source": "/tmp/projects/cross-live-docs/docs/beacon-status.md",
+                    "project": "cross-live-docs",
+                    "similarity": 0.88,
+                }
+            ],
+        }
+    )
+
+    assert "[Quaid Project Docs: cross-live-docs]" in context
+    assert "[Quaid Project Docs: ambient-project]" not in context
+    assert "beacon-status.md" in context
+
+
 def test_codex_stop_does_not_write_signal_for_regular_turn(monkeypatch, tmp_path, cursor_dir):
     transcript_path = tmp_path / "rollout-test.jsonl"
     transcript_path.write_text(

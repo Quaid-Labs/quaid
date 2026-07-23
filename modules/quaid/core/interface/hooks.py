@@ -492,13 +492,38 @@ def _dedupe_context_sections(sections: List[str]) -> List[str]:
     return out
 
 
+def _project_docs_chunk_projects(chunks: List[Dict]) -> List[str]:
+    """Return distinct projects represented by returned docs chunks."""
+    projects: List[str] = []
+    seen: set[str] = set()
+    for chunk in chunks or []:
+        if not isinstance(chunk, dict):
+            continue
+        project = str(chunk.get("project") or "").strip()
+        if not project or project in seen:
+            continue
+        seen.add(project)
+        projects.append(project)
+    return projects
+
+
+def _project_docs_display_project(docs_bundle: Dict, chunks: List[Dict]) -> str:
+    """Prefer actual chunk project attribution over requested/ambient project."""
+    chunk_projects = _project_docs_chunk_projects(chunks)
+    if len(chunk_projects) == 1:
+        return chunk_projects[0]
+    if len(chunk_projects) > 1:
+        return "multiple projects"
+    return str((docs_bundle or {}).get("project") or "").strip()
+
+
 def _format_project_docs(docs_bundle: Dict) -> str:
     """Format injected project-doc search hits as readable context text."""
     chunks = list((docs_bundle or {}).get("chunks") or [])
     if not chunks:
         return ""
 
-    project = str((docs_bundle or {}).get("project") or "").strip()
+    project = _project_docs_display_project(docs_bundle or {}, chunks)
     heading = f"[Quaid Project Docs: {project}]" if project else "[Quaid Project Docs]"
     lines = [heading]
     seen_chunk_text: set[str] = set()
@@ -2238,12 +2263,16 @@ def hook_inject(args):
             ),
             "diagnostics": _summarize_recall_meta(recall_meta),
         })
+        docs_chunks = list((docs_bundle or {}).get("chunks") or []) if isinstance(docs_bundle, dict) else []
+        docs_chunk_projects = _project_docs_chunk_projects(docs_chunks)
         _write_hook_trace("hook.inject.docs_done", {
             "query": query[:160],
             "session_id": session_id,
             "requested_project": docs_project_hint,
-            "project": (docs_bundle or {}).get("project") if isinstance(docs_bundle, dict) else None,
-            "docs_count": len((docs_bundle or {}).get("chunks") or []) if isinstance(docs_bundle, dict) else 0,
+            "project": _project_docs_display_project(docs_bundle or {}, docs_chunks) if isinstance(docs_bundle, dict) else None,
+            "bundle_project": (docs_bundle or {}).get("project") if isinstance(docs_bundle, dict) else None,
+            "chunk_projects": docs_chunk_projects,
+            "docs_count": len(docs_chunks),
         })
 
         pending_context = _get_pending_context()
