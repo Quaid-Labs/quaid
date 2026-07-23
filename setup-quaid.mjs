@@ -5105,12 +5105,19 @@ print('created' if created else 'exists')
 
     // Keep projects/quaid/TOOLS.md domain block aligned after install.
     const syncToolsScript = path.join(pluginSrc, "scripts", "sync-tools-domain-block.py");
-    if (fs.existsSync(syncToolsScript)) {
-      python3Spawn([syncToolsScript, "--workspace", WORKSPACE], {
+    if (fs.existsSync(syncToolsScript) && resolvedInstanceId) {
+      const syncToolsResult = python3Spawn([syncToolsScript, "--workspace", WORKSPACE, "--instance", resolvedInstanceId], {
         cwd: __dirname,
-        stdio: "pipe",
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env, QUAID_HOME: WORKSPACE, QUAID_VISIBLE_HOME: VISIBLE_HOME, OPENCLAW_WORKSPACE: WORKSPACE },
       });
+      if (syncToolsResult.status !== 0) {
+        const detail = String(syncToolsResult.stderr || syncToolsResult.stdout || syncToolsResult.error?.message || "").trim();
+        log.warn(`TOOLS.md domain block sync skipped${detail ? `: ${detail}` : ""}`);
+      }
+    } else if (fs.existsSync(syncToolsScript)) {
+      log.info("Skipping TOOLS.md domain block sync until a real instance ID is known.");
     }
     s.stop(C.green("Bundled project docs ready"));
   }

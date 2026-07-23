@@ -176,6 +176,31 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("Skipping existing project docs registration until the first real instance is created.");
   });
 
+  it("installer threads real instances into TOOLS domain sync instead of silently swallowing failures", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+    const setupShellText = fs.readFileSync(path.join(repoRoot, "setup-quaid.sh"), "utf8");
+    const syncIdx = setupText.indexOf("const syncToolsScript = path.join(pluginSrc");
+    const shellSyncIdx = setupShellText.indexOf("sync-tools-domain-block.py");
+    expect(syncIdx).toBeGreaterThanOrEqual(0);
+    expect(shellSyncIdx).toBeGreaterThanOrEqual(0);
+    const syncBlock = setupText.slice(syncIdx, syncIdx + 900);
+    const shellSyncBlock = setupShellText.slice(shellSyncIdx - 250, shellSyncIdx + 550);
+
+    expect(syncBlock).toContain("const syncToolsScript = path.join(pluginSrc, \"scripts\", \"sync-tools-domain-block.py\");");
+    expect(syncBlock).toContain(
+      'const syncToolsResult = python3Spawn([syncToolsScript, "--workspace", WORKSPACE, "--instance", resolvedInstanceId], {',
+    );
+    expect(syncBlock).toContain("if (syncToolsResult.status !== 0)");
+    expect(syncBlock).toContain("syncToolsResult.error?.message");
+    expect(syncBlock).toContain("TOOLS.md domain block sync skipped");
+    expect(syncBlock).toContain("Skipping TOOLS.md domain block sync until a real instance ID is known.");
+
+    expect(shellSyncBlock).toContain('--instance "${QUAID_INSTANCE}"');
+    expect(shellSyncBlock).toContain("[domains] TOOLS.md domain block sync skipped: QUAID_INSTANCE is not set");
+    expect(shellSyncBlock).not.toContain("2>/dev/null");
+  });
+
   it("installer keeps fail_hard enabled by default", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
