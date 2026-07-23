@@ -2531,6 +2531,17 @@ class TestLightweightLibConfig:
         finally:
             reset_adapter()
 
+    def test_db_path_preserves_unrelated_adapter_resolution_errors(self, tmp_path, monkeypatch):
+        from lib.config import get_db_path
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.delenv("MEMORY_DB_PATH", raising=False)
+
+        with patch("lib.adapter.get_adapter", side_effect=RuntimeError("Ambiguous adapter resolution")):
+            with pytest.raises(RuntimeError, match="Ambiguous adapter resolution"):
+                get_db_path()
+
     def test_docs_db_path_uses_memory_override_sibling(self, tmp_path, monkeypatch):
         from lib.config import get_docs_db_path
 

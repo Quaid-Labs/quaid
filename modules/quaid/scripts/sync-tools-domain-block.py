@@ -16,6 +16,11 @@ def _plugin_root() -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sync TOOLS.md domain block")
     parser.add_argument("--workspace", default="", help="Workspace root (optional)")
+    parser.add_argument(
+        "--instance",
+        default="",
+        help="Quaid instance ID. Defaults to QUAID_INSTANCE.",
+    )
     args = parser.parse_args()
 
     root = _plugin_root()
@@ -24,8 +29,15 @@ def main() -> int:
         workspace = str(os.environ.get("QUAID_HOME", "") or os.environ.get("OPENCLAW_WORKSPACE", "")).strip()
     if not workspace:
         workspace = str(root.parent.parent)
+    instance = str(args.instance or os.environ.get("QUAID_INSTANCE", "")).strip()
+    if not instance:
+        parser.error(
+            "--instance or QUAID_INSTANCE is required; refusing to sync an "
+            "instance-scoped MemoryDB from QUAID_HOME alone"
+        )
     os.environ["QUAID_HOME"] = workspace
     os.environ["OPENCLAW_WORKSPACE"] = workspace
+    os.environ["QUAID_INSTANCE"] = instance
     sys.path.insert(0, str(root))
 
     from lib.config import get_db_path  # noqa: E402

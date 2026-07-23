@@ -337,7 +337,9 @@ def _ensure_instance_context_for_instance_db(path_kind: str) -> None:
         from lib.adapter import get_adapter
 
         get_adapter()
-    except Exception as exc:
+    except RuntimeError as exc:
+        if "No config file found" not in str(exc):
+            raise
         raise RuntimeError(
             "QUAID_HOME is set but QUAID_INSTANCE is not set; refusing to resolve "
             f"{path_kind} without instance context. Set QUAID_INSTANCE or run from "
