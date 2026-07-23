@@ -24647,7 +24647,7 @@ class TestRecallLimitEdgeCases:
                     "candidates": [
                         {
                             "project": "livetest-agentmsg-xp",
-                            "path": "/tmp/workspace/projects/livetest-agentmsg-xp",
+                            "path": "/Users/alice/work/livetest-agentmsg-xp",
                             "score": 0.91,
                         }
                     ],
@@ -24655,12 +24655,15 @@ class TestRecallLimitEdgeCases:
             },
         }
 
-        with patch.object(mg, "get_workspace_dir", return_value=Path("/tmp/workspace")):
+        with patch.object(mg.Path, "home", return_value=Path("/Users/alice")), \
+             patch.object(mg, "get_workspace_dir", return_value=Path("/Users/alice/.quaid/instances/current")):
+            payload = mg._build_docs_only_recall_json_payload(bundle, limit=5)
             mg._print_docs_bundle(bundle)
 
         rendered = capsys.readouterr().out
+        assert "~/work/livetest-agentmsg-xp" in payload["results"][0]["text"]
         assert "=== Documentation Scope Hint ===" in rendered
-        assert "Likely unlinked project candidates: livetest-agentmsg-xp (path=~/projects/livetest-agentmsg-xp)" in rendered
+        assert "Likely unlinked project candidates: livetest-agentmsg-xp (path=~/work/livetest-agentmsg-xp)" in rendered
         assert "direct file read without linking" in rendered
 
     def test_cli_docs_broker_missing_handler_respects_fail_hard(self, caplog, monkeypatch, tmp_path):

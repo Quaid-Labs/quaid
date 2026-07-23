@@ -7447,17 +7447,6 @@ def _docs_scope_hint_from_bundle(docs: Dict[str, Any]) -> Optional[Dict[str, Any
 
 
 def _docs_scope_hint_candidate_labels(scope_hint: Dict[str, Any]) -> List[str]:
-    workspace_prefix = ""
-    try:
-        workspace_prefix = str(get_workspace_dir()) + "/"
-    except Exception:
-        workspace_prefix = ""
-
-    def _display_path(value: str) -> str:
-        if workspace_prefix and value.startswith(workspace_prefix):
-            return value.replace(workspace_prefix, "~/", 1)
-        return value
-
     candidates = scope_hint.get("candidates")
     if not isinstance(candidates, list):
         return []
@@ -7475,11 +7464,33 @@ def _docs_scope_hint_candidate_labels(scope_hint: Dict[str, Any]) -> List[str]:
         if source_root:
             path_parts.append(f"source_root={source_root}")
         elif fallback_path:
-            path_parts.append(f"path={_display_path(fallback_path)}")
+            path_parts.append(f"path={_display_unlinked_project_candidate_path(fallback_path)}")
         if canonical_path and canonical_path != source_root:
             path_parts.append(f"canonical_path={canonical_path}")
         labels.append(f"{project} ({'; '.join(path_parts)})" if path_parts else project)
     return labels
+
+
+def _display_unlinked_project_candidate_path(path: Any) -> str:
+    """Return an actionable candidate path for same-operator direct file reads.
+
+    Scope hints intentionally point the agent at likely project files without
+    linking. Only collapse the current user's home directory to keep prompts
+    portable and avoid exposing usernames.
+    """
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    try:
+        home = str(Path.home()).rstrip("/")
+    except Exception:
+        home = ""
+    if home and raw == home:
+        return "~"
+    prefix = f"{home}/" if home else ""
+    if prefix and raw.startswith(prefix):
+        return f"~/{raw[len(prefix):]}"
+    return raw
 
 
 def _normalize_source_chunk_output_token_limit(max_chunk_tokens: Optional[int]) -> int:
