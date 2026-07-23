@@ -7763,6 +7763,17 @@ _DEFAULT_RECALL_RAW_PROVENANCE_FIELDS = {
 
 
 _SESSION_CHUNK_NAVIGATION_FIELDS = {"chunk_id", "session_chunk_id"}
+_DEFAULT_RECALL_META_REDACT_KEY_PREFIXES = ("session_chunk:", "source_chunk:", "text:")
+_DEFAULT_RECALL_RRF_TOP_ROW_FIELDS = (
+    "key",
+    "rank",
+    "score",
+    "source_ranks",
+    "source_confidences",
+    "source_weights",
+    "category",
+    "source_type",
+)
 
 
 def _is_session_chunk_output_row(row: Dict[str, Any]) -> bool:
@@ -7802,6 +7813,82 @@ def _sanitize_default_recall_output_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return sanitized
 
 
+def _sanitize_rrf_telemetry_for_default_output(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Redact raw chunk/text identities from default recall diagnostic telemetry."""
+    redacted_keys: Dict[str, str] = {}
+
+    def _redact_key(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if not value.startswith(_DEFAULT_RECALL_META_REDACT_KEY_PREFIXES):
+            return value
+        existing = redacted_keys.get(value)
+        if existing:
+            return existing
+        prefix = value.split(":", 1)[0] or "row"
+        redacted = f"{prefix}:<redacted-{len(redacted_keys) + 1}>"
+        redacted_keys[value] = redacted
+        return redacted
+
+    def _sanitize_value(value: Any) -> Any:
+        if isinstance(value, str):
+            return _redact_key(value)
+        if isinstance(value, list):
+            return [_sanitize_value(item) for item in value]
+        if isinstance(value, dict):
+            return {key: _sanitize_value(item) for key, item in value.items()}
+        return value
+
+    def _sanitize_top_row(row: Dict[str, Any]) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        for field in _DEFAULT_RECALL_RRF_TOP_ROW_FIELDS:
+            if field not in row:
+                continue
+            value = row.get(field)
+            if field == "key":
+                value = _redact_key(value)
+            elif field in {"source_ranks", "source_confidences", "source_weights"} and isinstance(value, dict):
+                value = dict(value)
+            out[field] = value
+        return out
+
+    sanitized: Dict[str, Any] = {}
+    for key, value in dict(meta or {}).items():
+        if key == "top_rows" and isinstance(value, list):
+            sanitized[key] = [
+                _sanitize_top_row(row)
+                for row in value
+                if isinstance(row, dict)
+            ]
+            continue
+        if key == "comparison" and isinstance(value, dict):
+            comparison: Dict[str, Any] = {}
+            for comparison_key, comparison_value in value.items():
+                if comparison_key == "rrf_only_top_rows" and isinstance(comparison_value, list):
+                    comparison[comparison_key] = [
+                        _sanitize_top_row(row)
+                        for row in comparison_value
+                        if isinstance(row, dict)
+                    ]
+                else:
+                    comparison[comparison_key] = _sanitize_value(comparison_value)
+            sanitized[key] = comparison
+            continue
+        sanitized[key] = _sanitize_value(value)
+    return sanitized
+
+
+def _sanitize_default_recall_output_meta(meta: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(meta, dict):
+        return meta
+    sanitized = dict(meta)
+    for field in ("rrf_shadow", "rrf_fusion"):
+        value = sanitized.get(field)
+        if isinstance(value, dict):
+            sanitized[field] = _sanitize_rrf_telemetry_for_default_output(value)
+    return sanitized
+
+
 def _prepare_recall_output_rows(
     rows: Any,
     meta: Optional[Dict[str, Any]],
@@ -7814,11 +7901,12 @@ def _prepare_recall_output_rows(
     max_total_chunk_tokens: Optional[int] = None,
 ) -> Tuple[Any, Optional[Dict[str, Any]]]:
     if not include_chunks:
+        output_meta = _sanitize_default_recall_output_meta(meta)
         if not isinstance(rows, list):
-            return rows, meta
+            return rows, output_meta
         output_rows: List[Any] = []
         suppress_default_session_chunks = _should_suppress_default_session_chunk_rows(
-            meta,
+            output_meta,
             suppress_session_chunk_rows=suppress_session_chunk_rows,
             respect_auto_include_meta=respect_auto_session_chunk_meta,
         )
@@ -7829,7 +7917,7 @@ def _prepare_recall_output_rows(
             if suppress_default_session_chunks and _is_session_chunk_output_row(row):
                 continue
             output_rows.append(_sanitize_default_recall_output_row(row))
-        return output_rows, meta
+        return output_rows, output_meta
     output_rows, source_chunk_meta = _attach_source_chunks_to_recall_rows(
         rows,
         max_chunk_tokens=max_chunk_tokens,

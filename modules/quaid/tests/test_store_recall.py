@@ -7721,6 +7721,132 @@ class TestSourceChunkStorage:
         assert [row["chunk_index"] for row in rows] == [4, 6]
         assert [row["text"] for row in rows] == ["First chunk", "Second chunk"]
 
+    def test_default_recall_meta_redacts_rrf_shadow_chunk_provenance(self):
+        """Shadow-RRF diagnostics must not bypass default chunk evidence gating."""
+        import datastore.memorydb.memory_graph as mg
+
+        meta = {
+            "rrf_shadow": {
+                "enabled": True,
+                "top_keys": ["session_chunk:sch-secret", "id:fact-safe", "text:User: raw transcript"],
+                "top_rows": [
+                    {
+                        "key": "session_chunk:sch-secret",
+                        "rank": 1,
+                        "score": 0.32,
+                        "source_ranks": {"session_chunks": 1},
+                        "source_confidences": {"session_chunks": 0.91},
+                        "source_weights": {"session_chunks": 1.0},
+                        "category": "session_chunk",
+                        "source_type": "session_chunk",
+                        "id": "sch-secret",
+                        "chunk_id": "sch-secret",
+                        "text": "User: raw transcript with private context",
+                    },
+                    {
+                        "key": "id:fact-safe",
+                        "rank": 2,
+                        "score": 0.18,
+                        "source_ranks": {"vector": 1},
+                        "category": "fact",
+                        "source_type": "fact",
+                        "id": "fact-safe",
+                        "text": "Readable memory fact",
+                    },
+                ],
+                "comparison": {
+                    "rrf_top_keys": ["session_chunk:sch-secret", "id:fact-safe"],
+                    "current_top_keys": ["id:fact-safe", "session_chunk:sch-secret"],
+                    "rrf_only_top_keys": ["session_chunk:sch-secret"],
+                    "current_only_top_keys": ["text:User: raw transcript"],
+                    "displacement": [
+                        {
+                            "key": "session_chunk:sch-secret",
+                            "current_rank": 2,
+                            "rrf_rank": 1,
+                            "delta": 1,
+                        }
+                    ],
+                    "rrf_only_top_rows": [
+                        {
+                            "key": "session_chunk:sch-secret",
+                            "rank": 1,
+                            "score": 0.32,
+                            "source_ranks": {"session_chunks": 1},
+                            "category": "session_chunk",
+                            "source_type": "session_chunk",
+                            "chunk_id": "sch-secret",
+                            "text": "User: raw transcript with private context",
+                        }
+                    ],
+                },
+            },
+            "rrf_fusion": {
+                "enabled": True,
+                "top_keys": ["session_chunk:sch-secret", "id:fact-safe"],
+            },
+        }
+
+        _rows, output_meta = mg._prepare_recall_output_rows([], meta, include_chunks=False)
+
+        payload = json.dumps(output_meta, sort_keys=True)
+        assert "sch-secret" not in payload
+        assert "User: raw transcript" not in payload
+        assert output_meta["rrf_shadow"]["top_keys"] == [
+            "session_chunk:<redacted-1>",
+            "id:fact-safe",
+            "text:<redacted-2>",
+        ]
+        shadow_top = output_meta["rrf_shadow"]["top_rows"][0]
+        assert shadow_top == {
+            "key": "session_chunk:<redacted-1>",
+            "rank": 1,
+            "score": 0.32,
+            "source_ranks": {"session_chunks": 1},
+            "source_confidences": {"session_chunks": 0.91},
+            "source_weights": {"session_chunks": 1.0},
+            "category": "session_chunk",
+            "source_type": "session_chunk",
+        }
+        assert output_meta["rrf_shadow"]["comparison"]["displacement"][0]["key"] == "session_chunk:<redacted-1>"
+        assert output_meta["rrf_shadow"]["comparison"]["rrf_only_top_rows"][0]["key"] == "session_chunk:<redacted-1>"
+        assert "text" not in output_meta["rrf_shadow"]["comparison"]["rrf_only_top_rows"][0]
+        assert output_meta["rrf_fusion"]["top_keys"] == [
+            "session_chunk:<redacted-1>",
+            "id:fact-safe",
+        ]
+
+    def test_include_chunks_recall_meta_preserves_rrf_shadow_chunk_provenance(self):
+        """Explicit chunk evidence mode keeps diagnostic chunk identifiers intact."""
+        import datastore.memorydb.memory_graph as mg
+
+        meta = {
+            "rrf_shadow": {
+                "enabled": True,
+                "top_keys": ["session_chunk:sch-visible"],
+                "top_rows": [
+                    {
+                        "key": "session_chunk:sch-visible",
+                        "rank": 1,
+                        "score": 0.32,
+                        "source_ranks": {"session_chunks": 1},
+                        "category": "session_chunk",
+                        "source_type": "session_chunk",
+                        "id": "sch-visible",
+                        "chunk_id": "sch-visible",
+                        "text": "User: opted-in transcript context",
+                    }
+                ],
+            }
+        }
+
+        _rows, output_meta = mg._prepare_recall_output_rows([], meta, include_chunks=True)
+
+        assert output_meta["rrf_shadow"]["top_keys"] == ["session_chunk:sch-visible"]
+        assert output_meta["rrf_shadow"]["top_rows"][0]["chunk_id"] == "sch-visible"
+        assert output_meta["rrf_shadow"]["top_rows"][0]["text"] == "User: opted-in transcript context"
+        assert output_meta["source_chunks"]["requested"] is True
+
     def test_list_source_chunks_can_return_latest_session_index(self, tmp_path):
         """Ingest can append chunks without reading an unbounded session history."""
         graph, _db_file = _make_graph(tmp_path)
