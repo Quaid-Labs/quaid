@@ -2907,6 +2907,61 @@ class TestDocsSearchFiltering:
         assert hint["candidates"][0]["source_root"] == "/tmp/workspace/projects/cross-live-test-src"
         assert hint["candidates"][0]["canonical_path"] == "/tmp/workspace/projects/cross-live-test"
 
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_bundle_scope_hint_resolves_path_when_registry_entry_is_sparse(
+        self,
+        _sim,
+        _unpack,
+        _embed,
+        tmp_path,
+    ):
+        rag = _make_rag(tmp_path)
+        rag._shared_scope_enabled = True
+
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "unlinked:0",
+                    "/tmp/workspace/projects/livetest-agentmsg-xp/docs/ember-glass.md",
+                    0,
+                    "Ember Glass means pager escalation level two.",
+                    "# Notes",
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        def _project_paths(name: str):
+            if name == "livetest-agentmsg-xp":
+                return {"home_dir": "/tmp/workspace/projects/livetest-agentmsg-xp", "source_roots": []}
+            return {"home_dir": "/tmp/workspace/projects/quaid", "source_roots": []}
+
+        with patch("datastore.docsdb.rag._linked_projects_for_current_instance", return_value=(["quaid"], True)), \
+             patch(
+                 "lib.project_registry.list_all",
+                 return_value={
+                     "quaid": {"instances": ["cc-main"]},
+                     "livetest-agentmsg-xp": {"instances": []},
+                 },
+             ), \
+             patch.object(rag, "_get_project_paths", side_effect=_project_paths), \
+             patch.object(rag, "infer_project_for_source", return_value="livetest-agentmsg-xp"):
+            bundle = rag.search_docs_bundle("what does Ember Glass mean", limit=5)
+
+        hint = ((bundle.get("telemetry") or {}).get("scope_hint") or {})
+        assert hint.get("type") == "unlinked_project_candidates"
+        assert [c["project"] for c in hint.get("candidates", [])] == ["livetest-agentmsg-xp"]
+        assert hint["candidates"][0]["path"] == "/tmp/workspace/projects/livetest-agentmsg-xp"
+        assert hint["candidates"][0]["canonical_path"] == "/tmp/workspace/projects/livetest-agentmsg-xp"
+        assert hint["candidates"][0]["source_root"] is None
+
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0])
     def test_search_docs_bundle_adds_scope_hint_when_linked_hits_are_weak(self, _embed, tmp_path):
         rag = _make_rag(tmp_path)

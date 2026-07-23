@@ -24633,6 +24633,36 @@ class TestRecallLimitEdgeCases:
         assert "canonical_path=/tmp/workspace/projects/livetest-agentmsg-xp" in rendered
         assert "Ember Glass means pager escalation level 2" not in rendered
 
+    def test_print_docs_bundle_scope_hint_includes_sparse_candidate_path(self, capsys):
+        import datastore.memorydb.memory_graph as mg
+
+        bundle = {
+            "chunks": [],
+            "project": None,
+            "project_md": None,
+            "telemetry": {
+                "scope_hint": {
+                    "type": "unlinked_project_candidates",
+                    "linked_projects": ["quaid"],
+                    "candidates": [
+                        {
+                            "project": "livetest-agentmsg-xp",
+                            "path": "/tmp/workspace/projects/livetest-agentmsg-xp",
+                            "score": 0.91,
+                        }
+                    ],
+                }
+            },
+        }
+
+        with patch.object(mg, "get_workspace_dir", return_value=Path("/tmp/workspace")):
+            mg._print_docs_bundle(bundle)
+
+        rendered = capsys.readouterr().out
+        assert "=== Documentation Scope Hint ===" in rendered
+        assert "Likely unlinked project candidates: livetest-agentmsg-xp (path=~/projects/livetest-agentmsg-xp)" in rendered
+        assert "direct file read without linking" in rendered
+
     def test_cli_docs_broker_missing_handler_respects_fail_hard(self, caplog, monkeypatch, tmp_path):
         import datastore.memorydb.memory_graph as mg
         import core.runtime.events as events

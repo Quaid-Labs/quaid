@@ -7447,6 +7447,17 @@ def _docs_scope_hint_from_bundle(docs: Dict[str, Any]) -> Optional[Dict[str, Any
 
 
 def _docs_scope_hint_candidate_labels(scope_hint: Dict[str, Any]) -> List[str]:
+    workspace_prefix = ""
+    try:
+        workspace_prefix = str(get_workspace_dir()) + "/"
+    except Exception:
+        workspace_prefix = ""
+
+    def _display_path(value: str) -> str:
+        if workspace_prefix and value.startswith(workspace_prefix):
+            return value.replace(workspace_prefix, "~/", 1)
+        return value
+
     candidates = scope_hint.get("candidates")
     if not isinstance(candidates, list):
         return []
@@ -7464,7 +7475,7 @@ def _docs_scope_hint_candidate_labels(scope_hint: Dict[str, Any]) -> List[str]:
         if source_root:
             path_parts.append(f"source_root={source_root}")
         elif fallback_path:
-            path_parts.append(f"path={fallback_path}")
+            path_parts.append(f"path={_display_path(fallback_path)}")
         if canonical_path and canonical_path != source_root:
             path_parts.append(f"canonical_path={canonical_path}")
         labels.append(f"{project} ({'; '.join(path_parts)})" if path_parts else project)

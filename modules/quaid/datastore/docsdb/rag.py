@@ -2548,6 +2548,26 @@ class DocsRAG:
             source_root = str(entry.get("source_root") or first_source_root or "").strip()
             canonical_path = str(entry.get("canonical_path") or entry.get("home_dir") or "").strip()
             project_path = source_root or canonical_path
+            if not project_path:
+                try:
+                    path_info = self._get_project_paths(project_name)
+                    canonical_path = str(path_info.get("home_dir") or "").strip()
+                    source_roots = path_info.get("source_roots", []) or []
+                    source_root = next(
+                        (str(root or "").strip() for root in source_roots if str(root or "").strip()),
+                        "",
+                    )
+                    project_path = source_root or canonical_path
+                except Exception as exc:
+                    if is_fail_hard_enabled():
+                        raise RuntimeError(
+                            f"Failed resolving unlinked docs candidate path for {project_name!r}"
+                        ) from exc
+                    logger.warning(
+                        "Failed resolving unlinked docs candidate path for %r: %s",
+                        project_name,
+                        exc,
+                    )
             out.append(
                 {
                     "project": project_name,
