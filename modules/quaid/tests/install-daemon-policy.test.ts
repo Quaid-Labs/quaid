@@ -185,7 +185,7 @@ describe("install daemon policy", () => {
     expect(syncIdx).toBeGreaterThanOrEqual(0);
     expect(shellSyncIdx).toBeGreaterThanOrEqual(0);
     const syncBlock = setupText.slice(syncIdx, syncIdx + 900);
-    const shellSyncBlock = setupShellText.slice(shellSyncIdx - 250, shellSyncIdx + 550);
+    const shellSyncBlock = setupShellText.slice(shellSyncIdx - 250, shellSyncIdx + 900);
 
     expect(syncBlock).toContain("const syncToolsScript = path.join(pluginSrc, \"scripts\", \"sync-tools-domain-block.py\");");
     expect(syncBlock).toContain(
@@ -196,7 +196,10 @@ describe("install daemon policy", () => {
     expect(syncBlock).toContain("TOOLS.md domain block sync skipped");
     expect(syncBlock).toContain("Skipping TOOLS.md domain block sync until a real instance ID is known.");
 
-    expect(shellSyncBlock).toContain('--instance "${QUAID_INSTANCE}"');
+    expect(shellSyncBlock).toContain('sync_tools_instance="${QUAID_INSTANCE:-}"');
+    expect(shellSyncBlock).toContain('if [[ -z "$sync_tools_instance" ]] && ! $IS_OPENCLAW; then');
+    expect(shellSyncBlock).toContain('sync_tools_instance="standalone"');
+    expect(shellSyncBlock).toContain('--instance "$sync_tools_instance"');
     expect(shellSyncBlock).toContain("[domains] TOOLS.md domain block sync skipped: QUAID_INSTANCE is not set");
     expect(shellSyncBlock).not.toContain("2>/dev/null");
   });

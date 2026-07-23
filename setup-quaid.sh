@@ -2033,10 +2033,14 @@ print(f'[+] Quaid project registered ({len(found)} docs)')
             export QUAID_HOME="${WORKSPACE_ROOT}"
             export CLAWDBOT_WORKSPACE="${WORKSPACE_ROOT}"
             if [[ -f "${SCRIPT_DIR}/modules/quaid/scripts/sync-tools-domain-block.py" ]]; then
-                if [[ -n "${QUAID_INSTANCE:-}" ]]; then
+                sync_tools_instance="${QUAID_INSTANCE:-}"
+                if [[ -z "$sync_tools_instance" ]] && ! $IS_OPENCLAW; then
+                    sync_tools_instance="standalone"
+                fi
+                if [[ -n "$sync_tools_instance" ]]; then
                     if ! python3 "${SCRIPT_DIR}/modules/quaid/scripts/sync-tools-domain-block.py" \
                         --workspace "${WORKSPACE_ROOT}" \
-                        --instance "${QUAID_INSTANCE}"; then
+                        --instance "$sync_tools_instance"; then
                         echo "[domains] TOOLS.md domain block sync skipped" >&2
                     fi
                 else
