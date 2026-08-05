@@ -284,7 +284,7 @@ describe("SessionTimeoutManager (cursor + source)", () => {
     const workspace = makeWorkspace("quaid-timeout-failhard-timer-");
     const source = createSourceState();
     const logs: string[] = [];
-    const asyncErrors: unknown[] = [];
+    const asyncErrors: Array<{ err: unknown; context: Record<string, unknown> }> = [];
 
     const manager = new SessionTimeoutManager({
       workspace,
@@ -294,7 +294,7 @@ describe("SessionTimeoutManager (cursor + source)", () => {
       logger: (msg: string) => logs.push(String(msg)),
       readSessionMessages: () => [],
       listSessionActivity: () => [],
-      onAsyncError: (err: unknown) => asyncErrors.push(err),
+      onAsyncError: (err: unknown, context) => asyncErrors.push({ err, context }),
       extract: async () => {
         // no-op
       },
@@ -309,9 +309,47 @@ describe("SessionTimeoutManager (cursor + source)", () => {
     await vi.advanceTimersByTimeAsync(61_000);
     await expect((manager as any).chain).resolves.toBeUndefined();
     expect(asyncErrors).toHaveLength(1);
-    expect(String((asyncErrors[0] as Error)?.message || asyncErrors[0])).toMatch(/fallback payload blocked by failHard/i);
+    expect(String((asyncErrors[0]?.err as Error)?.message || asyncErrors[0]?.err)).toMatch(/fallback payload blocked by failHard/i);
+    expect(asyncErrors[0]?.context).toMatchObject({
+      sessionId: "session-failhard-timer",
+      label: "Timeout",
+      source: "timer",
+    });
     expect(logs.some((line) => line.includes("[FAIL-HARD] extraction queue failed"))).toBe(true);
     expect(logs.join("\n")).not.toContain("suppressed unhandled rejection");
+  });
+
+  it("keeps the host alive and terminally settles a default timer failHard error", async () => {
+    vi.useFakeTimers();
+    const workspace = makeWorkspace("quaid-timeout-failhard-host-safe-");
+    const logs: string[] = [];
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 1,
+      failHardEnabled: true,
+      isBootstrapOnly: () => false,
+      logger: (msg: string) => logs.push(String(msg)),
+      readSessionMessages: () => [],
+      listSessionActivity: () => [],
+      extract: async () => {
+        // no-op
+      },
+    });
+
+    manager.onAgentEnd(
+      [{ role: "user", content: "orphaned fallback", timestamp: Date.now() }],
+      "session-host-safe",
+      { source: "transcript_update" },
+    );
+
+    await vi.advanceTimersByTimeAsync(61_000);
+    await expect((manager as any).chain).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(61_000);
+
+    expect(logs.filter((line) => line.includes("[FAIL-HARD] async error surfaced"))).toHaveLength(1);
+    expect(logs.join("\n")).toContain("session=session-host-safe");
+    expect((manager as any).pendingSessionId).toBeUndefined();
+    expect((manager as any).pendingFallbackMessages).toBeNull();
   });
 
   it("recovers only sessions that became stale within the current sweep window", async () => {

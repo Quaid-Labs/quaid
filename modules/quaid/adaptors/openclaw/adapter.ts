@@ -6353,6 +6353,18 @@ const quaidPlugin = {
           }
           console.log(msg);
         },
+        onAsyncError: (err: unknown, context) => {
+          const error = String((err as Error)?.message || err);
+          console.error(
+            `[quaid][timeout][FAIL-HARD] session operation failed session=${context.sessionId} label=${context.label}: ${error}`,
+          );
+          writeHookTrace("session_timeout.fail_hard", {
+            session_id: context.sessionId,
+            label: context.label,
+            source: context.source,
+            error,
+          });
+        },
         extract: async (_msgs: any[], sid?: string, label?: string) => {
           // Extraction now delegated to the shared Python daemon.
           // The timeout manager calls this on idle-session timeout;

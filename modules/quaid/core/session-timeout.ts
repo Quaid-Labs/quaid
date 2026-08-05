@@ -29,6 +29,11 @@ type StaleSweepState = {
 
 type TimeoutExtractor = (messages: any[], sessionId?: string, label?: string) => Promise<void>;
 type TimeoutLogger = (message: string) => void;
+type TimeoutAsyncErrorContext = {
+  sessionId: string;
+  label: string;
+  source: "timer";
+};
 
 type SessionTimeoutManagerOptions = {
   workspace: string;
@@ -42,7 +47,7 @@ type SessionTimeoutManagerOptions = {
   listSessionActivity?: () => SessionActivityRecord[];
   hasPendingSessionNotes?: (sessionId: string) => boolean;
   shouldSkipText?: (text: string) => boolean;
-  onAsyncError?: (err: unknown) => void;
+  onAsyncError?: (err: unknown, context: TimeoutAsyncErrorContext) => void;
 };
 type AgentEndMeta = {
   source?: string;
@@ -203,7 +208,7 @@ export class SessionTimeoutManager {
   private readSessionMessagesSource: (sessionId: string) => any[];
   private listSessionActivitySource: () => SessionActivityRecord[];
   private shouldSkipText?: (text: string) => boolean;
-  private onAsyncError: (err: unknown) => void;
+  private onAsyncError: (err: unknown, context: TimeoutAsyncErrorContext) => void;
   private hasPendingSessionNotesSource: (sessionId: string) => boolean;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pendingFallbackMessages: any[] | null = null;
@@ -230,10 +235,11 @@ export class SessionTimeoutManager {
     this.isBootstrapOnly = opts.isBootstrapOnly;
     this.logger = opts.logger;
     this.shouldSkipText = opts.shouldSkipText;
-    this.onAsyncError = opts.onAsyncError || ((err: unknown) => {
-      setTimeout(() => {
-        throw err instanceof Error ? err : new Error(String(err));
-      }, 0);
+    this.onAsyncError = opts.onAsyncError || ((err: unknown, context: TimeoutAsyncErrorContext) => {
+      safeLog(
+        this.logger,
+        `[memory][timeout][FAIL-HARD] async error surfaced session=${context.sessionId} label=${context.label}: ${String((err as Error)?.message || err)}`,
+      );
     });
     this.readSessionMessagesSource = (sessionId: string) => {
       try {
@@ -721,7 +727,11 @@ export class SessionTimeoutManager {
             this.logger,
             `[memory][timeout][FAIL-HARD] extraction queue failed: ${message}`,
           );
-          this.onAsyncError(err);
+          this.onAsyncError(err, {
+            sessionId,
+            label: "Timeout",
+            source: "timer",
+          });
         } else {
           safeLog(this.logger, `[memory][timeout] extraction queue failed: ${message}`);
         }

@@ -162,10 +162,11 @@ class SessionTimeoutManager {
     this.isBootstrapOnly = opts.isBootstrapOnly;
     this.logger = opts.logger;
     this.shouldSkipText = opts.shouldSkipText;
-    this.onAsyncError = opts.onAsyncError || ((err) => {
-      setTimeout(() => {
-        throw err instanceof Error ? err : new Error(String(err));
-      }, 0);
+    this.onAsyncError = opts.onAsyncError || ((err, context) => {
+      safeLog(
+        this.logger,
+        `[memory][timeout][FAIL-HARD] async error surfaced session=${context.sessionId} label=${context.label}: ${String(err?.message || err)}`
+      );
     });
     this.readSessionMessagesSource = (sessionId) => {
       try {
@@ -587,7 +588,11 @@ class SessionTimeoutManager {
           this.logger,
           `[memory][timeout][FAIL-HARD] extraction queue failed: ${message}`
         );
-        this.onAsyncError(err);
+        this.onAsyncError(err, {
+          sessionId,
+          label: "Timeout",
+          source: "timer"
+        });
       } else {
         safeLog(this.logger, `[memory][timeout] extraction queue failed: ${message}`);
       }

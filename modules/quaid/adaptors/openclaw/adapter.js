@@ -5152,6 +5152,18 @@ const quaidPlugin = {
           }
           console.log(msg);
         },
+        onAsyncError: (err, context) => {
+          const error = String(err?.message || err);
+          console.error(
+            `[quaid][timeout][FAIL-HARD] session operation failed session=${context.sessionId} label=${context.label}: ${error}`
+          );
+          writeHookTrace("session_timeout.fail_hard", {
+            session_id: context.sessionId,
+            label: context.label,
+            source: context.source,
+            error
+          });
+        },
         extract: async (_msgs, sid, label) => {
           if (sid) {
             writeDaemonSignal(sid, "timeout", {
