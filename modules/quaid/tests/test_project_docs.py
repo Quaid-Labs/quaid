@@ -2870,7 +2870,11 @@ def test_stop_worker_tolerates_process_exit_race(project_env, monkeypatch):
         project="demo",
     )
     monkeypatch.setattr(project_docs, "_pid_record_matches", lambda record, **_kwargs: True)
-    monkeypatch.setattr(project_docs, "_matching_worker_pids", lambda _project: [])
+    monkeypatch.setattr(
+        project_docs,
+        "_matching_worker_pids",
+        lambda _project: (_ for _ in ()).throw(AssertionError("valid pid record must bypass ps scan")),
+    )
     monkeypatch.setattr(project_docs, "_pid_alive", lambda pid: False)
     monkeypatch.setattr(project_docs, "reap_child_processes", lambda: 0)
 

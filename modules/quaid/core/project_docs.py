@@ -2583,9 +2583,8 @@ def stop_worker(project: str) -> bool:
         targets: List[int] = []
         if record and _pid_record_matches(record, role=WORKER_ROLE, project=name):
             targets.append(pid)
-        for match_pid in _matching_worker_pids(name):
-            if match_pid not in targets:
-                targets.append(match_pid)
+        if not targets:
+            targets.extend(_matching_worker_pids(name))
         if not targets:
             if record:
                 _unlink_pid_record_if_matches(worker_pid_path(name), pid=pid, token=record.get("token"))
