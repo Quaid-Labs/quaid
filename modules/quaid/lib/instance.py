@@ -19,6 +19,7 @@ import hashlib
 import logging
 import re
 import shutil
+import time
 from pathlib import Path
 from typing import Any, Callable, List, Optional
 
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 _INSTANCE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
 _PROJECT_INSTANCE_SLUG_MAX_LENGTH = 52
 _PROJECT_INSTANCE_SLUG_HASH_LENGTH = 12
+_INSTANCE_BIND_POINT_RESIDUE_MIN_AGE_SECONDS = 5.0
 
 RESERVED_INSTANCE_NAMES = frozenset({
     "shared", "projects", "config", "data", "logs", "temp", "tmp",
@@ -336,7 +338,9 @@ def _is_stale_openclaw_agent_instance(name: str, instance_dir: Path) -> bool:
         return False
     raw_adapter_type = _raw_adapter_type(instance_dir)
     if raw_adapter_type != adapter_id and not (
-        not raw_adapter_type and _is_empty_instance_bind_point_residue(instance_dir)
+        not raw_adapter_type
+        and _is_empty_instance_bind_point_residue(instance_dir)
+        and _is_settled_instance_bind_point_residue(instance_dir)
     ):
         return False
     labels, roots, has_authoritative_list = _active_openclaw_agent_labels()
@@ -510,6 +514,15 @@ def _is_empty_instance_bind_point_residue(instance_dir: Path) -> bool:
         return False
 
 
+def _is_settled_instance_bind_point_residue(instance_dir: Path) -> bool:
+    """Avoid pruning a new silo between its first mkdir and config write."""
+    try:
+        age_seconds = time.time() - instance_dir.stat().st_mtime
+    except OSError:
+        return False
+    return age_seconds >= _INSTANCE_BIND_POINT_RESIDUE_MIN_AGE_SECONDS
+
+
 def prune_livetest_instance_residues(home: Optional[Path] = None) -> List[str]:
     """Delete empty configless instance bind-points in the livetest harness."""
     if not _livetest_harness_enabled():
@@ -533,7 +546,10 @@ def prune_livetest_instance_residues(home: Optional[Path] = None) -> List[str]:
         target = entry.resolve()
         if target.parent != root or target.name != name:
             continue
-        if not _is_empty_instance_bind_point_residue(entry):
+        if not (
+            _is_empty_instance_bind_point_residue(entry)
+            and _is_settled_instance_bind_point_residue(entry)
+        ):
             continue
         try:
             shutil.rmtree(target)

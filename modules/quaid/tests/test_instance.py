@@ -345,6 +345,9 @@ class TestListInstances:
         retired = []
         completed = []
 
+        assert stale_openclaw_agent_instances(tmp_path) == []
+        old_mtime = stale.stat().st_mtime - 10.0
+        os.utime(stale, (old_mtime, old_mtime))
         assert stale_openclaw_agent_instances(tmp_path) == ["openclaw-m13test"]
         assert prune_stale_openclaw_agent_instances(
             tmp_path,
@@ -482,6 +485,8 @@ class TestListInstances:
         real = tmp_path / "instances" / "codex-m13test"
         (real / "data" / "extraction-signals").mkdir(parents=True)
         (real / "config.json").write_text(json.dumps({"adapter": {"type": "codex"}}), encoding="utf-8")
+        old_mtime = residue.stat().st_mtime - 10.0
+        os.utime(residue, (old_mtime, old_mtime))
 
         with pytest.raises(InstanceError, match="livetest harness"):
             prune_livetest_instance_residues(tmp_path)
