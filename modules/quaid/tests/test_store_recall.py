@@ -7118,7 +7118,7 @@ class TestTimestampOverride:
                 "datastore.memorydb.memory_graph",
                 "recall",
                 "json-output-probe",
-                '{"stores":["docs"],"limit":1}',
+                '{"stores":["vector"],"session_id":"json-output-probe-session","limit":1}',
                 "--json",
             ],
             cwd=str(module_root),
@@ -23663,6 +23663,7 @@ class TestRecallLimitEdgeCases:
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph.get_logs_dir", return_value=logs_dir), \
              patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q), \
+             patch("datastore.memorydb.memory_graph._ollama_healthy", return_value=True), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             created = [
                 mg.store("User has a sister named Diana", owner_id="quaid"),
