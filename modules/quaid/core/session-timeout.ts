@@ -727,16 +727,31 @@ export class SessionTimeoutManager {
             this.logger,
             `[memory][timeout][FAIL-HARD] extraction queue failed: ${message}`,
           );
-          this.onAsyncError(err, {
-            sessionId,
-            label: "Timeout",
-            source: "timer",
-          });
+          try {
+            this.onAsyncError(err, {
+              sessionId,
+              label: "Timeout",
+              source: "timer",
+            });
+          } catch (reportErr: unknown) {
+            safeLog(
+              this.logger,
+              `[memory][timeout][FAIL-HARD] async error reporter failed: ${String((reportErr as Error)?.message || reportErr)}`,
+            );
+          }
         } else {
           safeLog(this.logger, `[memory][timeout] extraction queue failed: ${message}`);
         }
       });
-    this.chain = work.then(() => undefined);
+    this.chain = work.then(
+      () => undefined,
+      (err: unknown) => {
+        safeLog(
+          this.logger,
+          `[memory][timeout][FAIL-HARD] async queue containment failed: ${String((err as Error)?.message || err)}`,
+        );
+      },
+    );
   }
 
   private cursorPath(sessionId: string): string {

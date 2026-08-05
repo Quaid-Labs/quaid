@@ -352,6 +352,39 @@ describe("SessionTimeoutManager (cursor + source)", () => {
     expect((manager as any).pendingFallbackMessages).toBeNull();
   });
 
+  it("keeps the host alive when the timer failHard reporter throws", async () => {
+    vi.useFakeTimers();
+    const workspace = makeWorkspace("quaid-timeout-failhard-reporter-throws-");
+    const logs: string[] = [];
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 1,
+      failHardEnabled: true,
+      isBootstrapOnly: () => false,
+      logger: (msg: string) => logs.push(String(msg)),
+      readSessionMessages: () => [],
+      listSessionActivity: () => [],
+      onAsyncError: () => {
+        throw new Error("reporter unavailable");
+      },
+      extract: async () => {
+        // no-op
+      },
+    });
+
+    manager.onAgentEnd(
+      [{ role: "user", content: "orphaned fallback", timestamp: Date.now() }],
+      "session-reporter-throws",
+      { source: "transcript_update" },
+    );
+
+    await vi.advanceTimersByTimeAsync(61_000);
+    await expect((manager as any).chain).resolves.toBeUndefined();
+
+    expect(logs.some((line) => line.includes("[FAIL-HARD] extraction queue failed"))).toBe(true);
+    expect(logs.some((line) => line.includes("async error reporter failed: reporter unavailable"))).toBe(true);
+  });
+
   it("recovers only sessions that became stale within the current sweep window", async () => {
     const workspace = makeWorkspace("quaid-timeout-stale-window-");
     const source = createSourceState();

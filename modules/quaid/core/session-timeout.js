@@ -588,16 +588,31 @@ class SessionTimeoutManager {
           this.logger,
           `[memory][timeout][FAIL-HARD] extraction queue failed: ${message}`
         );
-        this.onAsyncError(err, {
-          sessionId,
-          label: "Timeout",
-          source: "timer"
-        });
+        try {
+          this.onAsyncError(err, {
+            sessionId,
+            label: "Timeout",
+            source: "timer"
+          });
+        } catch (reportErr) {
+          safeLog(
+            this.logger,
+            `[memory][timeout][FAIL-HARD] async error reporter failed: ${String(reportErr?.message || reportErr)}`
+          );
+        }
       } else {
         safeLog(this.logger, `[memory][timeout] extraction queue failed: ${message}`);
       }
     });
-    this.chain = work.then(() => void 0);
+    this.chain = work.then(
+      () => void 0,
+      (err) => {
+        safeLog(
+          this.logger,
+          `[memory][timeout][FAIL-HARD] async queue containment failed: ${String(err?.message || err)}`
+        );
+      }
+    );
   }
   cursorPath(sessionId) {
     const safeSessionId = String(sessionId || "unknown").replace(/[^a-zA-Z0-9_-]/g, "_");
