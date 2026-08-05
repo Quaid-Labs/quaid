@@ -9211,7 +9211,7 @@ class TestSourceChunkStorage:
         mg._print_recall_results([
             {
                 "id": "sch_56fdafff16d463126d6cc67ee56eae24",
-                "text": "[session_chunk] sess#46: orange linen notebook context",
+                "text": "[session_chunk] sess#46: cedar workshop ledger context",
                 "category": "session_chunk",
                 "source_type": "session_chunk",
                 "via": "session_chunks",
@@ -9225,7 +9225,7 @@ class TestSourceChunkStorage:
 
         out = capsys.readouterr().out
         assert "[0.98] [session_chunk][C:0.7]" in out
-        assert "orange linen notebook context" in out
+        assert "cedar workshop ledger context" in out
         assert "|ID:" not in out
         assert "|T:" not in out
         assert "|P:" not in out
