@@ -39,14 +39,19 @@ def test_docs_cli_dispatches_registry_to_docs_registry(monkeypatch) -> None:
 
     calls = []
 
-    def fake_main(argv) -> int:
-        calls.append(list(argv))
+    def fake_main(argv, *, queue_async_indexing) -> int:
+        calls.append((list(argv), queue_async_indexing))
         return 0
 
     monkeypatch.setattr(registry, "main", fake_main)
 
     assert docs_cli.main(["registry", "register", "/tmp/COPPER_BASIN.md", "--project", "xp"]) == 0
-    assert calls == [["register", "/tmp/COPPER_BASIN.md", "--project", "xp"]]
+    assert calls == [
+        (
+            ["register", "/tmp/COPPER_BASIN.md", "--project", "xp"],
+            docs_cli._queue_async_indexing_after_register,
+        ),
+    ]
 
 
 def test_docs_cli_update_without_project_routes_to_stale_updater(monkeypatch) -> None:
