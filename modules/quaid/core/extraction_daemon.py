@@ -60,6 +60,7 @@ DAEMON_EXTRACT_CHUNK_MAX_TOKENS = 900
 DAEMON_EXTRACT_CHUNK_RATIO = 0.8
 DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS = 120.0
 DAEMON_EXTRACT_CODEX_OAUTH_LLM_TIMEOUT_SECONDS = 600.0
+_DAEMON_PROVIDER_ID_ALIASES = {"openai-codex": "openai"}
 DAEMON_EXTRACT_LLM_SLOT_WAIT_SECONDS = 1800.0
 DAEMON_EXTRACT_LLM_MAX_RETRIES = 0
 DAEMON_SIGNAL_TO_LIFECYCLE_EVENT = {
@@ -5498,24 +5499,25 @@ def _normalize_daemon_provider_id(adapter: Any, provider: str) -> str:
                 return normalized
         except Exception as exc:
             logger.debug("daemon extraction provider-id normalization failed for %r: %s", raw, exc)
-    return {"openai-codex": "openai"}.get(raw, raw)
+    return _DAEMON_PROVIDER_ID_ALIASES.get(raw, raw)
 
 
-def _adapter_can_use_codex_oauth_provider(adapter: Any) -> bool:
+def _adapter_supports_deep_provider_probe(adapter: Any) -> bool:
     if adapter is None:
         return False
-    module_name = str(getattr(adapter.__class__, "__module__", "") or "")
-    class_name = str(getattr(adapter.__class__, "__name__", "") or "")
-    return (
-        module_name.startswith("adaptors.codex.")
-        or module_name.startswith("adaptors.openclaw.")
-        or class_name in {"CodexAdapter", "OpenClawAdapter"}
-    )
+    capability_getter = getattr(adapter, "get_capability", None)
+    if not callable(capability_getter):
+        return False
+    try:
+        return bool(capability_getter("supports_deep_provider_probe", False))
+    except Exception as exc:
+        logger.debug("daemon extraction provider-probe capability lookup failed: %s", exc)
+        return False
 
 
-def _adapter_config_selects_codex_oauth_provider(adapter: Any) -> bool:
+def _adapter_config_selects_extended_timeout_provider(adapter: Any) -> bool:
     """Infer Codex OAuth transport from config without requiring credentials."""
-    if not _adapter_can_use_codex_oauth_provider(adapter):
+    if not _adapter_supports_deep_provider_probe(adapter):
         return False
     try:
         from config import get_config
@@ -5538,10 +5540,10 @@ def _adapter_config_selects_codex_oauth_provider(adapter: Any) -> bool:
     return False
 
 
-def _adapter_instance_is_codex_oauth_provider(adapter: Any) -> bool:
-    if _adapter_config_selects_codex_oauth_provider(adapter):
+def _adapter_instance_uses_extended_timeout_provider(adapter: Any) -> bool:
+    if _adapter_config_selects_extended_timeout_provider(adapter):
         return True
-    if not _adapter_can_use_codex_oauth_provider(adapter):
+    if not _adapter_supports_deep_provider_probe(adapter):
         return False
     provider_getter = getattr(adapter, "get_llm_provider", None) if adapter is not None else None
     if not callable(provider_getter):
@@ -5550,7 +5552,8 @@ def _adapter_instance_is_codex_oauth_provider(adapter: Any) -> bool:
         from lib.providers import OpenAICodexOAuthLLMProvider
 
         provider = provider_getter(model_tier="deep")
-        return isinstance(provider, OpenAICodexOAuthLLMProvider)
+        provider_type = OpenAICodexOAuthLLMProvider
+        return isinstance(provider, provider_type)
     except Exception as exc:
         # Provider construction may require live credentials. Extraction itself
         # remains the failHard boundary; timeout calibration falls back to base.
@@ -5574,7 +5577,7 @@ def _daemon_extract_llm_timeout_default(
         except Exception as exc:
             logger.debug("daemon extraction adapter peek failed while choosing timeout default: %s", exc)
             active_adapter = None
-    if _adapter_instance_is_codex_oauth_provider(active_adapter):
+    if _adapter_instance_uses_extended_timeout_provider(active_adapter):
         timeout = max(base, DAEMON_EXTRACT_CODEX_OAUTH_LLM_TIMEOUT_SECONDS)
         logger.info(
             "daemon extraction LLM timeout calibrated for OpenAICodexOAuthLLMProvider: %.1fs",

@@ -1698,7 +1698,8 @@ def test_daemon_extract_llm_timeout_uses_codex_oauth_provider_default(monkeypatc
     )
 
     class _CodexAdapter:
-        __module__ = "adaptors.codex.adapter"
+        def get_capability(self, key, default=None):
+            return True if key == "supports_deep_provider_probe" else default
 
         def get_llm_provider(self, model_tier=None):
             _ = model_tier
@@ -1707,6 +1708,14 @@ def test_daemon_extract_llm_timeout_uses_codex_oauth_provider_default(monkeypatc
     assert extraction_daemon._daemon_extract_llm_timeout_seconds(
         adapter=_CodexAdapter(),
     ) == pytest.approx(600.0)
+
+
+def test_daemon_extract_llm_timeout_probe_capability_is_adapter_owned():
+    from adaptors.codex.adapter import CodexAdapter
+    from adaptors.openclaw.adapter import OpenClawAdapter
+
+    assert CodexAdapter.ADAPTER_CONFIG["supports_deep_provider_probe"] is True
+    assert OpenClawAdapter.ADAPTER_CONFIG["supports_deep_provider_probe"] is True
 
 
 def test_daemon_extract_llm_timeout_keeps_base_default_for_non_codex_provider(monkeypatch):
@@ -1742,6 +1751,23 @@ def test_daemon_extract_llm_timeout_no_adapter_is_fail_hard_safe(monkeypatch):
     assert extraction_daemon._daemon_extract_llm_timeout_seconds(adapter=None) == pytest.approx(120.0)
 
 
+def test_daemon_extract_llm_timeout_capability_lookup_error_is_fail_hard_safe(monkeypatch):
+    monkeypatch.delenv("QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    class _CapabilityErrorAdapter:
+        def get_capability(self, _key, _default=None):
+            raise RuntimeError("capability unavailable")
+
+        def get_llm_provider(self, model_tier=None):
+            _ = model_tier
+            raise AssertionError("provider lookup must stay gated by capability")
+
+    assert extraction_daemon._daemon_extract_llm_timeout_seconds(
+        adapter=_CapabilityErrorAdapter(),
+    ) == pytest.approx(120.0)
+
+
 def test_daemon_extract_llm_timeout_provider_lookup_error_is_fail_hard_safe(monkeypatch):
     import config as config_mod
 
@@ -1760,7 +1786,8 @@ def test_daemon_extract_llm_timeout_provider_lookup_error_is_fail_hard_safe(monk
     )
 
     class _CodexAdapter:
-        __module__ = "adaptors.codex.adapter"
+        def get_capability(self, key, default=None):
+            return True if key == "supports_deep_provider_probe" else default
 
         def get_llm_provider(self, model_tier=None):
             _ = model_tier

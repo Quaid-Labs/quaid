@@ -65,6 +65,7 @@ class CodexAdapter(QuaidAdapter):
     ADAPTER_CONFIG = {
         "deferred_notice_relay": True,
         "deferred_notice_relay_immediate": True,
+        "supports_deep_provider_probe": True,
         "inject_tool_output_trace": True,
         "context_refresh_strategy": "turn_based",
         "context_refresh_guard": {
