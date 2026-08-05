@@ -153,7 +153,7 @@ def test_maintenance_diagnostic_fallbacks_log(monkeypatch, caplog):
         with patch.object(maintenance_ops, "_cfg", SimpleNamespace(users=_BrokenUsers())), \
              patch.object(maintenance_ops, "resolve_owner_person", return_value=SimpleNamespace(name="")):
             assert maintenance_ops._owner_display_name() == "the user"
-            assert maintenance_ops._owner_full_name("solomon-steadman") == "the user"
+            assert maintenance_ops._owner_full_name("example-user") == "the user"
 
         assert maintenance_ops._load_node_attributes_blob("{bad json") == {}
 
