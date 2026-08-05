@@ -7987,9 +7987,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     const runtimeEvents = (api as any)?.runtime?.events;
     if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
       runtimeEvents.onSessionTranscriptUpdate((update: any) => {
+        const sessionFile = String(update?.sessionFile || "").trim();
+        if (!sessionFile || !fs.existsSync(sessionFile)) return;
+        ensureMainDatastoreBootstrapOnHookCall();
         try {
-          const sessionFile = String(update?.sessionFile || "").trim();
-          if (!sessionFile || !fs.existsSync(sessionFile)) return;
           let transcriptUpdateSize = -1;
           try {
             transcriptUpdateSize = fs.statSync(sessionFile).size;

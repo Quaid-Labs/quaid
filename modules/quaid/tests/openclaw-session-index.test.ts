@@ -996,8 +996,18 @@ describe("openclaw session_index watcher", () => {
       [laneKey]: { sessionId: oldSessionId, updatedAt: Date.now() },
     });
 
+    const api = makeFakeApi();
     const plugin = await loadPlugin(harness);
-    plugin.register(makeFakeApi() as any);
+    plugin.register(api as any);
+
+    const beforeAgentStart = api.on.mock.calls.find((call: any[]) =>
+      call[0] === "before_agent_start" && call[2]?.name === "memory-injection"
+    )?.[1];
+    expect(typeof beforeAgentStart).toBe("function");
+    await beforeAgentStart(
+      { sessionId: oldSessionId, sessionKey: laneKey },
+      { sessionId: oldSessionId, sessionKey: laneKey },
+    );
 
     writeTranscript(newTranscript, ["second session is now active"]);
     writeJson(join(harness.sessionsDir, "sessions.json"), {

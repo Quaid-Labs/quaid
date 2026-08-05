@@ -6572,9 +6572,10 @@ ${String(event.prependSystemContext)}` : deferredNoticePromptContext;
     const runtimeEvents = api?.runtime?.events;
     if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
       runtimeEvents.onSessionTranscriptUpdate((update) => {
+        const sessionFile = String(update?.sessionFile || "").trim();
+        if (!sessionFile || !fs.existsSync(sessionFile)) return;
+        ensureMainDatastoreBootstrapOnHookCall();
         try {
-          const sessionFile = String(update?.sessionFile || "").trim();
-          if (!sessionFile || !fs.existsSync(sessionFile)) return;
           let transcriptUpdateSize = -1;
           try {
             transcriptUpdateSize = fs.statSync(sessionFile).size;
