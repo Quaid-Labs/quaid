@@ -2935,7 +2935,10 @@ class MemoryGraph:
 
         with self._get_conn() as conn:
             try:
-                owner_clause = "AND (n.owner_id = ? OR n.owner_id IS NULL)" if owner_id else ""
+                owner_clause = (
+                    "AND (n.owner_id = ? OR n.owner_id IS NULL OR n.privacy IN ('shared', 'public'))"
+                    if owner_id else ""
+                )
                 params = [fts_query] + ([owner_id] if owner_id else []) + [limit * 3]
                 rows = conn.execute(f"""
                     SELECT n.*, bm25(nodes_fts, 2.0, 1.0) AS bm25_score
@@ -2975,7 +2978,10 @@ class MemoryGraph:
 
     def _search_fts_fallback(self, words, proper_nouns, common_words, limit, owner_id: Optional[str] = None):
         """LIKE-based fallback when FTS5 index is unavailable."""
-        owner_clause = "AND (owner_id = ? OR owner_id IS NULL)" if owner_id else ""
+        owner_clause = (
+            "AND (owner_id = ? OR owner_id IS NULL OR privacy IN ('shared', 'public'))"
+            if owner_id else ""
+        )
         with self._get_conn() as conn:
             node_hits: dict = {}
 

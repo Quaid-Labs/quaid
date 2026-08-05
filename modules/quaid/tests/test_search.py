@@ -57,11 +57,13 @@ def _make_graph_with_data(tmp_path, items=None):
                 ("Quaid prefers dark roast beans", "Preference", "quaid"),
             ]
 
-        for text, node_type, owner in items:
+        for item in items:
+            text, node_type, owner, *metadata = item
             node = Node.create(
                 type=node_type,
                 name=text,
                 owner_id=owner,
+                privacy=metadata[0] if metadata else "shared",
                 status="approved",
             )
             graph.add_node(node, embed=True)
@@ -131,18 +133,29 @@ class TestSearchFTS:
             results = graph.search_fts("Quaid", limit=2)
             assert len(results) <= 2
 
-    def test_owner_id_filter(self, tmp_path):
-        """FTS with owner_id only returns that owner's nodes."""
+    @pytest.mark.parametrize("use_fallback", [False, True], ids=["fts", "like-fallback"])
+    def test_owner_visibility_matches_semantic_search(self, tmp_path, use_fallback):
+        """Lexical search keeps shared/public rows without exposing another owner's private row."""
         items = [
-            ("Alice likes tea and crumpets", "Fact", "alice"),
-            ("Quaid likes espresso coffee strongly", "Fact", "quaid"),
+            ("Viewer likes cedar tea", "Fact", "viewer", "private"),
+            ("Collaborator likes brass puzzles", "Fact", "collaborator", "shared"),
+            ("Publisher likes harbor sketches", "Fact", "publisher", "public"),
+            ("Collaborator likes private ledgers", "Fact", "collaborator", "private"),
         ]
-        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
-            graph = _make_graph_with_data(tmp_path, items=items)
-            results = graph.search_fts("likes", owner_id="quaid")
-            # Should only return quaid's node
-            for node, _ in results:
-                assert node.owner_id == "quaid" or node.owner_id is None
+        graph = _make_graph_with_data(tmp_path, items=items)
+
+        if use_fallback:
+            results = graph._search_fts_fallback(
+                ["likes"], [], ["likes"], limit=10, owner_id="viewer"
+            )
+        else:
+            results = graph.search_fts("likes", limit=10, owner_id="viewer")
+
+        names = {node.name for node, _rank in results}
+        assert "Viewer likes cedar tea" in names
+        assert "Collaborator likes brass puzzles" in names
+        assert "Publisher likes harbor sketches" in names
+        assert "Collaborator likes private ledgers" not in names
 
     def test_short_words_filtered(self, tmp_path):
         """Words under 3 chars are filtered out."""
