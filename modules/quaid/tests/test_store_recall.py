@@ -3067,6 +3067,8 @@ class TestStoreBasic:
         with patch.object(mg, "get_graph", return_value=graph), \
              patch.object(mg, "_expand_low_signal_query", return_value="expanded sparse query"), \
              patch.object(mg, "_recall_once", side_effect=RuntimeError("retry failed")), \
+             patch.object(mg, "_ollama_healthy", return_value=True), \
+             patch.object(graph, "search_hybrid", return_value=[]), \
              patch.object(mg, "_is_fail_hard_mode", return_value=False), \
              caplog.at_level("WARNING"):
             rows = original_recall_once(
@@ -3098,6 +3100,8 @@ class TestStoreBasic:
         with patch.object(mg, "get_graph", return_value=graph), \
              patch.object(mg, "_expand_low_signal_query", return_value="expanded sparse query"), \
              patch.object(mg, "_recall_once", side_effect=RuntimeError("retry failed")), \
+             patch.object(mg, "_ollama_healthy", return_value=True), \
+             patch.object(graph, "search_hybrid", return_value=[]), \
              patch.object(mg, "_is_fail_hard_mode", return_value=True), \
              caplog.at_level("WARNING"):
             with pytest.raises(RuntimeError, match="low-signal recall retry failed") as excinfo:
