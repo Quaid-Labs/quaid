@@ -63,11 +63,31 @@ non-trivial plan.
      -exec stat -f '%Sm %N' -t '%Y-%m-%dT%H:%M:%SZ' {} \\; 2>/dev/null | sort"
    ```
 
-2. **Dry-run.** Confirm the plan before applying:
+2. **Dry-run.** Confirm the plan before applying.
+
+   **You MUST pass explicit `QUAID_HOME` and `QUAID_INSTANCE`, bound to a real
+   populated instance.** Without them the janitor binds to the default admin
+   silo (`claude-code-admin-*`), which is empty on a livetest box, and returns
+   rc=0 in under a second with a meaningless all-zero plan — `0 nodes / 0 edges`
+   — while writing stats to that empty instance's `janitor-stats.json`. That
+   looks like "nothing to do" rather than an error, so it is easy to accept and
+   then apply against nothing. `quaid janitor --status` immediately after will
+   also report `No supervisor-owned janitor request found`, which is the
+   confirming symptom. This has cost time in R289 and R290.
 
    ```bash
-   ssh REMOTE_HOST "\$QCLI janitor --task all --dry-run"
+   ssh REMOTE_HOST "QUAID_HOME=\$HOME/.quaid QUAID_INSTANCE=\$INSTANCE \
+     \$QCLI janitor --task all --dry-run"
    ```
+
+   Sanity-check the plan against the pre-state counts you captured in step 1: if
+   the box has hundreds of pending rows and the plan reports zero, the run is
+   mis-bound — do not proceed to apply.
+
+   Binding to one real instance is correct and does not limit the run to that
+   instance; the properly-bound apply fans out host-wide through the supervisor.
+   Verify that in the logs rather than assuming — if only the bound instance
+   records `janitor_complete`, stop and report.
 
    Must complete and produce a non-empty plan. Dry-run time scales with
    pending row count — budget ~2 min for heavily-loaded instances (150+ pending
@@ -89,8 +109,13 @@ non-trivial plan.
    background. Do NOT use `| head -N` or a short shell timeout — that will
    always produce empty output and may leave the apply running orphaned.
 
+   The same explicit-env requirement as the dry-run applies here — without
+   `QUAID_HOME`/`QUAID_INSTANCE` the apply binds to the empty admin silo and
+   silently does nothing useful:
+
    ```bash
-   ssh REMOTE_HOST "\$QCLI janitor --task all --apply --approve"
+   ssh REMOTE_HOST "QUAID_HOME=\$HOME/.quaid QUAID_INSTANCE=\$INSTANCE \
+     \$QCLI janitor --task all --apply --approve"
    ```
 
    After launching, poll the per-instance janitor log for the `janitor_complete`
@@ -102,6 +127,21 @@ non-trivial plan.
 
    `--status` exits `0` for no request, pending, running, or completed; it
    exits `1` only when the supervisor request status is `failed`.
+
+   **Do NOT grade the run from the aggregate `--status` output.** In R289 the
+   aggregate reported `exit_codes=0` for four instances whose own `janitor.log`
+   recorded `"success": false` with a `RuntimeError` — a real reporting bug that
+   was routed and fixed, but the discipline stands regardless: an aggregate
+   all-clear can contradict per-instance reality.
+
+   **Grade from each instance's own `janitor.log`**, confirming `"success": true`
+   for every instance that started:
+
+   ```bash
+   ssh REMOTE_HOST "for f in ~/.quaid/instances/*/logs/janitor.log; do \
+     printf '%s: ' \"\$(basename \$(dirname \$(dirname \$f)))\"; \
+     grep -o '\"success\": *[a-z]*' \"\$f\" | tail -1; done"
+   ```
 
    For log-based polling:
 
