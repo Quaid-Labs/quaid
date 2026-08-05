@@ -35,7 +35,7 @@ import unicodedata
 from datetime import datetime, timezone
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from lib.config import get_docs_db_path
 from lib.database import get_connection
@@ -492,36 +492,23 @@ def _cli_register_file_path(raw_path: str) -> str:
     return _to_registry_path(cwd_path)
 
 
-def _queue_async_indexing_after_register(project: str) -> Dict[str, Any]:
-    """Queue the project-docs worker path advertised by the register CLI."""
+def _queue_async_indexing_after_register(
+    project: str,
+    queue_async_indexing: Optional[Callable[[str], Dict[str, Any]]],
+) -> Dict[str, Any]:
+    """Invoke the core-owned indexing port when the composition root provides it."""
     name = _normalize_project_name(project) or "default"
     if name == "default":
         return {
             "queued": False,
             "reason": "default project has no project-docs worker",
         }
-    try:
-        from core import project_docs
-
-        request = project_docs.request_update(
-            name,
-            reason="docs-registry-register",
-            requested_by="docs-registry-cli",
-        )
-        supervisor_pid = project_docs.ensure_supervisor_alive()
-        return {
-            "queued": True,
-            "request_id": str(request.get("request_id") or ""),
-            "supervisor_pid": supervisor_pid,
-        }
-    except Exception as exc:
-        logger.warning("Failed to queue async docs indexing for project %s: %s", name, exc)
-        if _fail_hard_enabled():
-            raise RuntimeError(f"Failed to queue async docs indexing for project {name}") from exc
+    if queue_async_indexing is None:
         return {
             "queued": False,
-            "error": str(exc),
+            "reason": "async indexing requires the core docs CLI",
         }
+    return queue_async_indexing(name)
 
 
 def _manual_index_command(project: str) -> str:
@@ -2885,7 +2872,11 @@ def _generate_project_md(registry: DocsRegistry, project_name: str, cfg, *, quie
 # CLI
 # ============================================================================
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(
+    argv: Optional[List[str]] = None,
+    *,
+    queue_async_indexing: Optional[Callable[[str], Dict[str, Any]]] = None,
+) -> int:
     parser = argparse.ArgumentParser(description="Document Registry")
     subparsers = parser.add_subparsers(dest="command", help="Command")
 
@@ -2982,7 +2973,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             auto_update=args.auto_update,
             source_files=source_files,
         )
-        indexing = _queue_async_indexing_after_register(args.project)
+        indexing = _queue_async_indexing_after_register(args.project, queue_async_indexing)
         indexing_queued = bool(indexing.get("queued"))
         if args.json:
             print(json.dumps({

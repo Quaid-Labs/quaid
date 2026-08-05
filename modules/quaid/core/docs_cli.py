@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import os
+import logging
 import sys
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
+
+from lib.fail_policy import is_fail_hard_enabled
 
 
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -14,6 +17,39 @@ if PLUGIN_ROOT not in sys.path:
 
 
 Command = Callable[[List[str]], int]
+logger = logging.getLogger(__name__)
+
+
+def _queue_async_indexing_after_register(project: str) -> Dict[str, Any]:
+    """Queue project-docs indexing from the core composition boundary."""
+    name = str(project or "").strip() or "default"
+    if name == "default":
+        return {
+            "queued": False,
+            "reason": "default project has no project-docs worker",
+        }
+    try:
+        from core import project_docs
+
+        request = project_docs.request_update(
+            name,
+            reason="docs-registry-register",
+            requested_by="docs-registry-cli",
+        )
+        supervisor_pid = project_docs.ensure_supervisor_alive()
+        return {
+            "queued": True,
+            "request_id": str(request.get("request_id") or ""),
+            "supervisor_pid": supervisor_pid,
+        }
+    except Exception as exc:
+        logger.warning("Failed to queue async docs indexing for project %s: %s", name, exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Failed to queue async docs indexing for project {name}") from exc
+        return {
+            "queued": False,
+            "error": str(exc),
+        }
 
 
 def cmd_list(argv: List[str]) -> int:
@@ -48,7 +84,7 @@ def cmd_changelog(argv: List[str]) -> int:
 def cmd_registry(argv: List[str]) -> int:
     from datastore.docsdb import registry
 
-    return registry.main(argv)
+    return registry.main(argv, queue_async_indexing=_queue_async_indexing_after_register)
 
 
 commands: Dict[str, Command] = {

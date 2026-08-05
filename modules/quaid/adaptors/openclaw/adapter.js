@@ -4103,7 +4103,7 @@ function parseSessionMessagesJsonl(sessionFile) {
 }
 const DOCS_UPDATER = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/updater.py");
 const DOCS_RAG = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/rag.py");
-const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/registry.py");
+const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "core/docs_cli.py");
 const EVENTS_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "core/runtime/events.py");
 const _beforePromptBuildInFlightByTurn = /* @__PURE__ */ new Map();
 const AUTO_INJECT_COMPLETED_TURN_CACHE_TTL_MS = 5e3;
@@ -4753,7 +4753,7 @@ function createAdapterFacade(instanceId = _QUAID_INSTANCE) {
     }),
     execExtractPipeline: (tmpPath, args) => _spawnWithTimeout(EXTRACT_SCRIPT, tmpPath, args, "extract", instanceEnv, EXTRACT_PIPELINE_TIMEOUT_MS),
     execDocsRag: (cmd, args) => _spawnWithTimeout(DOCS_RAG, cmd, args, "docs_rag", instanceEnv),
-    execDocsRegistry: (cmd, args) => _spawnWithTimeout(DOCS_REGISTRY, cmd, args, "docs_registry", instanceEnv),
+    execDocsRegistry: (cmd, args) => _spawnWithTimeout(DOCS_REGISTRY, "registry", [cmd, ...args], "docs_registry", instanceEnv),
     execDocsUpdater: (cmd, args) => {
       const apiKey = _getAnthropicCredential();
       return _spawnWithTimeout(DOCS_UPDATER, cmd, args, "docs_updater", {

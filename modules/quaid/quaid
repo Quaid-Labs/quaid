@@ -498,7 +498,7 @@ print(json.dumps(register_domain(name, desc), indent=2))
 
   # Registry/projects subsystem (docs registry)
   registry)
-    exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/registry.py" "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/core/docs_cli.py" registry "$@"
     ;;
 
   # Project system (project registry, shadow git, sync)

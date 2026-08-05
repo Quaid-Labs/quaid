@@ -5051,7 +5051,7 @@ function parseSessionMessagesJsonl(sessionFile: string): any[] {
 
 const DOCS_UPDATER = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/updater.py");
 const DOCS_RAG = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/rag.py");
-const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/registry.py");
+const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "core/docs_cli.py");
 // PROJECT_UPDATER removed — project events now emitted from Python extraction.
 const EVENTS_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "core/runtime/events.py");
 type AutoInjectTurnOutcome = {
@@ -5896,7 +5896,7 @@ function createAdapterFacade(instanceId: string = _QUAID_INSTANCE): AdapterFacad
     execDocsRag: (cmd, args) =>
       _spawnWithTimeout(DOCS_RAG, cmd, args, "docs_rag", instanceEnv),
     execDocsRegistry: (cmd, args) =>
-      _spawnWithTimeout(DOCS_REGISTRY, cmd, args, "docs_registry", instanceEnv),
+      _spawnWithTimeout(DOCS_REGISTRY, "registry", [cmd, ...args], "docs_registry", instanceEnv),
     execDocsUpdater: (cmd, args) => {
       const apiKey = _getAnthropicCredential();
       return _spawnWithTimeout(DOCS_UPDATER, cmd, args, "docs_updater", {
