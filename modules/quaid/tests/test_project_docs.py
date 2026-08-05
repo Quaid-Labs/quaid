@@ -3109,6 +3109,7 @@ def test_supervisor_skips_project_deleted_after_project_snapshot(project_env):
     with patch("core.project_docs_supervisor.list_projects", return_value={"demo": {}}), \
          patch("core.project_docs_supervisor._maintain_instance_monitors", lambda _known: None), \
          patch("core.project_docs_supervisor._maintain_janitor_workers", lambda *_args, **_kwargs: None), \
+         patch("core.project_docs_supervisor._emit_project_docs_maintenance_event"), \
          patch("core.project_docs.auto_register_project_docs", return_value=0), \
          patch("core.project_docs.index_one_stale_registered_doc", return_value=False), \
          patch("core.project_docs.project_is_registered_for_worker", return_value=False), \
@@ -3145,6 +3146,7 @@ def test_supervisor_removal_path_cleans_full_project_state(project_env):
     with patch("core.project_docs_supervisor.list_projects", side_effect=[{"demo": {"instances": ["pytest-runner"]}}, {}]), \
          patch("core.project_docs_supervisor._maintain_instance_monitors", lambda _known: None), \
          patch("core.project_docs_supervisor._maintain_janitor_workers", lambda *_args, **_kwargs: None), \
+         patch("core.project_docs_supervisor._emit_project_docs_maintenance_event"), \
          patch("core.project_docs.project_is_registered_for_worker", return_value=True), \
          patch("core.project_docs.start_worker", return_value=123), \
          patch("core.project_docs.stop_worker", side_effect=fake_stop_worker), \

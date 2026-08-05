@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -95,6 +96,21 @@ def setup_env(tmp_path, monkeypatch):
 def _get_registry(tmp_path=None):
     from datastore.docsdb.registry import DocsRegistry
     return DocsRegistry(db_path=_tmp_db)
+
+
+@pytest.fixture
+def successful_trash(monkeypatch):
+    """Simulate the host trash command for tests of later delete stages."""
+    from datastore.docsdb import registry as registry_mod
+
+    def _trash(cmd, **_kwargs):
+        assert cmd[0] == "trash"
+        target = Path(cmd[1])
+        if target.exists():
+            shutil.rmtree(target)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(registry_mod.subprocess, "run", _trash)
 
 
 class TestFailHardPolicy:
@@ -1642,7 +1658,7 @@ class TestArchiveProject:
 
 
 class TestDeleteProject:
-    def test_deletes_entries(self, setup_env):
+    def test_deletes_entries(self, setup_env, successful_trash):
         r = _get_registry()
         r.register("docs/a.md", project="test-project")
         r.register("docs/b.md", project="test-project")
@@ -2127,7 +2143,7 @@ A test project.
         with pytest.raises(RuntimeError, match="PROJECT.md refresh after rename failed"):
             r.rename_project("test-project", "renamed-proj")
 
-    def test_delete_removes_global_registry_entry(self, setup_env, monkeypatch):
+    def test_delete_removes_global_registry_entry(self, setup_env, monkeypatch, successful_trash):
         """delete_project removes the matching global registry entry."""
         tmp_path = setup_env
         r = _get_registry()
@@ -2148,7 +2164,12 @@ A test project.
         assert result["deleted"] == 1
         assert removed == {"name": "test-project", "force": True}
 
-    def test_delete_global_registry_failure_raises_when_fail_hard(self, setup_env, monkeypatch):
+    def test_delete_global_registry_failure_raises_when_fail_hard(
+        self,
+        setup_env,
+        monkeypatch,
+        successful_trash,
+    ):
         from datastore.docsdb import registry as registry_mod
 
         r = _get_registry()
