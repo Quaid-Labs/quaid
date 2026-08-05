@@ -119,6 +119,18 @@ def get_workspace_dir() -> Path:
     return get_adapter().instance_root()
 
 
+def get_runtime_root(workspace: str | Path | None = None) -> Path:
+    """Return the runtime-state root for an explicit or active workspace."""
+    explicit = (
+        str(os.environ.get("MEMORY_RUNTIME_DIR", "") or "").strip()
+        or str(os.environ.get("RUNTIME_DIR", "") or "").strip()
+    )
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    base = get_workspace_dir() if workspace is None else Path(workspace).expanduser().resolve()
+    return Path(base).resolve() / ".runtime"
+
+
 def get_quaid_home() -> Path:
     """Return the hidden QUAID_HOME root (not the per-instance silo)."""
     adapter = _active_adapter_instance()

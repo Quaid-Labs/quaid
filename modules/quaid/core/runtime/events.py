@@ -24,8 +24,8 @@ from threading import Lock
 from typing import Any, Callable, Dict, List, Optional
 
 from core.ingest_runtime import run_docs_ingest
-from core.runtime.paths import get_runtime_root
 from lib.runtime_context import queue_deferred_notice
+from lib.runtime_context import get_runtime_root
 from lib.runtime_context import get_quaid_home
 from lib.runtime_context import get_sessions_dir
 from lib.runtime_context import get_visible_quaid_home

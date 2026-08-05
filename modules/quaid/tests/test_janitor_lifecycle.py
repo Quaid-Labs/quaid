@@ -17,7 +17,7 @@ from core.lifecycle.janitor_lifecycle import (
     _register_module_routines,
     build_default_registry,
 )
-from core.runtime.paths import get_runtime_root
+from lib.runtime_context import get_runtime_root
 
 
 class _FakeRag:
@@ -180,7 +180,7 @@ def test_snippets_and_journal_lifecycle_run(monkeypatch, tmp_path):
 
 
 def test_snippets_lifecycle_does_not_hold_files_lock_during_review(monkeypatch, tmp_path):
-    from core.runtime.parallel_runtime import ResourceLockRegistry
+    from lib.resource_locks import ResourceLockRegistry
 
     calls = []
 

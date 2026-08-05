@@ -37,6 +37,7 @@ from lib.markdown import strip_protected_regions
 from lib.runtime_context import (
     get_identity_dir as _runtime_identity_dir,
     get_projects_dir as _runtime_projects_dir,
+    get_runtime_root,
     get_visible_workspace_dir,
     get_workspace_dir,
 )
@@ -69,14 +70,12 @@ def _lifecycle_file_lock_wait_seconds(default_seconds: int = 120) -> int:
 def _lifecycle_file_lock_registry():
     lock_root = None
     try:
-        from core.runtime.paths import get_runtime_root
-
         lock_root = get_runtime_root(_workspace_dir().resolve()) / "locks" / "janitor"
         key = str(lock_root)
         existing = _FILE_LOCK_REGISTRIES.get(key)
         if existing is not None:
             return existing
-        from core.runtime.parallel_runtime import ResourceLockRegistry
+        from lib.resource_locks import ResourceLockRegistry
 
         registry = ResourceLockRegistry(lock_root)
         _FILE_LOCK_REGISTRIES[key] = registry
@@ -85,7 +84,7 @@ def _lifecycle_file_lock_registry():
         logger.warning("Failed to initialize lifecycle file lock registry: %s", exc)
         if is_fail_hard_enabled():
             raise RuntimeError("Failed to initialize lifecycle file lock registry") from exc
-        from core.runtime.parallel_runtime import ResourceLockRegistry
+        from lib.resource_locks import ResourceLockRegistry
 
         fallback_root = lock_root or (_workspace_dir() / "locks" / "janitor")
         return ResourceLockRegistry(fallback_root)

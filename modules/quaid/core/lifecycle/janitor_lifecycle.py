@@ -20,9 +20,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from core.llm.scheduler import get_global_llm_scheduler
-from core.runtime.paths import get_runtime_root
-from core.runtime.parallel_runtime import ResourceLockRegistry, get_parallel_config
+from core.runtime.parallel_runtime import get_parallel_config
 from lib.fail_policy import is_fail_hard_enabled
+from lib.resource_locks import ResourceLockRegistry
+from lib.runtime_context import get_runtime_root
 logger = logging.getLogger(__name__)
 
 _LIFECYCLE_PARALLEL_TELEMETRY_ENABLED = (

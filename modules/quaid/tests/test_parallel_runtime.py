@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from core.runtime.parallel_runtime import MAX_THREAD_LOCK_CACHE, ResourceLockRegistry
+from lib.resource_locks import MAX_THREAD_LOCK_CACHE, ResourceLockRegistry
 
 
 def test_resource_lock_registry_prunes_thread_lock_cache(tmp_path: Path):
@@ -57,8 +57,8 @@ def test_acquire_many_logs_unlock_failures(tmp_path: Path):
             raise OSError("unlock boom")
         return real_flock(fd, op)
 
-    with patch("core.runtime.parallel_runtime.fcntl.flock", side_effect=_flock_with_unlock_error), \
-         patch("core.runtime.parallel_runtime.logger.warning") as log_warning:
+    with patch("lib.resource_locks.fcntl.flock", side_effect=_flock_with_unlock_error), \
+         patch("lib.resource_locks.logger.warning") as log_warning:
         with reg.acquire_many(["resource-a"]):
             pass
 
@@ -76,8 +76,8 @@ def test_acquire_many_logs_close_failures(tmp_path: Path):
             raise OSError("close boom")
         return real_close(fd)
 
-    with patch("core.runtime.parallel_runtime.os.close", side_effect=_close_with_error), \
-         patch("core.runtime.parallel_runtime.logger.warning") as log_warning:
+    with patch("lib.resource_locks.os.close", side_effect=_close_with_error), \
+         patch("lib.resource_locks.logger.warning") as log_warning:
         with reg.acquire_many(["resource-b"]):
             pass
 
@@ -99,8 +99,8 @@ def test_acquire_many_uses_short_lock_poll_interval(tmp_path: Path):
     def _record_sleep(seconds):
         sleep_calls.append(float(seconds))
 
-    with patch("core.runtime.parallel_runtime.fcntl.flock", side_effect=_flock_once_blocking), \
-         patch("core.runtime.parallel_runtime.time.sleep", side_effect=_record_sleep):
+    with patch("lib.resource_locks.fcntl.flock", side_effect=_flock_once_blocking), \
+         patch("lib.resource_locks.time.sleep", side_effect=_record_sleep):
         with reg.acquire_many(["resource-c"], timeout_seconds=1):
             pass
 
@@ -122,8 +122,8 @@ def test_acquire_many_closes_fd_on_nonblocking_flock_error(tmp_path: Path):
         close_calls["count"] += 1
         return real_close(fd)
 
-    with patch("core.runtime.parallel_runtime.fcntl.flock", side_effect=_flock_raises_oserror), \
-         patch("core.runtime.parallel_runtime.os.close", side_effect=_count_close):
+    with patch("lib.resource_locks.fcntl.flock", side_effect=_flock_raises_oserror), \
+         patch("lib.resource_locks.os.close", side_effect=_count_close):
         try:
             with reg.acquire_many(["resource-d"], timeout_seconds=1):
                 pass
@@ -137,10 +137,10 @@ def test_acquire_many_closes_fd_on_nonblocking_flock_error(tmp_path: Path):
 def test_acquire_many_logs_close_failure_during_flock_error_cleanup(tmp_path: Path):
     reg = ResourceLockRegistry(tmp_path / "locks")
 
-    with patch("core.runtime.parallel_runtime.os.open", return_value=123), \
-         patch("core.runtime.parallel_runtime.fcntl.flock", side_effect=OSError("flock boom")), \
-         patch("core.runtime.parallel_runtime.os.close", side_effect=OSError("close boom")), \
-         patch("core.runtime.parallel_runtime.logger.warning") as log_warning:
+    with patch("lib.resource_locks.os.open", return_value=123), \
+         patch("lib.resource_locks.fcntl.flock", side_effect=OSError("flock boom")), \
+         patch("lib.resource_locks.os.close", side_effect=OSError("close boom")), \
+         patch("lib.resource_locks.logger.warning") as log_warning:
         with pytest.raises(OSError, match="flock boom"):
             with reg.acquire_many(["resource-e"], timeout_seconds=1):
                 pass
@@ -159,7 +159,7 @@ def test_acquire_many_zero_timeout_uses_one_second_floor(tmp_path: Path):
             return False
 
     with patch.object(reg, "_reserve_thread_lock", return_value=_FakeLock()), \
-         patch("core.runtime.parallel_runtime.time.monotonic", side_effect=[10.0, 10.0]):
+         patch("lib.resource_locks.time.monotonic", side_effect=[10.0, 10.0]):
         with pytest.raises(TimeoutError, match="thread lock timeout"):
             with reg.acquire_many(["resource-zero"], timeout_seconds=0):
                 pass
