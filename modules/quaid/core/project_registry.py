@@ -1079,6 +1079,18 @@ def delete_project(name: str) -> None:
         registry.setdefault("deleted_projects", {})[name] = _now_iso()
         _save_registry(registry)
 
+    # Project docs workers can mutate shadow-git and canonical project state.
+    # Stop them after the project is hidden but before deleting either tree.
+    try:
+        from core import project_docs
+
+        project_docs.stop_worker(name)
+        project_docs.cleanup_project_state(name)
+    except Exception as e:
+        logger.warning("Failed to clean up project docs worker state for %s: %s", name, e)
+        if _fail_hard_enabled():
+            raise
+
     # Clean up shadow git tracking after the project is already hidden.
     try:
         from core.shadow_git import ShadowGit
@@ -1122,19 +1134,6 @@ def delete_project(name: str) -> None:
             logger.warning("Failed to remove project directory for %s (%s): %s", name, candidate, e)
             if _fail_hard_enabled():
                 raise
-
-    # Project docs workers are supervisor-owned. Deleting a project must stop
-    # the worker and remove queued force-update state so deleted projects do
-    # not resurrect on the next supervisor tick.
-    try:
-        from core import project_docs
-
-        project_docs.stop_worker(name)
-        project_docs.cleanup_project_state(name)
-    except Exception as e:
-        logger.warning("Failed to clean up project docs worker state for %s: %s", name, e)
-        if _fail_hard_enabled():
-            raise
 
     # Clean up shared docs DB: project definitions, registry rows, and RAG chunks.
     try:

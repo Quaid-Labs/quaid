@@ -1139,8 +1139,12 @@ class TestDeleteProjectPurgesDb:
         from core import project_docs
         from core.project_registry import project_exists_raw
 
-        create_project("my-app")
+        _, tmp_path = mock_adapter
+        source_root = tmp_path / "source"
+        source_root.mkdir()
+        create_project("my-app", source_root=str(source_root))
         checked = False
+        events = []
 
         def _stop_worker_after_hidden(project):
             nonlocal checked
@@ -1150,12 +1154,20 @@ class TestDeleteProjectPurgesDb:
                 assert project_exists_raw("my-app") is False
                 assert get_project("my-app") is None
                 assert "my-app" not in list_projects()
+            events.append("worker-stopped")
+
+        def _destroy_after_worker_stopped():
+            assert events == ["worker-stopped"]
+            events.append("shadow-destroyed")
 
         with patch.object(project_docs, "stop_worker", side_effect=_stop_worker_after_hidden), \
-             patch.object(project_docs, "cleanup_project_state", return_value={"removed": 0}):
+             patch.object(project_docs, "cleanup_project_state", return_value={"removed": 0}), \
+             patch("core.shadow_git.ShadowGit.destroy", side_effect=_destroy_after_worker_stopped):
             delete_project("my-app")
 
         assert checked is True
+        assert events[:2] == ["worker-stopped", "shadow-destroyed"]
+        assert all(event == "worker-stopped" for event in events[2:])
 
     def test_delete_purges_project_definitions_and_doc_registry(self, mock_adapter):
         """delete_project() removes project_definitions and doc_registry rows from SQLite."""
