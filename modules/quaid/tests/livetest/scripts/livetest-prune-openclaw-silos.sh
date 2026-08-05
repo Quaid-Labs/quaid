@@ -4,7 +4,9 @@
 # This is intentionally not called by user-facing `quaid instances list`.
 # Physical deletion of ~/.quaid/instances/* is too risky for production list paths.
 # Use this script only from livetest cleanup after native `openclaw agents delete`
-# has already removed the matching OpenClaw agent/workspace state.
+# has already removed the matching OpenClaw agent/workspace state. The prune also
+# retires the matching misc-project worker/registry metadata while preserving its
+# visible scratch files.
 
 set -euo pipefail
 
@@ -60,10 +62,18 @@ PY
 fi
 
 QUAID_HOME="$QUAID_HOME_ARG" QUAID_LIVETEST_HARNESS=1 PYTHONPATH="$QUAID_ROOT" python3 - <<'PY'
+from core.project_registry import complete_instance_misc_project_retirement, retire_instance_misc_project
 from lib.instance import prune_livetest_instance_residues, prune_stale_openclaw_agent_instances
 
 seen = set()
-for name in [*prune_stale_openclaw_agent_instances(), *prune_livetest_instance_residues()]:
+for name in [
+    *prune_stale_openclaw_agent_instances(
+        raise_on_failure=True,
+        before_remove=retire_instance_misc_project,
+        after_remove=complete_instance_misc_project_retirement,
+    ),
+    *prune_livetest_instance_residues(),
+]:
     if name in seen:
         continue
     seen.add(name)

@@ -296,6 +296,50 @@ def is_misc_project_deleted(instance_id: str, *, quaid_home: Optional[Path] = No
     return misc_name in (registry.get("deleted_projects") or {})
 
 
+def retire_instance_misc_project(instance_id: str) -> None:
+    """Retire shared runtime state for an instance whose host identity is gone.
+
+    Keep the visible misc directory itself so an explicit stale-instance prune
+    cannot delete user-authored scratch files. The temporary tombstone prevents
+    docs reconciliation or the supervisor from resurrecting the project while
+    its registry rows and worker state are being removed.
+    """
+    misc_name = _misc_project_name(instance_id)
+    entry: Dict[str, Any] = {}
+    with _registry_lock():
+        registry = _load_registry()
+        entry = dict((registry.get("projects") or {}).pop(misc_name, {}) or {})
+        registry.setdefault("deleted_projects", {})[misc_name] = _now_iso()
+        _save_registry(registry)
+
+    from core import project_docs
+
+    project_docs.stop_worker(misc_name)
+    project_docs.cleanup_project_state(misc_name)
+
+    chunk_paths = _delete_docs_db_project_rows(misc_name)
+    canonical = str(entry.get("canonical_path") or "").strip()
+    if canonical:
+        chunk_paths.append(str(Path(canonical) / "PROJECT.md"))
+    if chunk_paths:
+        from datastore.docsdb.rag import DocsRAG
+        from lib.config import get_docs_db_path
+
+        rag = DocsRAG(db_path=get_docs_db_path())
+        for file_path in sorted(set(chunk_paths)):
+            if file_path:
+                rag.remove_chunks_for_path(file_path)
+
+
+def complete_instance_misc_project_retirement(instance_id: str) -> None:
+    """Clear the temporary misc tombstone after the stale silo is gone."""
+    misc_name = _misc_project_name(instance_id)
+    with _registry_lock():
+        registry = _load_registry()
+        registry.setdefault("deleted_projects", {}).pop(misc_name, None)
+        _save_registry(registry)
+
+
 def _is_path_for_deleted_project(raw_path: str, *, project_name: str, canonical: Optional[Path]) -> bool:
     text = str(raw_path or "").strip()
     if not text:

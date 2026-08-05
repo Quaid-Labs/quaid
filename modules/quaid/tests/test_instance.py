@@ -25,6 +25,7 @@ from lib.instance import (
     prune_livetest_instance_residues,
     prune_stale_openclaw_agent_instances,
     require_instance_exists,
+    stale_openclaw_agent_instances,
 )
 
 
@@ -327,6 +328,65 @@ class TestListInstances:
             require_livetest_harness=False,
         ) == ["openclaw-deleted"]
         assert not stale.exists()
+
+    def test_openclaw_physical_prune_retires_configless_empty_recreated_silo(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        oc_root = tmp_path / "openclaw-runtime"
+        oc_root.mkdir()
+        monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(oc_root / "openclaw.json"))
+        (oc_root / "openclaw.json").write_text(
+            json.dumps({"agents": {"list": [{"id": "main"}]}}),
+            encoding="utf-8",
+        )
+        stale = tmp_path / "instances" / "openclaw-m13test"
+        (stale / "data").mkdir(parents=True)
+        retired = []
+        completed = []
+
+        assert stale_openclaw_agent_instances(tmp_path) == ["openclaw-m13test"]
+        assert prune_stale_openclaw_agent_instances(
+            tmp_path,
+            require_livetest_harness=False,
+            before_remove=retired.append,
+            after_remove=completed.append,
+        ) == ["openclaw-m13test"]
+
+        assert retired == ["openclaw-m13test"]
+        assert completed == ["openclaw-m13test"]
+        assert not stale.exists()
+
+    def test_openclaw_physical_prune_keeps_silo_when_runtime_retirement_fails(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        oc_root = tmp_path / "openclaw-runtime"
+        oc_root.mkdir()
+        monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(oc_root / "openclaw.json"))
+        (oc_root / "openclaw.json").write_text(
+            json.dumps({"agents": {"list": [{"id": "main"}]}}),
+            encoding="utf-8",
+        )
+        stale = tmp_path / "instances" / "openclaw-m13test"
+        stale.mkdir(parents=True)
+        (stale / "config.json").write_text(
+            json.dumps({"adapter": {"type": "openclaw"}}),
+            encoding="utf-8",
+        )
+
+        def fail_retirement(_name):
+            raise RuntimeError("worker cleanup failed")
+
+        with pytest.raises(InstanceError, match="Failed to retire stale OpenClaw instance"):
+            prune_stale_openclaw_agent_instances(
+                tmp_path,
+                require_livetest_harness=False,
+                raise_on_failure=True,
+                before_remove=fail_retirement,
+            )
+
+        assert stale.exists()
 
     def test_openclaw_physical_prune_warns_delete_failure_by_default(
         self, monkeypatch, tmp_path, caplog

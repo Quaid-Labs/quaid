@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.project_registry import (
+    complete_instance_misc_project_retirement,
     create_project,
     delete_project,
     get_project,
@@ -19,6 +20,7 @@ from core.project_registry import (
     unlink_project,
     update_project,
     projects_with_source_root,
+    retire_instance_misc_project,
     snapshot_all_projects,
     _load_registry,
     _save_registry,
@@ -658,6 +660,88 @@ class TestDeleteProject:
 
         assert is_misc_project_deleted(instance_id, quaid_home=other_home) is True
         assert is_misc_project_deleted(instance_id, quaid_home=tmp_path) is False
+
+    def test_retire_instance_misc_project_cleans_runtime_and_allows_same_name_recreate(
+        self, mock_adapter, monkeypatch
+    ):
+        _, tmp_path = mock_adapter
+        from core import project_docs
+        from datastore.docsdb import project_log_queue
+
+        instance_id = "openclaw-m13test"
+        misc_name = f"misc--{instance_id}"
+        canonical = tmp_path.with_name(tmp_path.name.lstrip(".")) / "projects" / misc_name
+        canonical.mkdir(parents=True)
+        (canonical / "PROJECT.md").write_text("# preserved scratch\n", encoding="utf-8")
+        _save_registry(
+            {
+                "projects": {
+                    misc_name: {
+                        "canonical_path": str(canonical),
+                        "instances": [instance_id],
+                    }
+                },
+                "deleted_projects": {},
+            }
+        )
+        project_docs.write_state(misc_name, {"status": "queued"})
+        project_log_queue.enqueue_project_logs(
+            {misc_name: ["queued scratch update"]},
+            trigger="Reset",
+        )
+        stopped = []
+        monkeypatch.setattr(project_docs, "stop_worker", lambda project: stopped.append(project) or True)
+        monkeypatch.setattr(
+            "core.project_registry._delete_docs_db_project_rows",
+            lambda project: [] if project == misc_name else None,
+        )
+
+        retire_instance_misc_project(instance_id)
+
+        registry = _load_registry()
+        assert misc_name not in registry["projects"]
+        assert misc_name in registry["deleted_projects"]
+        assert stopped == [misc_name]
+        assert project_docs.has_project_state(misc_name) is False
+        assert project_log_queue.pending_project_log_count(misc_name) == 0
+        assert (canonical / "PROJECT.md").read_text(encoding="utf-8") == "# preserved scratch\n"
+
+        complete_instance_misc_project_retirement(instance_id)
+        assert is_misc_project_deleted(instance_id, quaid_home=tmp_path) is False
+        with patch("core.project_registry._sync_docs_registry_project"):
+            create_project(misc_name, description="scratch", initial_instance=instance_id)
+        recreated = get_project(misc_name)
+        assert recreated is not None
+        assert instance_id in recreated["instances"]
+
+    def test_retire_instance_misc_project_failure_stays_tombstoned(
+        self, mock_adapter, monkeypatch
+    ):
+        _, tmp_path = mock_adapter
+        from core import project_docs
+
+        instance_id = "openclaw-m13test"
+        misc_name = f"misc--{instance_id}"
+        _save_registry(
+            {
+                "projects": {misc_name: {"instances": [instance_id]}},
+                "deleted_projects": {},
+            }
+        )
+        monkeypatch.setattr(project_docs, "stop_worker", lambda _project: True)
+        monkeypatch.setattr(
+            project_docs,
+            "cleanup_project_state",
+            lambda _project: (_ for _ in ()).throw(RuntimeError("cleanup failed")),
+        )
+
+        with pytest.raises(RuntimeError, match="cleanup failed"):
+            retire_instance_misc_project(instance_id)
+
+        registry = _load_registry()
+        assert misc_name not in registry["projects"]
+        assert misc_name in registry["deleted_projects"]
+        assert is_misc_project_deleted(instance_id, quaid_home=tmp_path) is True
 
 
 class TestListAndQuery:

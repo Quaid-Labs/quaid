@@ -20,7 +20,7 @@ import logging
 import re
 import shutil
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -334,7 +334,10 @@ def _is_stale_openclaw_agent_instance(name: str, instance_dir: Path) -> bool:
     prefix = f"{adapter_id}-"
     if not name.startswith(prefix) or name == f"{prefix}main":
         return False
-    if _raw_adapter_type(instance_dir) != adapter_id:
+    raw_adapter_type = _raw_adapter_type(instance_dir)
+    if raw_adapter_type != adapter_id and not (
+        not raw_adapter_type and _is_empty_instance_bind_point_residue(instance_dir)
+    ):
         return False
     labels, roots, has_authoritative_list = _active_openclaw_agent_labels()
     if not roots:
@@ -365,6 +368,8 @@ def _prune_stale_openclaw_agent_instance(
     *,
     home: Optional[Path] = None,
     raise_on_failure: bool = False,
+    before_remove: Optional[Callable[[str], None]] = None,
+    after_remove: Optional[Callable[[str], None]] = None,
 ) -> bool:
     """Remove a stale OpenClaw agent silo after the native agent is gone."""
     if not _is_stale_openclaw_agent_instance(name, instance_dir):
@@ -377,7 +382,36 @@ def _prune_stale_openclaw_agent_instance(
         target = instance_dir.resolve()
         if instance_dir.is_symlink() or target.parent != root or target.name != name:
             return False
+        if before_remove is not None:
+            try:
+                before_remove(name)
+            except Exception as exc:
+                if raise_on_failure:
+                    raise InstanceError(
+                        f"Failed to retire stale OpenClaw instance '{name}' before deleting {instance_dir}: {exc}"
+                    ) from exc
+                logger.warning(
+                    "Failed to retire stale OpenClaw instance %s before deleting %s: %s",
+                    name,
+                    instance_dir,
+                    exc,
+                )
+                return False
         shutil.rmtree(target)
+        if after_remove is not None:
+            try:
+                after_remove(name)
+            except Exception as exc:
+                if raise_on_failure:
+                    raise InstanceError(
+                        f"Failed to complete stale OpenClaw instance retirement for '{name}': {exc}"
+                    ) from exc
+                logger.warning(
+                    "Failed to complete stale OpenClaw instance retirement for %s: %s",
+                    name,
+                    exc,
+                )
+                return False
         return True
     except OSError as exc:
         if raise_on_failure:
@@ -421,6 +455,8 @@ def prune_stale_openclaw_agent_instances(
     *,
     require_livetest_harness: bool = True,
     raise_on_failure: bool = False,
+    before_remove: Optional[Callable[[str], None]] = None,
+    after_remove: Optional[Callable[[str], None]] = None,
 ) -> List[str]:
     """Delete stale OpenClaw agent silos whose native agent state is gone.
 
@@ -444,6 +480,8 @@ def prune_stale_openclaw_agent_instances(
             entry,
             home=instances_dir.parent,
             raise_on_failure=raise_on_failure,
+            before_remove=before_remove,
+            after_remove=after_remove,
         ):
             pruned.append(name)
     return pruned
