@@ -1632,6 +1632,21 @@ if codex_token:
             defaults["model"] = model_cfg
         model_cfg["primary"] = "openai/gpt-5.4"
         model_cfg["fallbacks"] = ["openai/gpt-5.4-mini"]
+        # OpenClaw 2026.7.1-2+ defaults openai/* models to Codex runtime unless told
+        # otherwise, which fails when the Codex plugin is disabled (pure-OC install).
+        models_top = cfg.setdefault("models", {})
+        if not isinstance(models_top, dict):
+            models_top = {}
+            cfg["models"] = models_top
+        providers_top = models_top.setdefault("providers", {})
+        if not isinstance(providers_top, dict):
+            providers_top = {}
+            models_top["providers"] = providers_top
+        openai_provider_cfg = providers_top.setdefault("openai", {})
+        if not isinstance(openai_provider_cfg, dict):
+            openai_provider_cfg = {}
+            providers_top["openai"] = openai_provider_cfg
+        openai_provider_cfg["agentRuntime"] = {"id": "openclaw"}
         plugins = cfg.setdefault("plugins", {})
         if not isinstance(plugins, dict):
             plugins = {}
@@ -1672,6 +1687,10 @@ if codex_token:
 else:
     print(f"  WARN  {codex_auth_path} missing or unreadable — codex_oauth/auth-profiles not updated")
 PYEOF
+            # auth-profiles.json alone does not reach OC's SQLite-backed per-agent
+            # auth store; seed it explicitly via the sanctioned CLI (R290/R218).
+            OC_PASTE_TOKEN_OUTPUT="$(ssh "$REMOTE_HOST" 'source ~/.zprofile >/dev/null 2>&1; TOKEN="$(python3 -c "import json; print(json.load(open(\"$HOME/.codex/auth.json\"))[\"tokens\"][\"access_token\"])" 2>/dev/null)"; if [[ -n "$TOKEN" ]] && command -v openclaw >/dev/null 2>&1; then printf "%s\n" "$TOKEN" | openclaw models auth --agent main paste-token --provider openai 2>&1; else echo "  WARN  skipped OC agent auth-store seed (no token or openclaw CLI unavailable)"; fi')"
+            echo "$OC_PASTE_TOKEN_OUTPUT" | sed 's/^/  /'
             rm -f "$LOCAL_SHARED_TOKEN_TMP"
             LOCAL_SHARED_TOKEN_TMP=""
             echo "  $PASS  shared auth credentials copied to remote ~/.quaid/shared/auth/credentials.json"
