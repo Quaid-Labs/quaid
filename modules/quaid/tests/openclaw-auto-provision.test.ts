@@ -106,6 +106,9 @@ vi.mock("node:child_process", async () => {
           instance,
         });
       }
+      if (normalizedArgs[1] === "init") {
+        return "";
+      }
       if (normalizedArgs[1] === "stats") {
         childProcessState.datastoreStatsSyncCalls.push({
           file,
