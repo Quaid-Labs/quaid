@@ -4057,23 +4057,22 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                     )
                     source_type = None
 
-        if action == "DELETE":
-            _diag_log_decision(
-                "review_decision_delete",
-                dry_run=bool(dry_run),
-                memory_id=memory_id,
-                current_status=current_status,
-                current_text=current_text,
-                source=source_value,
-                speaker=speaker_value,
-                source_type=source_type,
-                reason=reason,
-            )
-            if dry_run:
-                print(f"    Would DELETE: {memory_id}")
-            else:
-                # Delete fact edges + node in one transaction so crashes cannot leave partial state.
-                with graph._get_conn() as conn:
+            if action == "DELETE":
+                _diag_log_decision(
+                    "review_decision_delete",
+                    dry_run=bool(dry_run),
+                    memory_id=memory_id,
+                    current_status=current_status,
+                    current_text=current_text,
+                    source=source_value,
+                    speaker=speaker_value,
+                    source_type=source_type,
+                    reason=reason,
+                )
+                if dry_run:
+                    print(f"    Would DELETE: {memory_id}")
+                else:
+                    # Delete fact edges + node in the metadata-read transaction.
                     edges_deleted = conn.execute(
                         "DELETE FROM edges WHERE source_fact_id = ?",
                         (memory_id,),
@@ -4091,9 +4090,10 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                     if edges_deleted > 0:
                         print(f"    DELETED {edges_deleted} edges from fact")
                     print(f"    DELETED: {memory_id}")
-            deleted += 1
+                deleted += 1
+                continue
 
-        elif action == "FIX" and "new_text" in decision:
+        if action == "FIX" and "new_text" in decision:
             new_text = decision["new_text"]
             new_edges = decision.get("edges", [])
             _diag_log_decision(
