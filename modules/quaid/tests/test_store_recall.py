@@ -9219,7 +9219,7 @@ class TestSourceChunkStorage:
                 "extraction_confidence": 0.7,
                 "created_at": "2026-06-13T19:31:01.946033",
                 "privacy": "shared",
-                "owner_id": "solomon-steadman",
+                "owner_id": "fixture-owner",
             }
         ])
 
