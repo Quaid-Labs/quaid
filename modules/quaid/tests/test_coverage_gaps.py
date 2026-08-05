@@ -17,6 +17,7 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -1060,7 +1061,28 @@ class TestReviewDeleteTransaction:
                 ("e-del-1", node.id, node.id, "related_to", node.id),
             )
 
-        with patch.object(graph, "_get_conn", wraps=graph._get_conn) as conn_spy:
+        original_get_conn = graph._get_conn
+        vec_delete_ids = []
+
+        class _VecDeleteConn:
+            def __init__(self, wrapped):
+                self._wrapped = wrapped
+
+            def execute(self, sql, params=()):
+                if str(sql).strip().upper().startswith("DELETE FROM VEC_NODES"):
+                    vec_delete_ids.append(str(params[0]))
+                    return SimpleNamespace(rowcount=1)
+                return self._wrapped.execute(sql, params)
+
+            def __getattr__(self, name):
+                return getattr(self._wrapped, name)
+
+        @contextmanager
+        def isolated_get_conn():
+            with original_get_conn() as conn:
+                yield _VecDeleteConn(conn)
+
+        with patch.object(graph, "_get_conn", wraps=isolated_get_conn) as conn_spy:
             result = apply_review_decisions_from_list(
                 graph,
                 [{"id": node.id, "action": "DELETE"}],
@@ -1069,6 +1091,11 @@ class TestReviewDeleteTransaction:
 
         assert result["deleted"] == 1
         assert conn_spy.call_count == 1
+        assert vec_delete_ids == [node.id]
+
+        with original_get_conn() as conn:
+            assert conn.execute("SELECT id FROM nodes WHERE id = ?", (node.id,)).fetchone() is None
+            assert conn.execute("SELECT id FROM edges WHERE id = ?", ("e-del-1",)).fetchone() is None
 
 
 class TestDecayReviewAtomicity:
@@ -1229,7 +1256,8 @@ class TestMergeAtomicity:
             conn.execute("UPDATE nodes SET confirmation_count = 2 WHERE id = ?", (left.id,))
             conn.execute("UPDATE nodes SET confirmation_count = 3 WHERE id = ?", (right.id,))
 
-        with patch("datastore.memorydb.maintenance_ops.get_graph", return_value=graph):
+        with patch("datastore.memorydb.maintenance_ops.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             result = _merge_nodes_into(
                 graph,
                 "Alex keeps and maintains a bonsai",
@@ -1273,7 +1301,8 @@ class TestMergeAtomicity:
                 yield _FailingConn(conn)
 
         with patch.object(graph, "_get_conn", failing_get_conn), \
-             patch("datastore.memorydb.maintenance_ops.get_graph", return_value=graph):
+             patch("datastore.memorydb.maintenance_ops.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             with pytest.raises(RuntimeError, match="simulated cleanup failure"):
                 _merge_nodes_into(
                     graph,
