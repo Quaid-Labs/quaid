@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -395,6 +396,28 @@ def test_matching_supervisor_pids_merges_partial_ps_outputs(monkeypatch, tmp_pat
     assert project_docs._matching_supervisor_pids(quaid_home=home) == [202]
     assert calls[0] == ["ps", "eww", "-eo", "pid=,command="]
     assert calls[1] == ["ps", "eww", "-ax", "-o", "pid=", "-o", "command="]
+
+
+def test_matching_worker_pids_requires_exact_project_and_home(monkeypatch, tmp_path):
+    from core import project_docs
+
+    home = tmp_path.resolve()
+
+    class Result:
+        returncode = 0
+        stdout = "\n".join(
+            [
+                f"201 /usr/bin/python3 /tmp/project_docs_worker.py run demo QUAID_HOME={home}",
+                f"202 /usr/bin/python3 /tmp/project_docs_worker.py run demo-extra QUAID_HOME={home}",
+                "203 /usr/bin/python3 /tmp/project_docs_worker.py run demo QUAID_HOME=/tmp/other",
+                f"204 /usr/bin/python3 /tmp/project_docs_supervisor.py run demo QUAID_HOME={home}",
+            ]
+        )
+
+    monkeypatch.setattr(project_docs.subprocess, "run", lambda *_args, **_kwargs: Result())
+    monkeypatch.setattr(project_docs, "_pid_alive", lambda _pid: True)
+
+    assert project_docs._matching_worker_pids("demo", quaid_home=home) == [201]
 
 
 def test_project_runtime_context_uses_single_linked_instance(monkeypatch):
@@ -2847,6 +2870,7 @@ def test_stop_worker_tolerates_process_exit_race(project_env, monkeypatch):
         project="demo",
     )
     monkeypatch.setattr(project_docs, "_pid_record_matches", lambda record, **_kwargs: True)
+    monkeypatch.setattr(project_docs, "_matching_worker_pids", lambda _project: [])
     monkeypatch.setattr(project_docs, "_pid_alive", lambda pid: False)
     monkeypatch.setattr(project_docs, "reap_child_processes", lambda: 0)
 
@@ -2857,6 +2881,29 @@ def test_stop_worker_tolerates_process_exit_race(project_env, monkeypatch):
 
     assert project_docs.stop_worker("demo") is True
     assert not project_docs.worker_pid_path("demo").exists()
+
+
+def test_stop_worker_reaps_matching_worker_without_pid_record(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    alive = {12345}
+    signals = []
+    monkeypatch.setattr(project_docs, "_matching_worker_pids", lambda project: [12345] if project == "demo" else [])
+    monkeypatch.setattr(project_docs, "_pid_alive", lambda pid: pid in alive)
+    monkeypatch.setattr(project_docs.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(project_docs, "reap_child_processes", lambda: 0)
+
+    def terminate(pid, sig):
+        signals.append((pid, sig))
+        if sig == signal.SIGTERM:
+            alive.discard(pid)
+
+    monkeypatch.setattr(project_docs.os, "kill", terminate)
+
+    assert project_docs.worker_pid_path("demo").exists() is False
+    assert project_docs.stop_worker("demo") is True
+    assert signals == [(12345, signal.SIGTERM)]
 
 
 def test_reap_stale_worker_does_not_overwrite_racing_success(project_env, monkeypatch):
@@ -2978,6 +3025,26 @@ def test_delete_project_stops_live_project_docs_worker(project_env, monkeypatch)
         try:
             project_docs.stop_worker("demo")
         except Exception:
+            pass
+        project_docs.cleanup_project_state("demo")
+
+
+def test_stop_worker_finds_live_worker_after_pid_record_is_lost(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    monkeypatch.setenv("QUAID_PROJECT_DOCS_WORKER_INTERVAL_SECONDS", "30")
+    monkeypatch.setenv("QUAID_PROJECT_DOCS_PID_WAIT_SECONDS", "45")
+    pid = project_docs.start_worker("demo")
+    try:
+        project_docs.worker_pid_path("demo").unlink()
+
+        assert project_docs.stop_worker("demo") is True
+        assert project_docs._pid_alive(pid) is False
+    finally:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
             pass
         project_docs.cleanup_project_state("demo")
 

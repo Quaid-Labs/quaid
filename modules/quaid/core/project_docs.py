@@ -12,6 +12,7 @@ import fcntl
 import json
 import logging
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -615,6 +616,84 @@ def _matching_supervisor_pids(*, quaid_home: Optional[Path] = None) -> List[int]
             home,
             "; ".join(failures[-4:]) if failures else "no output",
         )
+    return sorted(set(matches))
+
+
+def _worker_command_matches(command: str, *, project: str, quaid_home: Path) -> bool:
+    """Return whether a ps row is an exact worker for this project and home."""
+    name = validate_project_name(project)
+    try:
+        tokens = shlex.split(str(command or ""))
+    except ValueError:
+        # A malformed unrelated environment value must not hide an otherwise
+        # exact worker command in platform ps output.
+        tokens = str(command or "").split()
+    if f"QUAID_HOME={quaid_home.resolve()}" not in tokens:
+        return False
+    for index, token in enumerate(tokens[:-2]):
+        if Path(token).name != "project_docs_worker.py":
+            continue
+        if tokens[index + 1] == "run" and tokens[index + 2] == name:
+            return True
+    return False
+
+
+def _matching_worker_pids(project: str, *, quaid_home: Optional[Path] = None) -> List[int]:
+    """Return live worker PIDs even when their pid record was lost."""
+    name = validate_project_name(project)
+    home = quaid_home.resolve() if quaid_home is not None else get_quaid_home().resolve()
+    commands = [
+        ["ps", "eww", "-eo", "pid=,command="],
+        ["ps", "eww", "-ax", "-o", "pid=", "-o", "command="],
+        ["ps", "eww", "-axo", "pid=,command="],
+        ["ps", "axeww", "-o", "pid=,command="],
+    ]
+    matches: List[int] = []
+    failures: List[str] = []
+    saw_process_rows = False
+    for ps_command in commands:
+        try:
+            result = subprocess.run(
+                ps_command,
+                capture_output=True,
+                text=True,
+                timeout=1,
+            )
+        except Exception as exc:
+            failures.append(f"{' '.join(ps_command)}: {exc}")
+            continue
+        if result.returncode != 0 or not str(result.stdout or "").strip():
+            failures.append(
+                f"{' '.join(ps_command)}: rc={result.returncode} stdout_len={len(str(result.stdout or ''))}"
+            )
+            continue
+        for raw in str(result.stdout or "").splitlines():
+            line = str(raw or "").strip()
+            if not line:
+                continue
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                continue
+            try:
+                pid = int(parts[0])
+            except ValueError:
+                continue
+            saw_process_rows = True
+            if pid == os.getpid():
+                continue
+            if not _worker_command_matches(parts[1], project=name, quaid_home=home):
+                continue
+            if _pid_alive(pid):
+                matches.append(pid)
+    if not saw_process_rows:
+        message = (
+            f"project-docs worker ps scan returned no rows after {len(commands)} variants "
+            f"for project={name} home={home}: "
+            f"{'; '.join(failures[-4:]) if failures else 'no output'}"
+        )
+        logger.warning(message)
+        if _fail_hard_enabled():
+            raise RuntimeError(message)
     return sorted(set(matches))
 
 
@@ -2501,28 +2580,35 @@ def stop_worker(project: str) -> bool:
     with _exclusive_file_lock(_spawn_lock_path("worker", name)):
         record = _read_pid_record(worker_pid_path(name))
         pid = int((record or {}).get("pid") or 0)
-        if not record:
+        targets: List[int] = []
+        if record and _pid_record_matches(record, role=WORKER_ROLE, project=name):
+            targets.append(pid)
+        for match_pid in _matching_worker_pids(name):
+            if match_pid not in targets:
+                targets.append(match_pid)
+        if not targets:
+            if record:
+                _unlink_pid_record_if_matches(worker_pid_path(name), pid=pid, token=record.get("token"))
             return False
-        if not _pid_record_matches(record, role=WORKER_ROLE, project=name):
-            _unlink_pid_record_if_matches(worker_pid_path(name), pid=pid, token=record.get("token"))
-            return False
-        if pid != os.getpid():
+        for target_pid in targets:
+            if target_pid == os.getpid():
+                continue
             try:
-                os.kill(pid, signal.SIGTERM)
+                os.kill(target_pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
             deadline = time.time() + 2.0
             while time.time() < deadline:
-                if not _pid_alive(pid):
+                if not _pid_alive(target_pid):
                     break
                 time.sleep(0.1)
-            if _pid_alive(pid):
+            if _pid_alive(target_pid):
                 try:
-                    os.kill(pid, signal.SIGKILL)
+                    os.kill(target_pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-            reap_child_processes()
-        if not _pid_alive(pid):
+        reap_child_processes()
+        if record and not _pid_alive(pid):
             _unlink_pid_record_if_matches(worker_pid_path(name), pid=pid, token=record.get("token"))
         return True
 
